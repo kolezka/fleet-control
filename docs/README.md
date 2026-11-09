@@ -37,9 +37,11 @@ For a new coding session, use the [metaprompt](NEXT_SESSION_PROMPT.md), then rea
 
 ## Current state
 
-The project was initialized with Bun. `index.ts` starts a service on 127.0.0.1 over the existing fleet CLI (stages 1-4, local only: session list, read-only terminal, durable command queue and MCP; see implementation-status.md). It is not deployed and has no auth. The selected interactive design is [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html). It uses synthetic sessions and in-memory state.
+`index.ts` starts the Bun host service over the existing fleet CLI: read-only terminals, persistent SQLite when configured, commands, scoped requests, MCP, token authentication, optional TLS and Claude Code model observations. A test-fleet service was installed on the macOS host 192.168.50.4 with authorization; see [implementation status](implementation-status.md) for evidence and limits. The Linux workstation 192.168.50.15 remains on hold.
 
-The workstation service, authenticated MCP reachable from another machine, scoped approvals, terminal input and model telemetry are not implemented. No workstation has been configured by this work.
+The [decentralized-client plan](decentralized-client-plan.md) adds one MacBook view over independent host services. [Multi-host setup](multi-host.md) describes the local gateway, host credentials, per-host MCP and Linux service template. Check the current handoff for verification status before deploying.
+
+The preserved [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html) is still a synthetic historical design, separate from the live page. Writable terminal input and phased-delivery integration remain unimplemented.
 
 Architecture approval does not authorize live shell access, dependency installation, credential changes, deployment, push or merge. This documentation task only records the agreed direction and proposals.
 

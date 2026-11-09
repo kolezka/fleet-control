@@ -48,12 +48,9 @@ git clone git@github.com:kolezka/agent-fleet.git ~/Development/agent-fleet
 
 To install it on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
 
-The code is on the branch `feat-fleet-adapter` until PR #1 is merged.
-
 ```bash
 git clone git@github.com:kolezka/fleet-control.git
 cd fleet-control
-git checkout feat-fleet-adapter
 bun install
 ```
 
@@ -128,6 +125,22 @@ Anything other than `127.0.0.1` needs tokens; the service refuses to start witho
    The token's name is recorded as the author of everything that client does. A client cannot pretend to be someone else.
 
 To keep it running in the background on macOS, see the launchd section in [docs/installation.md](docs/installation.md), including how to stop and remove it.
+
+## Two hosts from one MacBook
+
+Run one independent host service on Linux and another on macOS. Use the MacBook's loopback client gateway for a single host-grouped Terminal Deck; each workstation keeps its own supervisor and SQLite state.
+
+```bash
+FLEET_CONTROL_CLIENT_CONFIG="$HOME/.config/fleet-control/client.json" bun run client
+```
+
+See [multi-host setup](docs/multi-host.md) for the host list, separate token files, TLS trust and per-host MCP connections. The gateway does not run agents, merge queues or retry uncertain writes. To try two independent local shell-only services without connecting to any workstation:
+
+```bash
+env -u NO_COLOR READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet bun run demo:two-hosts
+```
+
+Run the client command printed by the demo in another terminal. Both hosts are local fixtures, not proof of Linux/macOS deployment.
 
 ## Settings
 

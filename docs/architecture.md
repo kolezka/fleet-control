@@ -26,6 +26,18 @@ A human gate remains blocked while the operator is offline. The supervisor may c
 
 This requirement concerns client disconnection. Surviving a workstation reboot, database loss or supervisor crash requires a separate recovery design and tests. tmux alone is not a durable workflow engine.
 
+## Independent hosts and the MacBook gateway
+
+Each workstation owns its own Fleet Control service, fleet CLI, supervisor and SQLite state. Hosts do not elect a leader or share an approval queue. The MacBook can display several hosts without becoming their execution coordinator.
+
+A separate loopback-only client gateway serves the same Terminal Deck. Its operator configuration maps stable host IDs to verified HTTPS service origins and local token files. It forwards only allowlisted API operations and read-only terminal streams. It never starts tmux, SSH or an agent, stores a command queue, retries uncertain writes or progresses phases.
+
+The browser scopes sessions, drafts, commands, requests and phase views to the selected host. Session names and run IDs need only be unique within that host. A late response from a previous selection cannot overwrite the selected host's view. A failed host read marks that host's current state unknown, not stopped; other hosts remain usable.
+
+The gateway is a convenience and trust boundary for the browser, not a high-availability service. Closing it drops viewers, while host work and unanswered gates remain on their workstations. Local processes able to reach the gateway can exercise its configured credentials. Browser Origin and Host checks prevent cross-site requests and DNS rebinding; they do not defend against a compromised MacBook user.
+
+See [multi-host setup](multi-host.md) and [the bounded implementation plan](decentralized-client-plan.md). Direct host pages and separately named per-host MCP connections remain supported. Live Linux deployment is a separate authorization and verification step.
+
 ## Combining agent-fleet and phased-delivery
 
 agent-fleet handles the fleet's sessions and watchdog. phased-delivery governs delivery inside an orchestrating session: a persistent worker performs one phase, the orchestrator reruns its checks, a fresh reviewer reviews the phase, and the required human gate is resolved before continuing.
