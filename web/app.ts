@@ -23,7 +23,7 @@ export function modelLabel(m: Model): string {
   }
 }
 
-const state = { selected: "" as string, inspector: true };
+const state = { selected: "" as string, inspector: true, sessions: [] as Session[] };
 const panes = new Map<string, { term: Terminal; ws: WebSocket }>();
 
 function css(name: string) {
@@ -110,6 +110,7 @@ async function load() {
     return;
   }
   const sessions: Session[] = body.sessions;
+  state.sessions = sessions;
   state.selected ||= sessions.find((s) => s.running)?.name ?? "";
   $("hostSubtitle").textContent = `${sessions.length} ${sessions.length === 1 ? "session" : "sessions"} · read ${new Date(body.readAt).toLocaleTimeString()}`;
   renderNav(sessions);
@@ -123,7 +124,9 @@ document.addEventListener("click", (e) => {
     state.selected = b.dataset.session;
     document.querySelectorAll(".session").forEach((x) => x.setAttribute("aria-pressed", String((x as HTMLElement).dataset.session === state.selected)));
     document.querySelectorAll(".terminal").forEach((x) => x.classList.toggle("active", (x as HTMLElement).dataset.pane === state.selected));
+    renderComposer();
   }
+  if (b.dataset.answer) answer(b.dataset.request!, b.dataset.answer, Number(b.dataset.revision), b);
   if (b.id === "inspectorToggle") {
     state.inspector = !state.inspector;
     $("app").classList.toggle("only-terminal", !state.inspector);
@@ -134,5 +137,159 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Supervisor panel: requests, phase record and commands come from this service. Every label says
+// how far a step got; nothing here claims execution that the supervisor has not reported.
+type Run = { id: string; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
+type Req = {
+  id: string; runId: string; phase: string; revision: number; kind: string; question: string; proposedAction: string; scope: string;
+  evidence: string[]; allowedResponses: string[]; status: string; response: string | null; resolvedBy: string | null; resolutionNote: string | null;
+};
+type Command = { id: string; target: string; actor: string; text: string; status: string; response: string | null; updatedAt: string; createdAt: string };
+
+const coord = { runs: [] as Run[], requests: [] as Req[], commands: [] as Command[], reachable: true, pendingKey: "" };
+
+export const commandLabel: Record<string, string> = {
+  queued: "Queued, not delivered",
+  delivering: "Delivering",
+  delivered: "Delivered, not acknowledged",
+  delivery_unknown: "Delivery unknown",
+  accepted: "Accepted, not finished",
+  rejected: "Rejected by supervisor",
+  running: "Running",
+  completed: "Completed (supervisor report)",
+  failed: "Failed (supervisor report)",
+};
+const requestLabel: Record<string, string> = {
+  open: "Needs your decision", resolved: "Answered, awaiting acknowledgement", acknowledged: "Acknowledged by supervisor",
+  stale: "Stale: the revision moved on", withdrawn: "Withdrawn",
+};
+const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const verb = (r: string) => (r === "approve" ? "Approve" : r === "decline" ? "Decline" : r[0]!.toUpperCase() + r.slice(1));
+
+function renderRequests() {
+  const box = $("requests");
+  const open = coord.requests.filter((r) => r.status === "open");
+  const shown = open.length ? open : coord.requests.slice(-1);
+  if (!shown.length) {
+    box.innerHTML = `<div class="sectionheading"><h3>Requests</h3></div><p class="phase-note">${coord.reachable ? "No supervisor request on this service." : "Service unreachable. Request state is unknown."}</p>`;
+    return;
+  }
+  box.innerHTML = shown.map((r) => {
+    const actionable = r.status === "open" && coord.reachable;
+    const result = r.response ? `Answered "${esc(r.response)}" by ${esc(r.resolvedBy ?? "?")}.${r.status === "resolved" ? " The supervisor has not acknowledged it yet." : ""}` : "";
+    return `<div class="sectionheading"><h3>Request</h3><span class="requeststatus">${esc(requestLabel[r.status] ?? r.status)}</span></div>` +
+      `<h2 class="requesttitle">${esc(r.question)}</h2>` +
+      (r.proposedAction ? `<p class="requestcopy">${esc(r.proposedAction)}</p>` : "") +
+      `<p class="requestref">${esc(r.id.slice(0, 12))} · ${esc(r.phase)} · revision ${r.revision}</p>` +
+      (r.evidence.length || r.scope ? `<details class="requestevidence"><summary>View evidence and scope</summary><dl>${r.evidence.map((e) => `<div><dt>Evidence</dt><dd>${esc(e)}</dd></div>`).join("")}</dl>${r.scope ? `<p class="fineprint">${esc(r.scope)}</p>` : ""}</details>` : "") +
+      (actionable ? `<div class="requestactions">${r.allowedResponses.map((a) => `<button type="button" data-request="${esc(r.id)}" data-answer="${esc(a)}" data-revision="${r.revision}">${esc(verb(a))}</button>`).join("")}</div>` : "") +
+      `<p class="requestresult" aria-live="polite">${result}</p>`;
+  }).join("");
+}
+
+function renderWorkflow() {
+  const run = coord.runs.at(-1);
+  $("coordContext").textContent = run ? `${run.id} · ${run.orchestrator}` : coord.reachable ? "No run registered" : "Service unreachable";
+  $("runName").textContent = run?.id ?? "";
+  if (!run) {
+    $("phaseState").textContent = coord.reachable ? "No run registered on this service." : "Workflow state unknown.";
+    $("workflowSteps").innerHTML = "";
+    return;
+  }
+  const reqs = coord.requests.filter((r) => r.runId === run.id && r.phase === run.phase && r.revision === run.revision && r.kind === "approval");
+  const decision = reqs.find((r) => r.response === "decline") ? "Declined" : reqs.find((r) => r.response === "approve") ? "Approved" : reqs.some((r) => r.status === "open") ? "Pending" : "Not requested";
+  $("phaseState").textContent = `${run.phase} · revision ${run.revision} · ${run.phaseStatus}`;
+  const rows: [string, string, string, string][] = [
+    ["1", run.phase, run.phaseStatus, ""],
+    ["·", "Human decision", decision, decision === "Approved" ? "done" : "wait"],
+  ];
+  $("workflowSteps").innerHTML = rows.map(([mark, title, status, kind]) => `<li><span class="stepmark ${kind}">${esc(mark)}</span><span>${esc(title)}</span><small>${esc(status)}</small></li>`).join("");
+}
+
+function renderExchange() {
+  $("exchangeRows").innerHTML = coord.commands.slice(-6).map((c) =>
+    `<li><div class="exchangemeta"><strong>${esc(c.actor)} → ${esc(c.target)}</strong><time>${esc(time(c.updatedAt))}</time></div><p>${esc(c.text)}</p>` +
+    (c.response ? `<p>${esc(c.response)}</p>` : "") +
+    `<span class="receipt">${esc(c.id.slice(0, 12))} · ${esc(commandLabel[c.status] ?? c.status)}</span></li>`,
+  ).join("");
+  $("eventText").textContent = coord.commands.length ? "" : "No commands yet.";
+}
+
+// The instruction goes to the run's orchestrator session when one is registered, otherwise to the
+// selected session. The target is always shown before sending.
+function composerTarget(): string {
+  const orch = coord.runs.at(-1)?.orchestrator;
+  if (orch && state.sessions.some((s) => s.name === orch && s.running)) return orch;
+  return state.sessions.find((s) => s.name === state.selected && s.running)?.name ?? "";
+}
+
+function renderComposer() {
+  const target = composerTarget();
+  $("composerTarget").textContent = target ? `To ${target} · fleet send` : "No running session selected";
+  ($("sendInstruction") as HTMLButtonElement).disabled = !coord.reachable || !target || !($("instruction") as HTMLTextAreaElement).value.trim();
+}
+
+async function poll() {
+  try {
+    const [rq, cm] = await Promise.all([fetch("/api/requests"), fetch("/api/commands")]);
+    if (rq.ok) Object.assign(coord, await rq.json());
+    if (cm.ok) coord.commands = ((await cm.json()) as { commands: Command[] }).commands;
+    coord.reachable = true;
+  } catch {
+    coord.reachable = false;
+  }
+  renderRequests();
+  renderWorkflow();
+  renderExchange();
+  renderComposer();
+  $("status").textContent = coord.reachable ? "Read-only terminals · supervisor panel live" : "Service unreachable · state unknown";
+}
+
+async function answer(requestId: string, response: string, expectedRevision: number, button: HTMLButtonElement) {
+  button.disabled = true;
+  try {
+    const res = await fetch(`/api/requests/${encodeURIComponent(requestId)}/resolve`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ response, expectedRevision }),
+    });
+    const body = await res.json();
+    if (!res.ok) $("instructionStatus").textContent = `Answer not recorded: ${body.error?.message ?? res.status}`;
+    else $("instructionStatus").textContent = `Answer "${response}" recorded for revision ${expectedRevision}. The supervisor has not acknowledged it yet.`;
+  } catch {
+    $("instructionStatus").textContent = "Service unreachable. The answer was not recorded.";
+  }
+  await poll();
+}
+
+$("instruction").addEventListener("input", renderComposer);
+$("instructionForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const box = $("instruction") as HTMLTextAreaElement;
+  const text = box.value.trim();
+  const target = composerTarget();
+  if (!text || !target) return;
+  // Reuse the key until the service answers, so a retry after a network error cannot queue twice.
+  coord.pendingKey ||= crypto.randomUUID();
+  ($("sendInstruction") as HTMLButtonElement).disabled = true;
+  try {
+    const res = await fetch("/api/commands", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: coord.pendingKey, target, text }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      $("instructionStatus").textContent = `Not queued: ${body.error?.message ?? res.status}`;
+    } else {
+      coord.pendingKey = "";
+      box.value = "";
+      $("instructionStatus").textContent = `${body.command.id.slice(0, 12)}: ${commandLabel[body.command.status] ?? body.command.status}.`;
+    }
+  } catch {
+    $("instructionStatus").textContent = "Service unreachable. Unknown whether the instruction was queued; sending again reuses the same key.";
+  }
+  await poll();
+});
+
 await init();
 await load();
+await poll();
+setInterval(poll, 3000);

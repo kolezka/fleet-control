@@ -25,13 +25,13 @@
       <div class="workarea">
         <section class="terminals" id="terminals" aria-label="Session terminals"></section>
         <aside class="inspector coordination" id="phaseInspector" aria-label="Supervisor requests and workflow">
-          <header class="coordinationhead"><h2>Supervisor</h2><small>Not connected</small></header>
+          <header class="coordinationhead"><h2>Supervisor</h2><small id="coordContext">No run registered</small></header>
           <div class="coordinationbody">
-            <section class="request">
-              <div class="sectionheading"><h3>Requests</h3></div>
-              <p class="phase-note">No supervisor is connected to this service yet. Requests, workflow, evidence and instructions arrive in a later stage.</p>
-            </section>
+            <section class="request" id="requests" aria-live="polite"></section>
+            <section class="workflow"><div class="sectionheading"><h3>Workflow</h3><small id="runName"></small></div><p id="phaseState" class="phase-note">No run registered on this service.</p><ol id="workflowSteps"></ol></section>
+            <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
           </div>
+          <form id="instructionForm" class="instructionform"><label for="instruction">Instruction to supervisor</label><textarea id="instruction" rows="2" maxlength="4000" placeholder="Clarify the scope or give an instruction..."></textarea><div class="composerfooter"><span id="composerTarget">Select a session</span><button type="submit" id="sendInstruction" disabled>Send</button></div><p id="instructionStatus" role="status"></p></form>
         </aside>
       </div>
     </main>

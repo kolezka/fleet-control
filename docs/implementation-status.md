@@ -100,10 +100,22 @@ Findings:
 
 Not covered: a supervisor doing real work with shell or file tools, a long-running or busy supervisor, commands arriving while a dialog is open, Opus or Sonnet supervisors, remote hosts.
 
+## Implemented locally: stage 5, scoped requests and the page panel (2026-11-09, same branch, tested on 192.168.50.4)
+
+- `src/requests.ts`: `Requests` with tables `runs`, `requests`, `request_events`. A run has one orchestrator, the only actor allowed to write its phase record (`registerRun`, `updatePhase` with `expectedRevision`). A request is bound to run, phase and revision. A new revision, or a phase change, makes every open request stale. `resolve` needs the request's revision and an allowed response; a second, different answer is a visible conflict and the first stands; the identical answer retried is fine. `acknowledge` (orchestrator only) records that the answer was read, not that the next phase started. `gate(run, phase, revision)` is true only for an `approve` on exactly that phase and revision; a decline wins; no answer is "approval requested, no answer yet".
+- MCP tools: `run_register`, `phase_update`, `request_create`, `request_resolve` (only to relay a real human answer), `request_acknowledge`, `request_withdraw`, `request_list`, `request_gate`, `request_events`. REST: `GET /api/requests`, `POST /api/requests/:id/resolve` (same Origin header required, actor `web-ui`). Actor names are self-declared until stage 6 adds auth.
+- Page (`web/index.html`, `web/app.ts`): the right panel now shows the live request (question, proposed action, phase, revision, evidence, allowed answers), the workflow row from the phase record, the last commands with their honest state ("Delivered, not acknowledged", "Delivery unknown", ...), and the instruction field posting to `/api/commands`. The instruction goes to the run's orchestrator session if it is running, else to the selected session, and the target is shown before sending. A retry after a network error reuses the idempotency key. Polls every 3 s.
+- Tests: `src/requests.test.ts` (15), `src/requests.api.test.ts` (5: MCP ask, REST answer, gate; MacBook-vs-page conflict; stale revision, foreign or missing Origin; worker cannot write phase). Full suite on `.4` (private checkout `~/Development/fleet-control-dev`, private tmux sockets, loopback only): 71 pass, 0 fail; `bun check` clean; `design:check` PASS. Negative controls: removing staling, the conflict check, the revision check in `gate`, or the Origin-required check each make one test fail.
+- Browser check on `.4`'s service through an SSH tunnel (Chrome via agent-browser, 1440x900, dark): request, workflow, commands and composer render in the baseline layout; Approve in the page recorded `approve` by `web-ui` for revision 1 and showed "Answered, awaiting acknowledgement"; the instruction reached the pane text.
+
+Finding, not fixed: with the read-only viewer attached, `tmux send-keys` is refused with `client is read-only`, so `fleet send` pasted the instruction but could not press Enter (exit 7). The command was recorded as `delivery_unknown`, which is correct. This also blocks every watchdog `send-keys` while a viewer is open. Write-up and repro: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md). The viewer must not be used with real agent sessions until this is fixed.
+
+Not covered: a real orchestrator using the request tools, phased-delivery writing its phase record through `phase_update`, multiple runs in the panel, push updates instead of polling, 600px layout, accessibility review, HIG review through Docify.
+
 ## Not implemented in this project
 
 - Workstation service, authentication, and MCP reachable from another machine. A local unauthenticated `/mcp` exists (stage 4 above).
-- Scoped requests and approvals bound to request, phase and revision; resumable push event stream (commands can be polled by cursor).
+- phased-delivery integration with the request tools; resumable push event stream (requests and commands are polled).
 - Supervisor acknowledgement in production use and phase-state adapters. A test supervisor with only the MCP tools did accept, complete and reject commands once (above).
 - Live terminal on a workstation, input, and reconnect. A local read-only viewer exists (stage 3 above).
 - Exclusive input leases. Local read-only is enforced by the service and by tmux; auth is not.
@@ -111,7 +123,7 @@ Not covered: a supervisor doing real work with shell or file tools, a long-runni
 - Host autostart, supervisor replacement and restart reconciliation.
 - Deployment, network configuration and independent workstation credentials.
 
-The mockup's send button writes only browser memory. It does not execute a fleet command. Reloading clears demo actions.
+The live page (`web/`) posts instructions and answers to the service. The mockup's send button writes only browser memory. It does not execute a fleet command. Reloading clears demo actions.
 
 ## Verification evidence
 

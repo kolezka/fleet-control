@@ -12,7 +12,7 @@ const fleetBin = process.env.READONLY_FLEET_BIN;
 if (!fleetBin) throw new Error("READONLY_FLEET_BIN must point at a fleet CLI with attach --read-only");
 const fleet = await createTestFleet(fleetBin);
 const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
-store.upsertSession({ name: fleet.session, host: "MacBook (test fleet)", role: "probe", kind: "script", configuredModel: null });
+store.upsertSession({ name: fleet.session, host: `${process.env.TEST_FLEET_HOST ?? (await import("node:os")).hostname()} (test fleet)`, role: "probe", kind: "script", configuredModel: null });
 const commands = new Commands(store.db);
 commands.reconcileAfterRestart();
 const server = serve({
