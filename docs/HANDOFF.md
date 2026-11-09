@@ -87,15 +87,17 @@ The handler check is not browser automation. No production build, live fleet tes
 | bun / claude / git / rg | 1.4.0 / 2.1.319 / 2.55 / 15.2 | 1.4.4 / 2.1.311 / 2.54 / 15.2 |
 | agent-fleet plugin | 0.3.0, installed 2026-11-09 with user approval (`claude plugin install agent-fleet@kolezka --scope user` as me); `scripts/fleet` and `watchdog.sh` SHA-256 identical to the MacBook copy | 0.3.0 |
 | Disk free (home fs) | **64G free, 93% used** | 134G free |
-| Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (no tmux) |
+| Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (tmux was missing at recon) |
 
   Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. Low disk on `.15` is a risk for worktrees.
-- Still open: dependency approval for stage 3.
-- Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
+- User then said: do not touch `192.168.50.15` for now. No further contact with either host after the installs above.
+- Approved: `ghostty-web` 0.4.0 pinned in this worktree; a local agent-fleet worktree adding `fleet attach --read-only` (no push).
+- Stage 3 (read-only terminal) done locally on the MacBook against a private test fleet: see [implementation status](implementation-status.md). The agent-fleet change lives on branch `feat/attach-read-only` in `~/Development/agent-fleet.worktrees/attach-read-only` and is not released, so Fleet Control needs `READONLY_FLEET_BIN` pointing there until it is.
+- Remaining stages: 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
 
-Resolve the open host questions above, then stage 3. `runner-01` is only a design fixture, not an authorized connection target.
+Decide how the agent-fleet `attach --read-only` change gets released (PR to kolezka/agent-fleet needs push approval), then stage 4 (durable commands and MCP) locally. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
 
 Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
 

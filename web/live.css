@@ -1,0 +1,5 @@
+/* Live additions on top of the Terminal Deck baseline styles in deck.css. */
+/* The grid stays at the agent window size; the canvas scales down to fit, never resizing the agent. */
+.xterm-host{flex:1;min-height:0;overflow:hidden;padding:10px 12px;background:var(--terminal)}
+.xterm-host canvas{display:block;max-width:100%;height:auto !important;object-fit:contain}
+.termfooter span:first-child{color:var(--ink)}

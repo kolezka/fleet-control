@@ -52,13 +52,28 @@ Verification (2026-11-09, this worktree): `bun test` 26 pass / 0 fail, including
 
 This is not a workstation integration, terminal bridge or production test. The tests ran on the Mac against a shell session, not an agent.
 
+## Implemented locally: stage 3, read-only terminal (2026-11-09, same branch)
+
+Scope: MacBook only, private test fleet, shell session with no model. Hosts `.15` and `.4` were not contacted for this stage (user: leave `.15` alone for now).
+
+- **agent-fleet change** (separate repo, worktree `~/Development/agent-fleet.worktrees/attach-read-only`, branch `feat/attach-read-only`, commits `2bb3678`, `a13b386`, `957467e`, not pushed, not released): `fleet attach --read-only <session>` runs `tmux attach -f read-only,ignore-size`. Finding: `ignore-size` does not stop a *sole* client from sizing the window, so for local read-only attach the script first sets its own tty to the agent window size (plus status line) and announces it as `OSC 777;fleet-size;W;H`. Remote (`REMOTE_SSH`) attach gets the flags but not the sizing; untested.
+- **Viewer** (`src/terminal/viewer.ts`): Bun PTY running `fleet attach --read-only`. Refuses a CLI without that flag instead of attaching writable. No write or resize path.
+- **WebSocket** `GET /api/sessions/:name/terminal`: same-origin only (403 otherwise). Any client message, typing or resize, closes the socket with 1008. Closing the socket sends SIGHUP to the viewer; the session keeps running.
+- **Page** (`web/index.html`, `web/app.ts`, `web/deck.css` copied from the baseline, `web/live.css`) served at `/`: host-grouped left nav from `/api/sessions` with model label per session, one ghostty-web 0.4.0 pane per running session created at the announced agent size and scaled to fit, supervisor panel saying no supervisor is connected. `ghostty-web` pinned at 0.4.0 (MIT, no dependencies) with approval.
+- ghostty-web 0.4.0 throws `RangeError: offset is out of bounds` on an empty `write("")`; the page skips empty writes.
+- Local demo: `READONLY_FLEET_BIN=~/Development/agent-fleet.worktrees/attach-read-only/scripts/fleet bun scripts/dev-test-fleet.ts`.
+
+Verification (2026-11-09): `bun test` 33 pass / 0 fail. New real-tmux tests: viewer streams the known tokens, the tmux client is `read-only` + `ignore-size`, agent window stays 120x30 with a 40x10 viewer, closing leaves no client and a live session; missing session exits non-zero; WebSocket: a resize message plus `echo FCINJECT\r` closes with 1008, `FCINJECT` never reaches the pane, window stays 120x30; cross-origin upgrade gets 403 and starts no viewer. agent-fleet stub test: failures 0. Manual check in Chrome (agent-browser), 1440x900, dark and light: tokens and tmux status line render inside the pane; while the page was open tmux listed one client `read-only,ignore-size` at 120x31 and the window stayed 120x30; typing in the page did not reach the pane; closing the browser left 0 clients.
+
+Not covered: agent (`claude`) sessions, remote hosts, several viewers at once, reconnect, auth, the 600px layout, and an accessibility check. Supervisor panel, commands and model collection are still not connected.
+
 ## Not implemented in this project
 
 - Workstation service, authenticated HTTP API and remote MCP tools.
 - Durable command/request storage and resumable event stream.
 - Supervisor command acknowledgement and phase-state adapters.
-- Browser Ghostty renderer, PTY bridge and live fleet attachment.
-- Server-enforced read-only access and exclusive input leases.
+- Live terminal on a workstation, input, and reconnect. A local read-only viewer exists (stage 3 above).
+- Exclusive input leases. Local read-only is enforced by the service and by tmux; auth is not.
 - Runtime model metadata and freshness handling.
 - Host autostart, supervisor replacement and restart reconciliation.
 - Deployment, network configuration and independent workstation credentials.

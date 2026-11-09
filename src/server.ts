@@ -2,6 +2,8 @@
 import { FleetError, type FleetReader } from "./fleet/cli.ts";
 import { modelState } from "./model.ts";
 import type { Store } from "./store.ts";
+import deck from "../web/index.html";
+import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -66,12 +68,23 @@ export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => 
   };
 }
 
-export function serve(deps: Parameters<typeof createApp>[0], port = 4871) {
+type TerminalDeps = { fleetBin: string; confPath: string };
+type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean };
+
+// Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
+function sameOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  return origin !== null && origin === new URL(req.url).origin;
+}
+
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps }, port = 4871) {
   const app = createApp(deps);
-  return Bun.serve({
+  const terminal = deps.terminal;
+  return Bun.serve<SocketData, "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal">({
     hostname: "127.0.0.1",
     port,
     routes: {
+      "/": deck,
       "/api/sessions": { GET: () => app.sessions() },
       "/api/sessions/:name/screen": {
         GET: (req) => {
@@ -79,6 +92,46 @@ export function serve(deps: Parameters<typeof createApp>[0], port = 4871) {
           const lines = raw === null ? 40 : Number(raw);
           return app.screen(req.params.name, lines);
         },
+      },
+      // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
+      // a resize would resize the agent's window, since the viewer may be its only tmux client.
+      "/api/sessions/:name/terminal": {
+        GET: (req, server) => {
+          if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
+          if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
+          const url = new URL(req.url);
+          const size = clampSize(Number(url.searchParams.get("cols") ?? 80), Number(url.searchParams.get("rows") ?? 24));
+          if (!size || !/^[A-Za-z0-9._-]+$/.test(req.params.name)) {
+            return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
+          }
+          if (server.upgrade(req, { data: { session: req.params.name, ...size } })) return undefined;
+          return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
+        },
+      },
+    },
+    websocket: {
+      async open(ws) {
+        try {
+          const viewer = await openViewer({
+            ...terminal!,
+            session: ws.data.session,
+            cols: ws.data.cols,
+            rows: ws.data.rows,
+            onData: (d) => { if (!ws.data.closed) ws.sendBinary(d); },
+            onExit: (code) => { if (!ws.data.closed) ws.close(code === 0 ? 1000 : 1011, `viewer exited ${code}`); },
+          });
+          if (ws.data.closed) viewer.close();
+          else ws.data.viewer = viewer;
+        } catch (e) {
+          ws.close(1011, e instanceof Error ? e.message.slice(0, 120) : "viewer failed");
+        }
+      },
+      message(ws) {
+        ws.close(1008, "read-only terminal: client messages are not accepted");
+      },
+      close(ws) {
+        ws.data.closed = true;
+        ws.data.viewer?.close();
       },
     },
     fetch: () => Response.json({ error: { kind: "not_found", message: "not found" } }, { status: 404 }),

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fleet Control</title>
+<link rel="stylesheet" href="./deck.css">
+<link rel="stylesheet" href="./live.css">
+</head>
+<body>
+<div class="shell" id="app">
+  <header class="titlebar">
+    <div class="identity">
+      <h1>Fleet Control</h1>
+      <div class="hostcontext"><strong id="hostTitle">This host</strong><small id="hostSubtitle">Loading sessions</small></div>
+    </div>
+    <div class="tools">
+      <button type="button" class="iconbutton" id="inspectorToggle" aria-controls="phaseInspector" aria-expanded="true" aria-label="Hide supervisor panel" title="Hide supervisor panel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16m3-12v8"/></svg></button>
+    </div>
+  </header>
+  <div class="body">
+    <nav class="sidebar" id="sidebar" aria-label="Hosts and sessions"></nav>
+    <main class="main" id="main">
+      <div class="alert" id="alert" hidden></div>
+      <div class="workarea">
+        <section class="terminals" id="terminals" aria-label="Session terminals"></section>
+        <aside class="inspector coordination" id="phaseInspector" aria-label="Supervisor requests and workflow">
+          <header class="coordinationhead"><h2>Supervisor</h2><small>Not connected</small></header>
+          <div class="coordinationbody">
+            <section class="request">
+              <div class="sectionheading"><h3>Requests</h3></div>
+              <p class="phase-note">No supervisor is connected to this service yet. Requests, workflow, evidence and instructions arrive in a later stage.</p>
+            </section>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <footer class="statusbar"><span id="status">Read-only</span><span>Live tmux output · no input path</span></footer>
+</div>
+<script type="module" src="./app.ts"></script>
+</body>
+</html>

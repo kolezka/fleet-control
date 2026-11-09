@@ -60,6 +60,9 @@ export async function createTestFleet(fleetBin = defaultFleetBin): Promise<TestF
     tmux,
     async cleanup() {
       await tmux("kill-server");
+      // tmux leaves the socket file behind; remove only our own, uniquely named one.
+      const sock = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${process.getuid?.()}`, socket);
+      if (socket.startsWith("fleet-fctest")) await rm(sock, { force: true });
       if (dir.includes("fleet-control-test-")) await rm(dir, { recursive: true, force: true });
     },
   };
