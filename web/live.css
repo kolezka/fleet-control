@@ -32,3 +32,9 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* HIG Mobility: macOS minimum control size 20x20 pt. */
 .exchange summary { min-height: 24px; display: flex; align-items: center; }
 .composerfooter button:focus-visible, .requestactions button:focus-visible, .session:focus-visible, .iconbutton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Multi-host nav: host headers are buttons that pick the host whose panes and panel are shown. */
+.hostbutton:focus-visible, .hostbutton[aria-pressed="true"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hostbutton[aria-pressed="true"] .hostidentity strong { color: var(--ink); }
+.hostbutton[aria-pressed="false"] .hostidentity strong { font-weight: 500; }
+.instructionform textarea:disabled { opacity: .55; }

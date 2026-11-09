@@ -7,6 +7,8 @@
     "typecheck": "bun check",
     "test": "bun test",
     "serve": "bun index.ts",
+    "client": "bun client.ts",
+    "demo:two-hosts": "bun scripts/dev-two-hosts.ts",
     "design:check": "bun scripts/check-design.ts"
   },
   "devDependencies": {

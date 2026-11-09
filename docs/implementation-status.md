@@ -2,6 +2,18 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Latest: decentralized client (2026-11-09)
+
+Implemented on `feat/decentralized-client`: a loopback-only MacBook gateway (`client.ts`, `src/client-gateway.ts`) connects configured independent host services. Per-host tokens remain server-side; remote connections require verified TLS. The gateway has no fleet database, scheduler or execution queue. Existing direct host API/MCP remains authoritative.
+
+The live deck now nests sessions under selectable hosts and scopes terminal sockets, requests, commands, drafts and idempotent retry intents by host. An unavailable host is unknown, not stopped; it cannot enable commands or approvals, and other hosts continue independently. The selected full-window layout is preserved.
+
+Verification: **161 pass, 3 skip, 0 fail**, typecheck clean, design handler check PASS. Real local services with separate SQLite stores, two private shell fleets and browser renders verified host isolation, approval scope, draft switching and offline behavior. The viewer-plus-send test is skipped because the selected agent-fleet checkout lacks its separate send-keys fix. Details: [multi-host evidence](evidence-2026-11-09-multi-host.md).
+
+Run/install: [multi-host guide](multi-host.md), [plan and acceptance](decentralized-client-plan.md). No Linux workstation was contacted or deployed for this change. The existing `.4` service was not upgraded. `.15` remains on hold. Linux systemd instructions are a template, not runtime proof.
+
+The stage sections below are historical snapshots. Later sections supersede earlier limitations, including auth and model observation.
+
 ## Existing project files
 
 | File | Current purpose |

@@ -10,7 +10,17 @@ Prepared 2026-11-09. Project: `/Users/me/Development/fleet-control`. This is a s
 4. Read [UI design](ui-design.md), the [visual tokens](../.design/design-system.md) and [model visibility requirement](model-observability.md).
 5. Check [implementation status](implementation-status.md) before claiming anything works outside the mockup.
 
-Do not restart product discovery or redesign the agreed layout without a new reason. The next useful work is an approved technical implementation plan and a small integration probe, not another unrelated visual direction.
+Do not restart product discovery or redesign the agreed layout without a new reason. The host service is implemented and the macOS test deployment is recorded below. Current work follows [the decentralized-client plan](decentralized-client-plan.md), not a new visual direction.
+
+## Latest: decentralized client
+
+Branch `feat/decentralized-client`, based on `origin/main` at `14cf31e`, in `.agents/worktrees/feat-fleet-adapter`. One MacBook page can now select independent configured host services through a loopback gateway. Host execution and durable state remain remote; there is no central scheduler or duplicated tmux/SSH manager.
+
+Read [multi-host setup](multi-host.md), [completed implementation plan](decentralized-client-plan.md), and [verification evidence](evidence-2026-11-09-multi-host.md). `bun run client` reads `FLEET_CONTROL_CLIENT_CONFIG`; `bun run demo:two-hosts` provides shell-only local fixtures. Tokens stay outside browser JavaScript. Remote host connections require verified TLS.
+
+Verified locally: 161 tests passed, 3 skipped, 0 failed; typecheck clean; design handler check PASS. Actual independent services/SQLite/private tmux fleets and desktop/narrow browser renders were exercised. The skip is the separate agent-fleet viewer/send compatibility regression. No Linux deployment or paid agent test is claimed.
+
+Next: review/merge the branch, then separately authorize Linux host access and per-host deployment/configuration. Do not contact `.15` while its hold stands, do not start a Tailscale listener, and do not upgrade the installed `.4` service or push without permission. Existing remote deployment remains unchanged.
 
 ## Selected design baseline
 
@@ -35,7 +45,7 @@ Preserve historical drafts. When the selected design changes, update the baselin
 
 - Remote supervisor: execution and durable state belong on the workstation. MacBook is a client and can go offline.
 - Reuse agent-fleet CLI for existing session operations. Extend phased-delivery where structured state and decisions are needed.
-- Browser terminals should use a Ghostty-based renderer, but no renderer or PTY transport is connected yet.
+- Browser terminals use ghostty-web and a read-only Bun PTY/WebSocket transport through agent-fleet. Writable terminal input is not implemented.
 - Full-window UI with no outer frame, margin or rounded application shell.
 - Only one host/session navigation, on the left. Hosts have distinct headers and nested session rows.
 - Selecting a host shows all its available session views; selecting a child changes emphasis without dropping its siblings.
@@ -54,7 +64,7 @@ Presentation: a compact label beside the session name, with details for full ide
 ## What actually exists
 
 - A Bun-initialized project with documentation and static interactive designs.
-- `index.ts` starts the host service (branch `feat-fleet-adapter`, not merged): fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth. Nothing is installed as a persistent service on any host.
+- `index.ts` starts the host service: fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth and optional TLS. The original feature branch was merged. A launchd test service was installed on `.4`; `.15` remains on hold.
 - v4 includes synthetic terminal output, in-memory requests, demo approvals and a command composer.
 - `bun run design:check` checks the preserved design's handlers with a minimal DOM fixture.
 
@@ -67,7 +77,7 @@ The section above describes the original handoff. For what exists now, read [imp
 - `bun run design:check`: exit 0 against the preserved design. Checks include blank input, escaped command text, queued-only receipt, approval awaiting acknowledgement, no automatic next-phase start, decline and disconnected refusal.
 - Earlier design-studio renders were inspected in light/dark desktop and phone layouts. This handoff reuses those saved renders; it is not a new visual revision.
 
-The handler check is not browser automation. No production build, live fleet test, reconnect/restart test or accessibility audit has passed because those integrations do not exist here. Do not upgrade these results into production verification.
+The handler check is not browser automation. These bullets record the original design handoff only. Later service, browser, restart and installation evidence appears below and in implementation status; it is not production verification.
 
 ## Session 2 update (2026-11-09)
 

@@ -1,0 +1,469 @@
+// MacBook client gateway. A loopback-only Bun service that serves the web page and relays an
+// allowlisted set of API routes to independent host services. It holds each host's bearer token
+// server-side and keeps no host state: no queue, no command execution, no database.
+//
+// Trust model: the gateway has no login of its own. It is reachable only on 127.0.0.1, defends
+// against DNS rebinding with an exact Host check, and refuses browser requests from other origins.
+// Local processes, including other local users, can call it despite token file permissions.
+import { dirname, isAbsolute, resolve } from "node:path";
+
+const frameHeaders = { "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'" };
+let pageBuild: Promise<Map<string, Response>> | undefined;
+
+// Explicit asset responses let the approval page carry frame protection too.
+function buildPage() {
+  return pageBuild ??= Bun.build({
+    entrypoints: [resolve(import.meta.dir, "../web/index.html")], target: "browser", publicPath: "/",
+  }).then((result) => {
+    if (!result.success) throw new Error("client page build failed");
+    return new Map(result.outputs.map((output) => {
+      const path = output.kind === "entry-point" && output.path.endsWith(".html")
+        ? "/" : `/${output.path.split("/").at(-1)}`;
+      return [path, new Response(output, { headers: { ...frameHeaders, "content-type": output.type } })];
+    }));
+  });
+}
+
+export class GatewayConfigError extends Error {}
+
+export type HostInfo = { id: string; name: string; origin: string };
+
+const ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const TOKEN = /^[A-Za-z0-9._~+\/=-]{1,512}$/;
+const SEGMENT = /^[A-Za-z0-9._-]{1,128}$/; // session names, command ids, request ids
+const KEYS = new Set(["id", "name", "url", "tokenFile"]);
+
+// Holds the tokens so they cannot end up in JSON output or logs by accident.
+export class Credentials {
+  readonly #tokens: Map<string, string>;
+  constructor(tokens: Map<string, string>) {
+    this.#tokens = tokens;
+  }
+  bearer(id: string): string | undefined {
+    return this.#tokens.get(id);
+  }
+  toJSON() {
+    return {};
+  }
+  [Symbol.for("nodejs.util.inspect.custom")]() {
+    return "Credentials {}";
+  }
+}
+
+export type GatewayConfig = { hosts: HostInfo[]; credentials: Credentials };
+export type RawHost = HostInfo & { tokenFile: string };
+
+function isLoopbackHostname(h: string): boolean {
+  return h === "127.0.0.1" || h === "localhost" || h === "[::1]";
+}
+
+// Pure validation. Token files are read separately so this can be tested without a disk.
+export function parseGatewayConfig(input: unknown, baseDir: string): RawHost[] {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new GatewayConfigError("config must be a JSON object");
+  const top = input as Record<string, unknown>;
+  for (const k of Object.keys(top)) if (k !== "hosts") throw new GatewayConfigError(`config: unknown key "${k}"`);
+  if (!Array.isArray(top.hosts) || top.hosts.length === 0) throw new GatewayConfigError("config: hosts must be a non-empty array");
+  const seen = new Set<string>();
+  return top.hosts.map((raw, i): RawHost => {
+    const at = `hosts[${i}]`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new GatewayConfigError(`${at}: must be an object`);
+    const h = raw as Record<string, unknown>;
+    for (const k of Object.keys(h)) if (!KEYS.has(k)) throw new GatewayConfigError(`${at}: unknown key "${k}"`);
+    if (typeof h.id !== "string" || !ID.test(h.id)) throw new GatewayConfigError(`${at}: id must match ${ID}`);
+    if (seen.has(h.id)) throw new GatewayConfigError(`${at}: duplicate id "${h.id}"`);
+    seen.add(h.id);
+    // eslint-disable-next-line no-control-regex
+    if (typeof h.name !== "string" || h.name.trim().length === 0 || h.name.length > 80 || /[\u0000-\u001f\u007f]/.test(h.name)) {
+      throw new GatewayConfigError(`${at}: name must be 1-80 printable characters`);
+    }
+    if (typeof h.url !== "string") throw new GatewayConfigError(`${at}: url must be a string`);
+    let u: URL;
+    try {
+      u = new URL(h.url);
+    } catch {
+      throw new GatewayConfigError(`${at}: url is not a valid URL`);
+    }
+    if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHostname(u.hostname))) {
+      throw new GatewayConfigError(`${at}: url must be https (http is allowed only for loopback)`);
+    }
+    if (u.username || u.password || u.search || u.hash || u.pathname !== "/" || h.url !== u.href && h.url !== u.origin) {
+      throw new GatewayConfigError(`${at}: url must be an origin only (scheme, host, port)`);
+    }
+    if (typeof h.tokenFile !== "string" || h.tokenFile.length === 0) throw new GatewayConfigError(`${at}: tokenFile must be a non-empty string`);
+    const tokenFile = isAbsolute(h.tokenFile) ? h.tokenFile : resolve(baseDir, h.tokenFile);
+    return { id: h.id, name: h.name.trim(), origin: u.origin, tokenFile };
+  });
+}
+
+export async function loadGatewayConfig(path: string): Promise<GatewayConfig> {
+  const abs = resolve(path);
+  let json: unknown;
+  try {
+    json = JSON.parse(await Bun.file(abs).text());
+  } catch (e) {
+    throw new GatewayConfigError(`cannot read config ${abs}: ${e instanceof SyntaxError ? "not valid JSON" : "unreadable"}`);
+  }
+  const raw = parseGatewayConfig(json, dirname(abs));
+  const tokens = new Map<string, string>();
+  const owners = new Map<string, string>();
+  for (const h of raw) {
+    let text: string;
+    try {
+      text = await Bun.file(h.tokenFile).text();
+    } catch {
+      throw new GatewayConfigError(`host "${h.id}": cannot read tokenFile ${h.tokenFile}`);
+    }
+    const token = text.trim();
+    // Never echo token content, only the fact that it is malformed.
+    if (!TOKEN.test(token)) throw new GatewayConfigError(`host "${h.id}": tokenFile must hold one token without spaces or line breaks`);
+    const other = owners.get(token);
+    if (other) throw new GatewayConfigError(`hosts "${other}" and "${h.id}" share one token; use a separate token per host`);
+    owners.set(token, h.id);
+    tokens.set(h.id, token);
+  }
+  return { hosts: raw.map(({ id, name, origin }) => ({ id, name, origin })), credentials: new Credentials(tokens) };
+}
+
+// ---------------------------------------------------------------------------------------------
+
+export type GatewayOptions = {
+  port?: number; // default 4870; 0 picks a free port
+  timeoutMs?: number; // per upstream request, default 10 s
+  maxRequestBytes?: number; // default 64 KiB (MCP gets 4x)
+  maxResponseBytes?: number; // default 8 MiB
+  maxPreOpenBytes?: number; // terminal bytes held while the browser socket opens, default 1 MiB
+  maxFrameBytes?: number; // one terminal frame, default 1 MiB
+  log?: (line: string) => void;
+};
+
+type Target =
+  | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; body: boolean }
+  | { kind: "ws"; upstream: string; query: Record<string, RegExp> }
+  | { kind: "mcp" };
+
+const NUM = /^[0-9]{1,4}$/;
+
+// The allowlist. Anything not matched here is a 404; nothing else is forwarded.
+function matchRoute(seg: string[]): Target | null {
+  const [a, b, c] = seg;
+  const ok = (s: string | undefined): s is string => s !== undefined && SEGMENT.test(s) && !/^\.+$/.test(s);
+  const http = (upstream: string, methods: string[], query: Record<string, RegExp> = {}): Target => ({
+    kind: "http", upstream, methods, query, body: methods.includes("POST"),
+  });
+  if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
+  if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });
+  if (seg.length === 3 && a === "sessions" && ok(b) && c === "terminal") return { kind: "ws", upstream: `/api/sessions/${b}/terminal`, query: { cols: NUM, rows: NUM } };
+  if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"]);
+  if (seg.length === 2 && a === "commands" && ok(b)) return http(`/api/commands/${b}`, ["GET"]);
+  if (seg.length === 1 && a === "requests") return http("/api/requests", ["GET"]);
+  if (seg.length === 3 && a === "requests" && ok(b) && c === "resolve") return http(`/api/requests/${b}/resolve`, ["POST"]);
+  if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
+  return null;
+}
+
+type ErrExtra = { host?: string; outcome?: "unknown"; upstreamStatus?: number };
+function fail(status: number, kind: string, message: string, extra: ErrExtra = {}, headers: Record<string, string> = {}): Response {
+  return Response.json({ error: { kind, message, ...extra } }, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers } });
+}
+
+async function readBounded(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array | null> {
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
+}
+
+const clip = (s: string, n = 300) => (s.length > n ? s.slice(0, n) + "…" : s);
+const PASS_STATUS = new Set([400, 404, 409, 413, 422, 429]);
+const HEADER_VALUE = /^[\x20-\x7e]{1,200}$/;
+
+type Relay = {
+  host: string;
+  up: WebSocket;
+  client: Bun.ServerWebSocket<Relay> | null;
+  queue: (string | ArrayBuffer)[];
+  queued: number;
+  upClosed: { code: number } | null;
+  done: boolean;
+};
+
+const closeCode = (c: number) => ([1000, 1001, 1008, 1009, 1011, 1012, 1013].includes(c) ? c : 1011);
+
+export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const maxReq = opts.maxRequestBytes ?? 64 * 1024;
+  const maxRes = opts.maxResponseBytes ?? 8 * 1024 * 1024;
+  const maxPre = opts.maxPreOpenBytes ?? 1024 * 1024;
+  const maxFrame = opts.maxFrameBytes ?? 1024 * 1024;
+  const log = opts.log ?? (() => {});
+  const hosts = new Map(config.hosts.map((h) => [h.id, h]));
+  let allowedHosts = new Set<string>();
+
+  // Every outcome here is for one request on one host; nothing is shared between hosts.
+  async function proxyHttp(req: Request, host: HostInfo, route: Extract<Target, { kind: "http" }> | { kind: "mcp" }, url: URL): Promise<Response> {
+    const write = req.method !== "GET";
+    const mcp = route.kind === "mcp";
+    const token = config.credentials.bearer(host.id);
+    if (!token) return fail(502, "upstream_unconfigured", "host has no credentials", { host: host.id });
+
+    // Build the upstream URL from validated parts only.
+    let path = mcp ? "/mcp" : route.upstream;
+    if (!mcp) {
+      const q = new URLSearchParams();
+      for (const [k, re] of Object.entries(route.query)) {
+        const v = url.searchParams.get(k);
+        if (v === null) continue;
+        if (!re.test(v)) return fail(400, "invalid", `bad query parameter ${k}`);
+        q.set(k, v);
+      }
+      if (q.size) path += `?${q}`;
+    }
+
+    const headers = new Headers({ authorization: `Bearer ${token}`, origin: host.origin });
+    let body: Uint8Array | undefined;
+    if (write) {
+      const ctype = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (ctype !== "application/json") return fail(415, "unsupported_media_type", "content-type must be application/json");
+      const limit = mcp ? maxReq * 4 : maxReq;
+      const declared = Number(req.headers.get("content-length") ?? 0);
+      if (declared > limit) return fail(413, "too_large", "request body too large");
+      const read = await readBounded(req.body, limit);
+      if (!read) return fail(413, "too_large", "request body too large");
+      body = read;
+      headers.set("content-type", "application/json");
+    }
+    headers.set("accept", mcp ? "application/json, text/event-stream" : "application/json");
+    if (mcp) {
+      for (const k of ["accept", "mcp-protocol-version", "mcp-session-id"]) {
+        const v = req.headers.get(k);
+        if (v && HEADER_VALUE.test(v)) headers.set(k, v);
+      }
+    }
+
+    let res: Response;
+    let bytes: Uint8Array | null;
+    try {
+      res = await fetch(host.origin + path, {
+        method: req.method,
+        headers,
+        body,
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        // A write must never be replayed by the HTTP client on a stale pooled connection.
+        ...(write ? { keepalive: false } : {}),
+        ...(host.origin.startsWith("https:") ? { tls: { rejectUnauthorized: true } } : {}),
+      } as RequestInit);
+      bytes = await readBounded(res.body, maxRes);
+    } catch (e) {
+      const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+      log(`host ${host.id}: upstream ${timedOut ? "timeout" : "unreachable"} (${req.method} ${mcp ? "mcp" : route.upstream.replace(/\/[^/]+$/, "/…")})`);
+      // For a write the request may have reached the host, so the outcome is not known.
+      const extra: ErrExtra = { host: host.id, ...(write ? { outcome: "unknown" as const } : {}) };
+      return timedOut
+        ? fail(504, "upstream_timeout", write ? "host did not answer in time; the write may or may not have been applied" : "host did not answer in time", extra)
+        : fail(502, "upstream_unreachable", write ? "host unreachable; the write may or may not have been applied" : "host unreachable", extra);
+    }
+    if (!bytes) return fail(502, "upstream_too_large", "host response too large", { host: host.id, ...(write ? { outcome: "unknown" as const } : {}) });
+
+    const st = res.status;
+    const ctype = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    const unknownIfWrite: ErrExtra = { host: host.id, upstreamStatus: st, ...(write ? { outcome: "unknown" as const } : {}) };
+    if (st >= 300 && st < 400) return fail(502, "upstream_redirect", "host answered with a redirect; not followed", unknownIfWrite);
+    if (st === 401) return fail(502, "upstream_unauthorized", "host rejected the gateway credentials", { host: host.id, upstreamStatus: st });
+    if (st === 403) return fail(502, "upstream_forbidden", "host refused the request", { host: host.id, upstreamStatus: st });
+    if (st >= 500) return fail(502, "upstream_error", "host reported an internal error", unknownIfWrite);
+
+    const out = { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" } as Record<string, string>;
+    if (st >= 200 && st < 300) {
+      if (bytes.byteLength === 0 && mcp && (st === 202 || st === 204)) return new Response(null, { status: st, headers: out });
+      if (ctype !== "application/json") return fail(502, "upstream_malformed", "host answered with an unexpected content type", unknownIfWrite);
+      const sid = res.headers.get("mcp-session-id");
+      if (mcp && sid && HEADER_VALUE.test(sid)) out["mcp-session-id"] = sid;
+      return new Response(bytes as unknown as BodyInit, { status: st, headers: out });
+    }
+    // 4xx the host meant for the caller: keep the status and the error kind, drop everything else.
+    if (PASS_STATUS.has(st) && ctype === "application/json") {
+      try {
+        const j = JSON.parse(new TextDecoder().decode(bytes)) as any;
+        if (mcp && typeof j?.error?.code === "number") {
+          return Response.json({ jsonrpc: "2.0", id: j.id ?? null, error: { code: j.error.code, message: clip(String(j.error.message ?? "")) } }, { status: st, headers: out });
+        }
+        if (typeof j?.error?.kind === "string" && typeof j.error.message === "string") {
+          return fail(st, clip(j.error.kind, 64), clip(j.error.message), { host: host.id });
+        }
+      } catch {
+        // fall through to the generic answer
+      }
+    }
+    return fail(502, "upstream_rejected", "host rejected the request", { host: host.id, upstreamStatus: st });
+  }
+
+  // Opens the upstream terminal socket. Resolves null on any failure; never throws.
+  function connectUpstream(host: HostInfo, token: string, path: string): Promise<Relay | null> {
+    return new Promise((done) => {
+      const relay: Relay = { host: host.id, up: undefined as never, client: null, queue: [], queued: 0, upClosed: null, done: false };
+      let opened = false;
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(host.origin.replace(/^http/, "ws") + path, { headers: { authorization: `Bearer ${token}`, origin: host.origin } } as never);
+      } catch {
+        return done(null);
+      }
+      relay.up = ws;
+      ws.binaryType = "arraybuffer";
+      const timer = setTimeout(() => {
+        if (opened) return;
+        ws.close();
+        done(null);
+      }, timeoutMs);
+      // Handlers go on before open resolves so frames that follow the handshake are never lost.
+      ws.onmessage = (e) => {
+        const data = e.data as string | ArrayBuffer;
+        const size = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+        if (size > maxFrame) return teardown(relay, 1009, "frame too large");
+        const c = relay.client;
+        if (c) return forward(relay, c, data);
+        relay.queued += size;
+        if (relay.queued > maxPre) return teardown(relay, 1013, "client not ready");
+        relay.queue.push(data);
+      };
+      ws.onopen = () => {
+        opened = true;
+        clearTimeout(timer);
+        done(relay);
+      };
+      ws.onerror = () => {};
+      ws.onclose = (e) => {
+        clearTimeout(timer);
+        relay.upClosed = { code: e.code };
+        if (!opened) return done(null);
+        relay.client?.close(closeCode(e.code), "upstream closed");
+      };
+    });
+  }
+
+  function forward(relay: Relay, client: Bun.ServerWebSocket<Relay>, data: string | ArrayBuffer) {
+    // -1 means queued behind a slow reader; Bun closes the socket at backpressureLimit.
+    const sent = typeof data === "string" ? client.sendText(data) : client.sendBinary(new Uint8Array(data));
+    if (sent === 0) teardown(relay, 1011, "client connection lost");
+  }
+
+  function teardown(relay: Relay, code: number, reason: string) {
+    if (relay.done) return;
+    relay.done = true;
+    try { relay.up.close(1000); } catch { /* already closed */ }
+    try { relay.client?.close(code, reason); } catch { /* already closed */ }
+  }
+
+  const server = Bun.serve<Relay, "/">({
+    hostname: "127.0.0.1",
+    port: opts.port ?? 4870,
+    // The static page holds no secret. Every /api call below is Host- and Origin-checked.
+    websocket: {
+      maxPayloadLength: 1024,
+      backpressureLimit: 1024 * 1024,
+      closeOnBackpressureLimit: true,
+      open(ws) {
+        const relay = ws.data;
+        relay.client = ws;
+        for (const m of relay.queue.splice(0)) forward(relay, ws, m);
+        relay.queued = 0;
+        if (relay.upClosed) ws.close(closeCode(relay.upClosed.code), "upstream closed");
+      },
+      // The terminal is read-only: input would be typing into an agent. Never forwarded.
+      message(ws) {
+        teardown(ws.data, 1008, "read-only terminal: client messages are not accepted");
+      },
+      close(ws) {
+        ws.data.client = null;
+        teardown(ws.data, 1000, "client closed");
+      },
+    },
+    async fetch(req, srv) {
+      const url = new URL(req.url);
+      if (!url.pathname.startsWith("/api/")) {
+        if (req.method !== "GET" && req.method !== "HEAD") return fail(405, "method_not_allowed", "method not allowed");
+        const asset = (await buildPage()).get(url.pathname);
+        if (!asset) return fail(404, "not_found", "not found");
+        return req.method === "HEAD" ? new Response(null, { headers: asset.headers }) : asset.clone();
+      }
+
+      // DNS rebinding: the Host header must be exactly this listener, never an attacker's name.
+      const hostHeader = req.headers.get("host") ?? "";
+      if (!allowedHosts.has(hostHeader)) return fail(403, "forbidden", "unexpected Host header");
+      const site = req.headers.get("sec-fetch-site");
+      if (site !== null && site !== "same-origin" && site !== "none") return fail(403, "forbidden", "cross-site request");
+      const origin = req.headers.get("origin");
+      if (origin !== null && origin !== `http://${hostHeader}`) return fail(403, "forbidden", "cross-origin request");
+
+      if (url.pathname === "/api/hosts") {
+        if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
+        return Response.json(
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}` })) },
+          { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
+        );
+      }
+
+      const m = /^\/api\/hosts\/([^/]+)\/(.+)$/.exec(url.pathname);
+      if (!m || m[2]!.includes("%") || m[2]!.includes("\\")) return fail(404, "not_found", "not found");
+      const route = matchRoute(m[2]!.split("/"));
+      const host = hosts.get(m[1]!);
+      if (!route || !host) return fail(404, "not_found", "not found");
+
+      if (route.kind === "ws") {
+        if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
+        // A browser always sends Origin on a WebSocket handshake; a missing one is not a page we served.
+        if (origin === null) return fail(403, "forbidden", "Origin required");
+        if ((req.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") return fail(400, "invalid", "expected a WebSocket upgrade");
+        const q = new URLSearchParams();
+        for (const [k, re] of Object.entries(route.query)) {
+          const v = url.searchParams.get(k);
+          if (v === null) continue;
+          if (!re.test(v)) return fail(400, "invalid", `bad query parameter ${k}`);
+          q.set(k, v);
+        }
+        const token = config.credentials.bearer(host.id);
+        const relay = token ? await connectUpstream(host, token, route.upstream + (q.size ? `?${q}` : "")) : null;
+        if (!relay) {
+          log(`host ${host.id}: terminal upstream unavailable`);
+          return fail(502, "upstream_unreachable", "host terminal unavailable", { host: host.id });
+        }
+        if (srv.upgrade(req, { data: relay })) return undefined;
+        relay.up.close(1000);
+        return fail(400, "upgrade_failed", "expected a WebSocket upgrade");
+      }
+
+      if (route.kind === "mcp") {
+        // Non-browser MCP clients send no Origin, so it is optional here; a browser always sends
+        // one on POST, and a wrong one was refused above.
+        if (req.method !== "POST") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "POST" });
+        return proxyHttp(req, host, route, url);
+      }
+
+      if (!route.methods.includes(req.method)) return fail(405, "method_not_allowed", "method not allowed", {}, { allow: route.methods.join(", ") });
+      // Browser writes must come from the page this gateway served.
+      if (req.method !== "GET" && origin === null) return fail(403, "forbidden", "Origin required for writes");
+      return proxyHttp(req, host, route, url);
+    },
+  });
+
+  allowedHosts = new Set([`127.0.0.1:${server.port}`, `localhost:${server.port}`]);
+  return server;
+}

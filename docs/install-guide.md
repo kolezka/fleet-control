@@ -10,6 +10,8 @@ What you end up with:
 
 Throughout, replace `192.168.50.4` with your host's address. The service must run as the same user that owns the fleet's tmux sessions (here `me`).
 
+For a single MacBook view of several independent host services, install each host first, then follow [multi-host setup](multi-host.md). Linux systemd guidance is there; the steps below use macOS launchd. The MacBook gateway is not the host service and does not need a local fleet.
+
 ## 1. Prepare the host
 
 **host** (macOS):
@@ -30,7 +32,7 @@ The host needs two checkouts: Fleet Control and agent-fleet (for the `fleet` com
 
 ```bash
 git clone git@github.com:kolezka/fleet-control.git ~/Development/fleet-control-service
-cd ~/Development/fleet-control-service && git checkout feat-fleet-adapter   # until PR #1 is merged
+cd ~/Development/fleet-control-service
 ~/.bun/bin/bun install --frozen-lockfile
 git clone git@github.com:kolezka/agent-fleet.git ~/Development/agent-fleet
 ~/Development/agent-fleet/scripts/fleet help | grep 'attach \[--read-only\]'  # must print a line
