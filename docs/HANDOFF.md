@@ -45,20 +45,20 @@ Preserve historical drafts. When the selected design changes, update the baselin
 - Queued, delivered, accepted and completed are separate facts. An approval is scoped to a phase revision and does not imply the next phase started.
 - The local assistant relays user authority; it is not a second supervisor that can approve its own sensitive requests.
 
-## Latest request not yet in the design
+## Model per session
 
-The user also requested the model currently used by each session. This is documented in [model-observability.md](model-observability.md), but no model label or telemetry is present in v4.
+The user requested the model currently used by each session. The baseline mockup (v4) has no model label. The live page shows it from a Claude Code observer; see [model-observability.md](model-observability.md).
 
-Planned presentation: a compact label beside the session name, with details for full identity, observation source and time. Distinguish observed, configured-only, unknown/stale and not-applicable. Never present a configured default as a verified runtime observation. A shell watchdog is not an LLM session.
+Presentation: a compact label beside the session name, with details for full identity, observation source and time. Distinguish observed, configured-only, unknown/stale and not-applicable. Never present a configured default as a verified runtime observation. A shell watchdog is not an LLM session.
 
 ## What actually exists
 
 - A Bun-initialized project with documentation and static interactive designs.
-- `index.ts` starts a local read-only service over the fleet CLI (stages 1-2 below). It is not connected to any workstation.
+- `index.ts` starts the host service (branch `feat-fleet-adapter`, not merged): fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth. Nothing is installed as a persistent service on any host.
 - v4 includes synthetic terminal output, in-memory requests, demo approvals and a command composer.
 - `bun run design:check` checks the preserved design's handlers with a minimal DOM fixture.
 
-No real workstation service, remote MCP server, persistent queue, model collector, terminal bridge, authentication flow or deployment was built. The apparent worker/reviewer terminals are illustrative: the inspected phased-delivery implementation uses Agent subagents, not guaranteed standalone tmux sessions.
+The section above describes the original handoff. For what exists now, read [implementation-status.md](implementation-status.md). The apparent worker/reviewer terminals are illustrative: the inspected phased-delivery implementation uses Agent subagents, not guaranteed standalone tmux sessions.
 
 ## Verification at handoff
 
@@ -98,17 +98,13 @@ The handler check is not browser automation. No production build, live fleet tes
 - User (2026-11-09): describe the NO_COLOR bug for another session (done: `docs/bugs/agent-fleet-no-color-user-typing.md`), do stage 5 on `192.168.50.4` so the MacBook stays free, and wire the page composer.
 - Stage 5 (scoped requests, phase record, approval gate, page panel) done; tests and a browser check ran on `.4` in a private checkout with private tmux sockets on loopback. See [implementation status](implementation-status.md). Found: a read-only viewer makes `tmux send-keys` fail (`client is read-only`), so `fleet send` and the watchdog cannot press Enter while the page is open: `docs/bugs/agent-fleet-send-keys-read-only-viewer.md`.
 - Dev setup on `.4`: `rsync -az --delete --exclude node_modules --exclude .git ./ me@192.168.50.4:Development/fleet-control-dev/`, PATH `/opt/homebrew/bin:$HOME/.bun/bin`, agent-fleet `main` copy at `~/Development/agent-fleet-dev`. Nothing runs there after the session.
-- Remaining: fix the read-only-viewer `send-keys` bug in agent-fleet, stage 6 workstation deployment with auth on LAN/Tailscale only.
+- Session 3 (user, 2026-11-09: finish what remains in fleet-control): model observation from Claude Code transcripts, token auth with configurable bind, terminal reconnect, peer hosts in the nav, narrow layout and a measured accessibility pass. See [implementation status](implementation-status.md). Branch has all commits; not merged, no push.
 
 ## Next action
 
-Options: (a) wait for the read-only-viewer `send-keys` fix, which the user handed to a separate agent-fleet session on 2026-11-09 (it blocks using the viewer with real agents), then verify it from Fleet Control; (b) let phased-delivery write its phase record and requests through the MCP tools; (c) stage 6 deployment on `.4`. An agent-fleet version bump is still pending before deployment. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
+See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; with the owner's approval install the service on `.4` (launchd draft in [installation.md](installation.md)) and run the MacBook-offline test; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
 
-Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
-
-Before code implementation, recheck Git state and create an isolated worktree. The original design pass began without a Git repository; the user subsequently authorized local initialization and an initial snapshot on `main`. Inspect the actual branch and log rather than relying on earlier no-repository notes. No remote creation or push is authorized.
-
-Remaining choices include auth/network setup, host service packaging, durable machine-readable phase records, supervisor acknowledgement, input leases, subagent view mapping and runtime model metadata. Exact production API/MCP names are proposals, not implemented interfaces.
+Recheck Git state before changing code and keep using the worktree. No remote creation or push is authorized for this repository.
 
 ## Authorization boundary
 

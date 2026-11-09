@@ -112,18 +112,26 @@ Finding, not fixed: with the read-only viewer attached, `tmux send-keys` is refu
 
 Not covered: a real orchestrator using the request tools, phased-delivery writing its phase record through `phase_update`, multiple runs in the panel, push updates instead of polling, 600px layout, accessibility review, HIG review through Docify.
 
+## Implemented locally: session 3 (2026-11-09, same branch)
+
+- **Model per session** (`src/observe/claude.ts`, commit `2c51ec9`): for each fleet session the service finds the `claude` child of the tmux pane, checks `~/.claude/sessions/<pid>.json` against the process start time, and reads the last main-thread assistant model from the session transcript. Subagent (`isSidechain`) and `<synthetic>` turns never overwrite it. The page shows observed / configured / unknown (with reason) / no model for scripts, with source and turn time in the tooltip, and refreshes labels every 15 s without reopening terminals. Checked against two live Claude Code 2.1.319 processes on the MacBook (both `claude-opus-5-5`); not yet against an agent started by agent-fleet. Details and freshness policy: [model-observability.md](model-observability.md).
+- **Auth and bind** (`src/auth.ts`, `src/config.ts`, commits `822346d`, `a54ad9e`): bearer tokens per principal, hashed in a tokens file; the principal is the recorded actor for commands, answers and phase writes and replaces any actor a client claims, so a worker token cannot write the orchestrator's phase record. Browser sign-in at `/login` trades the token for an HttpOnly SameSite=Strict cookie. Any bind other than loopback without `FLEET_CONTROL_TOKENS` refuses to start. Optional TLS. Configuration and a draft launchd plist for `.4`: [installation.md](installation.md).
+- **Page** (commit `3c863f4`): terminals reconnect with backoff (1, 2, 5, 10, 30 s) and redraw from a fresh attach; a refused or normally ended viewer is not retried. `/api/hosts` names this host; peers from `FLEET_CONTROL_PEERS` are listed in the nav as links to their own services (not proxied). Below 901 px the supervisor panel starts closed and Escape closes it. At 600 px the terminal keeps the agent's size and scrolls sideways.
+- Accessibility pass against `apple-his@1.0.0` Accessibility > Vision (`p_c0fddc877c056647381b`) and > Mobility (`p_f312d5102c67a3d27304`), measured in Chrome on the live page: all visible text at least 10 px (macOS minimum 10 pt); muted text on the selected tint was 4.38:1 in light mode and is now at least 4.64:1 (dark at least 5.76:1); every control has an accessible name; the history disclosure was raised to 24 px tall; focus rings added where missing. Not a full HIG review: no VoiceOver run, no 200 % text test, no reduced-motion or keyboard-only walkthrough.
+- Tests: 96 pass, 0 fail on the MacBook and on `.4`; `bun check` clean; `design:check` PASS. Negative controls: removing the sidechain filter, the principal override, or the auth guard each make tests fail. On `.4` (loopback, private socket): no token 401, bearer 200, posted command recorded actor `mini-test` although it claimed `orchestrator`, `/mcp` without token 401, bind `0.0.0.0` without tokens refused. Reconnect checked in a browser by restarting the service under an open page.
+
 ## Not implemented in this project
 
-- Workstation service, authentication, and MCP reachable from another machine. A local unauthenticated `/mcp` exists (stage 4 above).
-- phased-delivery integration with the request tools; resumable push event stream (requests and commands are polled).
-- Supervisor acknowledgement in production use and phase-state adapters. A test supervisor with only the MCP tools did accept, complete and reject commands once (above).
-- Live terminal on a workstation, input, and reconnect. A local read-only viewer exists (stage 3 above).
-- Exclusive input leases. Local read-only is enforced by the service and by tmux; auth is not.
-- Runtime model metadata and freshness handling.
-- Host autostart, supervisor replacement and restart reconciliation.
-- Deployment, network configuration and independent workstation credentials.
+- Persistent installation on a host, LAN/Tailscale exposure, and MCP used from the MacBook against a remote host. The code supports it; nothing is installed (needs the owner's approval).
+- Using the viewer with real agent sessions: blocked by the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)), handed to a separate agent-fleet session.
+- phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
+- Terminal input and exclusive input leases. The viewer is read-only by design.
+- Push event stream (the page polls every 3 s for requests and commands, 15 s for sessions).
+- Model observers for harnesses other than Claude Code, and for remote (`REMOTE_SSH`) fleets, which each host's own service should observe.
+- Supervisor replacement, reboot recovery of in-flight commands beyond `delivering` → `delivery_unknown`, event retention and backups.
+- Token rotation tooling beyond editing the tokens file; per-principal permissions (every principal can do everything except write another orchestrator's phase).
 
-The live page (`web/`) posts instructions and answers to the service. The mockup's send button writes only browser memory. It does not execute a fleet command. Reloading clears demo actions.
+The mockup's send button writes only browser memory. The live page (`web/`) posts to the service.
 
 ## Verification evidence
 
@@ -153,30 +161,28 @@ Those are source checks of installed packages, not a live fleet probe. Do not ge
 
 The HIG passages cited in [interface design](ui-design.md) were read through Docify. The source version and passage IDs are included there.
 
+## Decided
+
+- Hosts: `192.168.50.4` (macOS, user `me`) and `192.168.50.15` (Manjaro, user `me` via `REMOTE_USER`, on hold). Peers, each with its own service; access over LAN and Tailscale.
+- Store: SQLite per host (`bun:sqlite`). Client auth: bearer tokens per principal, browser cookie. PTY: Bun built-in terminal with `fleet attach --read-only`; renderer `ghostty-web` 0.4.0. MCP: official SDK, Streamable HTTP at `/mcp`.
+- Model source for Claude Code: session file plus transcript, bound to pid, session id and process start.
+
 ## Open decisions
 
-1. Actual workstation, OS, execution user, repositories and network route.
-2. Authentication and authorization for browser, local session, service and terminal access.
-3. Packaging of the host service and client integration; exact API/MCP/CLI contracts.
-4. Durable store and machine-readable phase format; synchronization with `run.md` without competing writers.
-5. Supervisor wakeup and acknowledgement mechanism, including what happens while it is busy or blocked on a dialog.
-6. Mapping Agent subagents to reports versus attachable terminal sessions.
-7. Version-pinned Ghostty browser package and PTY implementation.
-8. Runtime model observation source and freshness policy for each supported harness.
-9. Supervisor rotation, reboot recovery, event retention, backups and restore tests.
-10. Single-host MVP versus coordination across several hosts; UI grouping is not a completed distributed scheduler.
-11. Budgets, end time, pause/cancel/terminate semantics and standing autonomous permissions.
-12. Frontend framework and production state management; current HTML drafts do not select one.
+1. LAN exposure: Tailscale-only bind, or LAN too (needs TLS or acceptance of clear-text tokens on the LAN).
+2. LaunchAgent vs LaunchDaemon on `.4`; when `.15` comes off hold, a systemd user unit there.
+3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers.
+4. Supervisor wakeup when it is busy or a dialog is open; what a command does then.
+5. Mapping Agent subagents to reports rather than terminals.
+6. Input leases: who may type, for how long, and how that coexists with the watchdog.
+7. Retention, backups and restore tests for the SQLite file.
+8. Budgets, stop time, pause/cancel semantics and standing permissions.
+9. Frontend: stay with plain TypeScript and the deck CSS, or adopt a framework when the page grows.
 
-## Suggested implementation order
+## Suggested next order
 
-This is a recommendation, not an approved execution plan.
-
-1. Validate one isolated local session attachment through the existing fleet CLI.
-2. Establish authenticated host inventory and read-only runtime state.
-3. Implement durable commands, explicit acknowledgements and scoped requests.
-4. Connect phased-delivery checkpoints and verified evidence.
-5. Replace synthetic terminal content with tested Ghostty/PTY attachment.
-6. Add input leases and model observations, then test disconnect and restart recovery.
-
-Before live implementation, write an approved, testable plan and establish a repository/worktree workflow. Keep authorization-sensitive installation and host changes explicit. Do not treat a successful mockup render as permission to deploy.
+1. Verify the agent-fleet `send-keys` fix from Fleet Control once it lands (page open, `fleet send` returns `delivered`).
+2. With approval: install the service on `.4` (launchd, Tailscale bind, tokens), register MCP from the MacBook, then disconnect the MacBook and confirm state, approvals and queued commands survive.
+3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
+4. Input lease design, then implementation.
+5. `.15` when the hold is lifted.
