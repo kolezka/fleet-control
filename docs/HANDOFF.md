@@ -73,7 +73,24 @@ The handler check is not browser automation. No production build, live fleet tes
 
 - Plan stages 1-6 proposed; user asked to proceed as a goal. Stages 1-2 done locally on branch `feat-fleet-adapter` (worktree `.agents/worktrees/feat-fleet-adapter`). Details and verification: [implementation status](implementation-status.md). Not merged into main.
 - Target hosts named by the user: `192.168.50.15` (SSH as root, port 27022) and `192.168.50.4`. Access from the MacBook over LAN and Tailscale. Not contacted yet.
-- Still open: role of each host (supervisor/service vs second executor), SSH user/port for `.4`, a non-root execution user (agents should not run as root; plan `REMOTE_USER`), OS of each host, and approval for a read-only reconnaissance SSH call.
+- User decisions (2026-11-09, asked one at a time): both hosts are **peers, each with its own Fleet Control service** (two independent fleets grouped in the left nav, no shared scheduler). SSH: `.15` as `root` port 27022, `.4` as `me` port 22. Execution user on both: `me` (`.15` via `REMOTE_USER=me`).
+- Read-only reconnaissance (approved, one SSH call per host, 2026-11-09):
+
+| | 192.168.50.15 | 192.168.50.4 |
+| --- | --- | --- |
+| Hostname | me-desktop | Mac-mini-Mariusz.local |
+| OS | Manjaro Linux, kernel 6.12, x86_64 | macOS (Darwin 27.2), arm64 |
+| Tailscale IPv4 | 100.64.0.5 | 100.64.0.6 |
+| User `me` | uid 1000, groups incl. wheel, docker | uid 501, admin |
+| tmux | 3.7c | **missing** |
+| bash | 5.3 | **3.2 only** (agent-fleet watchdog needs 4+) |
+| bun / claude / git / rg | 1.4.0 / 2.1.319 / 2.55 / 15.2 | 1.4.4 / 2.1.311 / 2.54 / 15.2 |
+| agent-fleet plugin | **not in plugin cache** (phased-delivery 0.1.0 and 0.2.0 are) | 0.3.0 |
+| Disk free (home fs) | **64G free, 93% used** | 134G free |
+| Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (no tmux) |
+
+  Consequences: `.4` needs tmux and bash 4+ before agent-fleet can run there. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. `.15` needs agent-fleet available on the host for a host-local service. Low disk on `.15` is a risk for worktrees.
+- Still open: whether to install tmux and Homebrew bash on `.4`, how agent-fleet gets onto `.15`, and dependency approval for stage 3.
 - Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
