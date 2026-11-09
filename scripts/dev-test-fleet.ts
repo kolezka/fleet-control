@@ -3,6 +3,7 @@
 import { Commands } from "../src/commands.ts";
 import { Deliverer, fleetSender } from "../src/delivery.ts";
 import { FleetCli } from "../src/fleet/cli.ts";
+import { Requests } from "../src/requests.ts";
 import { createTestFleet } from "../src/fleet/fixture.ts";
 import { serve } from "../src/server.ts";
 import { Store } from "../src/store.ts";
@@ -18,7 +19,7 @@ const server = serve({
   fleet: new FleetCli({ fleetBin, confPath: fleet.confPath }),
   store,
   terminal: { fleetBin, confPath: fleet.confPath },
-  control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, fleet.confPath)) },
+  control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, fleet.confPath)), requests: new Requests(store.db) },
 }, Number(process.env.PORT ?? 4871));
 console.log(`test fleet ${fleet.socket} · session ${fleet.session} · ${server.url} · MCP ${server.url}mcp`);
 const stop = async () => { server.stop(true); await fleet.cleanup(); process.exit(0); };

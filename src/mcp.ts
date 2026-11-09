@@ -5,15 +5,17 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { CommandError, MAX_TEXT, type Commands } from "./commands.ts";
 import type { Deliverer } from "./delivery.ts";
+import { RequestError, type Requests } from "./requests.ts";
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 const failure = (e: unknown) => ({
   isError: true,
-  content: [{ type: "text" as const, text: e instanceof CommandError ? `${e.kind}: ${e.message}` : `internal error: ${(e as Error).message}` }],
+  content: [{ type: "text" as const, text: e instanceof CommandError || e instanceof RequestError ? `${e.kind}: ${e.message}` : `internal error: ${(e as Error).message}` }],
 });
+const attempt = async (f: () => unknown) => { try { return json(await f()); } catch (e) { return failure(e); } };
 
-export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer }) {
-  const { commands, deliverer } = deps;
+export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer; requests?: Requests }) {
+  const { commands, deliverer, requests } = deps;
   const server = new McpServer({ name: "fleet-control", version: "0.1.0" });
 
   server.registerTool("command_submit", {
@@ -88,7 +90,69 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer 
     try { return json({ command: commands.transition(id, status, actor, evidence) }); } catch (e) { return failure(e); }
   });
 
+  if (requests) registerRequestTools(server, requests);
   return server;
+}
+
+// Actor names are self-declared until the service has auth (stage 6). The orchestrator check stops
+// mistakes and a second writer, not an attacker.
+function registerRequestTools(server: McpServer, requests: Requests) {
+  const actor = z.string().min(1).max(100);
+  server.registerTool("run_register", {
+    description: "Orchestrator: register a run once. The orchestrator named here is the only writer of its phase record.",
+    inputSchema: { runId: z.string().min(1).max(200), orchestrator: actor, phase: z.string().min(1).max(200) },
+  }, async (a) => attempt(() => ({ run: requests.registerRun(a) })));
+
+  server.registerTool("phase_update", {
+    description: "Orchestrator: update the phase record. Pass expectedRevision. Set newRevision when the work changed (fix round, new commit); " +
+      "that makes every open request for the old revision stale. Changing phase always starts a new revision.",
+    inputSchema: { runId: z.string(), actor, expectedRevision: z.number().int().min(1), phase: z.string().max(200).optional(), phaseStatus: z.string().min(1).max(500), newRevision: z.boolean() },
+  }, async (a) => attempt(() => requests.updatePhase(a)));
+
+  server.registerTool("request_create", {
+    description: "Orchestrator: ask the human for approval, clarification, a scope change or help with a blocker, bound to the run's current phase and revision.",
+    inputSchema: {
+      runId: z.string(), origin: actor, expectedRevision: z.number().int().min(1),
+      kind: z.enum(["approval", "clarification", "scope_change", "blocker"]), question: z.string().min(1).max(2000),
+      proposedAction: z.string().max(2000).optional(), scope: z.string().max(1000).optional(),
+      evidence: z.array(z.string().max(500)).max(20).optional(), allowedResponses: z.array(z.string().min(1).max(100)).max(10).optional(),
+      blocking: z.boolean().optional(),
+    },
+  }, async (a) => attempt(() => ({ request: requests.create(a) })));
+
+  server.registerTool("request_resolve", {
+    description: "Relay a real human answer to one request. Only call this with an answer the user gave you; never answer on their behalf. " +
+      "expectedRevision must match the request's revision. A different earlier answer makes this a conflict.",
+    inputSchema: { requestId: z.string(), response: z.string().min(1).max(100), actor, expectedRevision: z.number().int().min(1), note: z.string().max(1000).optional() },
+  }, async (a) => attempt(() => ({ request: requests.resolve(a) })));
+
+  server.registerTool("request_acknowledge", {
+    description: "Orchestrator: confirm you read the answer. This does not mean the next phase started; report that with phase_update.",
+    inputSchema: { requestId: z.string(), actor },
+  }, async (a) => attempt(() => ({ request: requests.acknowledge(a) })));
+
+  server.registerTool("request_withdraw", {
+    description: "Orchestrator: withdraw an open request that is no longer needed.",
+    inputSchema: { requestId: z.string(), actor, reason: z.string().min(1).max(500) },
+  }, async (a) => attempt(() => ({ request: requests.withdraw(a) })));
+
+  server.registerTool("request_list", {
+    description: "List requests, optionally for one run and status (open, resolved, acknowledged, stale, withdrawn), with the runs.",
+    inputSchema: { runId: z.string().optional(), status: z.enum(["open", "resolved", "acknowledged", "stale", "withdrawn"]).optional() },
+    annotations: { readOnlyHint: true },
+  }, async (a) => attempt(() => ({ runs: requests.runs(), requests: requests.list(a) })));
+
+  server.registerTool("request_gate", {
+    description: "Is there a human approval for exactly this run, phase and revision? No answer, a decline or another revision all mean no.",
+    inputSchema: { runId: z.string(), phase: z.string(), revision: z.number().int().min(1) },
+    annotations: { readOnlyHint: true },
+  }, async ({ runId, phase, revision }) => attempt(() => requests.gate(runId, phase, revision)));
+
+  server.registerTool("request_events", {
+    description: "Request and phase events after a cursor (seq).",
+    inputSchema: { afterSeq: z.number().int().min(0).default(0) },
+    annotations: { readOnlyHint: true },
+  }, async ({ afterSeq }) => json({ events: requests.events(afterSeq) }));
 }
 
 export async function handleMcp(req: Request, deps: Parameters<typeof buildMcpServer>[0], allowedHosts: string[]): Promise<Response> {

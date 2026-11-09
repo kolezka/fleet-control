@@ -7,6 +7,7 @@ import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
 import { CommandError, type Commands } from "./commands.ts";
 import type { Deliverer } from "./delivery.ts";
 import { handleMcp } from "./mcp.ts";
+import { RequestError, type Requests } from "./requests.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -72,10 +73,12 @@ export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => 
 }
 
 type TerminalDeps = { fleetBin: string; confPath: string };
-type ControlDeps = { commands: Commands; deliverer: Deliverer };
+type ControlDeps = { commands: Commands; deliverer: Deliverer; requests?: Requests };
 
 const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
+const requestStatus: Record<RequestError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400, forbidden: 403 };
 function commandError(e: unknown): Response {
+  if (e instanceof RequestError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: requestStatus[e.kind] });
   if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
 }
@@ -95,7 +98,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/mcp";
+type Routes = "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
 
 export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps }, port = 4871) {
   const app = createApp(deps);
@@ -143,6 +146,33 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           try {
             return Response.json({ command: control.commands.get(req.params.id), events: control.commands.events(req.params.id) });
           } catch (e) {
+            return commandError(e);
+          }
+        },
+      },
+      "/api/requests": {
+        GET: () => {
+          if (!control?.requests) return noControl();
+          return Response.json({ runs: control.requests.runs(), requests: control.requests.list() });
+        },
+      },
+      // A human answer from the page. Bound to the request id and the revision the page showed.
+      "/api/requests/:id/resolve": {
+        POST: async (req) => {
+          if (!control?.requests) return noControl();
+          if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
+          try {
+            const b = (await req.json()) as Record<string, unknown>;
+            const request = control.requests.resolve({
+              requestId: req.params.id,
+              response: typeof b.response === "string" ? b.response : "",
+              actor: "web-ui",
+              expectedRevision: typeof b.expectedRevision === "number" ? b.expectedRevision : -1,
+              note: typeof b.note === "string" ? b.note : undefined,
+            });
+            return Response.json({ request });
+          } catch (e) {
+            if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
             return commandError(e);
           }
         },

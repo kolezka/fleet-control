@@ -3,6 +3,7 @@ import { Commands } from "./src/commands.ts";
 import { Deliverer, fleetSender } from "./src/delivery.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
 import { defaultFleetBin } from "./src/fleet/fixture.ts";
+import { Requests } from "./src/requests.ts";
 import { serve } from "./src/server.ts";
 import { Store } from "./src/store.ts";
 
@@ -22,7 +23,7 @@ const server = serve(
     fleet: new FleetCli({ fleetBin, confPath }),
     store,
     terminal: { fleetBin, confPath },
-    control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)) },
+    control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
   },
   Number(process.env.PORT ?? 4871),
 );
