@@ -46,6 +46,8 @@ git clone git@github.com:kolezka/agent-fleet.git ~/Development/agent-fleet
 
 ## Install
 
+To install it on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
+
 The code is on the branch `feat-fleet-adapter` until PR #1 is merged.
 
 ```bash
@@ -172,6 +174,7 @@ The tests start their own private tmux servers and never touch your sessions.
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): where the project stands and what is next. Start here in a new coding session.
 - [docs/implementation-status.md](docs/implementation-status.md): what is built, what was verified and what is still open.
+- [docs/install-guide.md](docs/install-guide.md): step-by-step install on a host.
 - [docs/installation.md](docs/installation.md): running the service, the install on 192.168.50.4, launchd, removal.
 - [docs/architecture.md](docs/architecture.md), [docs/control-protocol.md](docs/control-protocol.md), [docs/model-observability.md](docs/model-observability.md): design of the parts.
 - [docs/design/terminal-deck.html](docs/design/terminal-deck.html): the original interactive mockup the page is built from (static, not connected).
