@@ -85,12 +85,12 @@ The handler check is not browser automation. No production build, live fleet tes
 | tmux | 3.7c | **missing** |
 | bash | 5.3 | **3.2 only** (agent-fleet watchdog needs 4+) |
 | bun / claude / git / rg | 1.4.0 / 2.1.319 / 2.55 / 15.2 | 1.4.4 / 2.1.311 / 2.54 / 15.2 |
-| agent-fleet plugin | **not in plugin cache** (phased-delivery 0.1.0 and 0.2.0 are) | 0.3.0 |
+| agent-fleet plugin | 0.3.0, installed 2026-11-09 with user approval (`claude plugin install agent-fleet@kolezka --scope user` as me); `scripts/fleet` and `watchdog.sh` SHA-256 identical to the MacBook copy | 0.3.0 |
 | Disk free (home fs) | **64G free, 93% used** | 134G free |
 | Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (no tmux) |
 
   Consequences: `.4` needs tmux and bash 4+ before agent-fleet can run there. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. `.15` needs agent-fleet available on the host for a host-local service. Low disk on `.15` is a risk for worktrees.
-- Still open: whether to install tmux and Homebrew bash on `.4`, how agent-fleet gets onto `.15`, and dependency approval for stage 3.
+- Still open: whether to install tmux and Homebrew bash on `.4`, and dependency approval for stage 3.
 - Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
