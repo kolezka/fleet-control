@@ -82,15 +82,15 @@ The handler check is not browser automation. No production build, live fleet tes
 | OS | Manjaro Linux, kernel 6.12, x86_64 | macOS (Darwin 27.2), arm64 |
 | Tailscale IPv4 | 100.64.0.5 | 100.64.0.6 |
 | User `me` | uid 1000, groups incl. wheel, docker | uid 501, admin |
-| tmux | 3.7c | **missing** |
-| bash | 5.3 | **3.2 only** (agent-fleet watchdog needs 4+) |
+| tmux | 3.7c | 3.8 (Homebrew, installed 2026-11-09 with approval) |
+| bash | 5.3 | 5.3 in /opt/homebrew/bin (installed 2026-11-09); /bin/bash 3.2 and login shell /bin/zsh unchanged |
 | bun / claude / git / rg | 1.4.0 / 2.1.319 / 2.55 / 15.2 | 1.4.4 / 2.1.311 / 2.54 / 15.2 |
 | agent-fleet plugin | 0.3.0, installed 2026-11-09 with user approval (`claude plugin install agent-fleet@kolezka --scope user` as me); `scripts/fleet` and `watchdog.sh` SHA-256 identical to the MacBook copy | 0.3.0 |
 | Disk free (home fs) | **64G free, 93% used** | 134G free |
 | Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (no tmux) |
 
-  Consequences: `.4` needs tmux and bash 4+ before agent-fleet can run there. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. `.15` needs agent-fleet available on the host for a host-local service. Low disk on `.15` is a risk for worktrees.
-- Still open: whether to install tmux and Homebrew bash on `.4`, and dependency approval for stage 3.
+  Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. `.15` needs agent-fleet available on the host for a host-local service. Low disk on `.15` is a risk for worktrees.
+- Still open: dependency approval for stage 3.
 - Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
