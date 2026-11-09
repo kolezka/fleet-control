@@ -120,6 +120,6 @@ A LaunchAgent for user `me` keeps the service running while `me` is logged in; a
 </dict></plist>
 ```
 
-Owner decision (2026-11-09): do not install anything that listens on Tailscale. The draft binds loopback; the network route is still open. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
+Owner decisions (2026-11-09): no listener on Tailscale; the route is the LAN with TLS and tokens. For the real install set `FLEET_CONTROL_HOST` to `192.168.50.4` and add `FLEET_CONTROL_TLS_CERT` / `FLEET_CONTROL_TLS_KEY`. Not installed. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
 
 Install steps (need the owner's approval): copy a checkout to the working directory, `bun install --frozen-lockfile`, create the tokens file (`chmod 600`), `launchctl bootstrap gui/$(id -u) <plist>`, then `curl -s -o /dev/null -w '%{http_code}' http://<bind address>:4871/api/sessions` must print 401 (or 200 on loopback without tokens).
