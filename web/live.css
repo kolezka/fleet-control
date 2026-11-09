@@ -1,0 +1,34 @@
+/* Live additions on top of the Terminal Deck baseline styles in deck.css. */
+/* The grid stays at the agent window size; the canvas scales down to fit, never resizing the agent. */
+.xterm-host{flex:1;min-height:0;overflow:hidden;padding:10px 12px;background:var(--terminal)}
+.xterm-host canvas{display:block;max-width:100%;height:auto !important;object-fit:contain}
+.termfooter span:first-child{color:var(--ink)}
+
+/* Sign-in page: one centered form on the deck background. */
+.signin{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg)}
+.signincard{width:min(360px,100%);display:grid;gap:10px;padding:24px;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.signincard h1{font-size:15px;margin:0 0 4px}
+.signincard p{font-size:12px;color:var(--muted);line-height:1.55;margin:0}
+.signincard label{font-size:12px;font-weight:500;margin-top:6px}
+.signincard input{padding:9px 10px;background:var(--terminal);color:var(--ink);border:1px solid var(--line);border-radius:4px;font:13px var(--mono)}
+.signincard input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.signincard button{margin-top:6px;padding:8px 12px;font-size:12px;background:var(--ink);color:var(--surface);border:1px solid var(--ink);border-radius:4px;min-height:32px}
+.signincard .signinerror{color:var(--bad)}
+
+/* Peer hosts: links to another host's own service, no sessions listed here. */
+a.hostbutton{color:inherit;text-decoration:none;border-radius:4px}
+a.hostbutton:hover .hostidentity strong{color:var(--accent)}
+a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* Phone width: keep the agent's real terminal size and scroll sideways instead of shrinking text. */
+@media (max-width: 600px) {
+  .xterm-host { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .xterm-host canvas { max-width: none; }
+}
+
+/* Accessibility (HIG Vision: 4.5:1 below 18 pt). Muted text on the selected tint measured 4.38:1
+   in light mode, so text on selected surfaces is pulled toward ink. Tokens themselves are unchanged. */
+.termhead small, .session[aria-pressed="true"] small { color: color-mix(in srgb, var(--muted) 70%, var(--ink)); }
+/* HIG Mobility: macOS minimum control size 20x20 pt. */
+.exchange summary { min-height: 24px; display: flex; align-items: center; }
+.composerfooter button:focus-visible, .requestactions button:focus-visible, .session:focus-visible, .iconbutton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

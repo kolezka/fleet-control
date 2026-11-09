@@ -45,20 +45,20 @@ Preserve historical drafts. When the selected design changes, update the baselin
 - Queued, delivered, accepted and completed are separate facts. An approval is scoped to a phase revision and does not imply the next phase started.
 - The local assistant relays user authority; it is not a second supervisor that can approve its own sensitive requests.
 
-## Latest request not yet in the design
+## Model per session
 
-The user also requested the model currently used by each session. This is documented in [model-observability.md](model-observability.md), but no model label or telemetry is present in v4.
+The user requested the model currently used by each session. The baseline mockup (v4) has no model label. The live page shows it from a Claude Code observer; see [model-observability.md](model-observability.md).
 
-Planned presentation: a compact label beside the session name, with details for full identity, observation source and time. Distinguish observed, configured-only, unknown/stale and not-applicable. Never present a configured default as a verified runtime observation. A shell watchdog is not an LLM session.
+Presentation: a compact label beside the session name, with details for full identity, observation source and time. Distinguish observed, configured-only, unknown/stale and not-applicable. Never present a configured default as a verified runtime observation. A shell watchdog is not an LLM session.
 
 ## What actually exists
 
 - A Bun-initialized project with documentation and static interactive designs.
-- `index.ts` still prints a starter greeting.
+- `index.ts` starts the host service (branch `feat-fleet-adapter`, not merged): fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth. Nothing is installed as a persistent service on any host.
 - v4 includes synthetic terminal output, in-memory requests, demo approvals and a command composer.
 - `bun run design:check` checks the preserved design's handlers with a minimal DOM fixture.
 
-No real workstation service, remote MCP server, persistent queue, model collector, terminal bridge, authentication flow or deployment was built. The apparent worker/reviewer terminals are illustrative: the inspected phased-delivery implementation uses Agent subagents, not guaranteed standalone tmux sessions.
+The section above describes the original handoff. For what exists now, read [implementation-status.md](implementation-status.md). The apparent worker/reviewer terminals are illustrative: the inspected phased-delivery implementation uses Agent subagents, not guaranteed standalone tmux sessions.
 
 ## Verification at handoff
 
@@ -69,15 +69,44 @@ No real workstation service, remote MCP server, persistent queue, model collecto
 
 The handler check is not browser automation. No production build, live fleet test, reconnect/restart test or accessibility audit has passed because those integrations do not exist here. Do not upgrade these results into production verification.
 
+## Session 2 update (2026-11-09)
+
+- Plan stages 1-6 proposed; user asked to proceed as a goal. Stages 1-2 done locally on branch `feat-fleet-adapter` (worktree `.agents/worktrees/feat-fleet-adapter`). Details and verification: [implementation status](implementation-status.md). Not merged into main.
+- Target hosts named by the user: `192.168.50.15` (SSH as root, port 27022) and `192.168.50.4`. Access from the MacBook over LAN and Tailscale. Not contacted yet.
+- User decisions (2026-11-09, asked one at a time): both hosts are **peers, each with its own Fleet Control service** (two independent fleets grouped in the left nav, no shared scheduler). SSH: `.15` as `root` port 27022, `.4` as `me` port 22. Execution user on both: `me` (`.15` via `REMOTE_USER=me`).
+- Read-only reconnaissance (approved, one SSH call per host, 2026-11-09):
+
+| | 192.168.50.15 | 192.168.50.4 |
+| --- | --- | --- |
+| Hostname | me-desktop | Mac-mini-Mariusz.local |
+| OS | Manjaro Linux, kernel 6.12, x86_64 | macOS (Darwin 27.2), arm64 |
+| Tailscale IPv4 | 100.64.0.5 | 100.64.0.6 |
+| User `me` | uid 1000, groups incl. wheel, docker | uid 501, admin |
+| tmux | 3.7c | 3.8 (Homebrew, installed 2026-11-09 with approval) |
+| bash | 5.3 | 5.3 in /opt/homebrew/bin (installed 2026-11-09); /bin/bash 3.2 and login shell /bin/zsh unchanged |
+| bun / claude / git / rg | 1.4.0 / 2.1.319 / 2.55 / 15.2 | 1.4.4 / 2.1.311 / 2.54 / 15.2 |
+| agent-fleet plugin | 0.3.0, installed 2026-11-09 with user approval (`claude plugin install agent-fleet@kolezka --scope user` as me); `scripts/fleet` and `watchdog.sh` SHA-256 identical to the MacBook copy | 0.3.0 |
+| Disk free (home fs) | **64G free, 93% used** | 134G free |
+| Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (tmux was missing at recon) |
+
+  Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. Low disk on `.15` is a risk for worktrees.
+- User then said: do not touch `192.168.50.15` for now. No further contact with either host after the installs above.
+- Approved: `ghostty-web` 0.4.0 pinned in this worktree; a local agent-fleet worktree adding `fleet attach --read-only` (no push).
+- Stage 3 (read-only terminal) done locally on the MacBook against a private test fleet: see [implementation status](implementation-status.md). The agent-fleet change lives on branch `feat/attach-read-only` in `~/Development/agent-fleet.worktrees/attach-read-only` was merged as kolezka/agent-fleet#6 (`8a1bd2c`). The plugin version was not bumped (still 0.3.0), so installed plugin caches lack it and Fleet Control still needs `READONLY_FLEET_BIN` pointing at a checkout of agent-fleet `main` until a version bump ships.
+- User chose option 2: no agent-fleet version bump for now, stage 4 locally.
+- Stage 4 (durable command queue, `fleet send` delivery, MCP at `/mcp` and REST at `/api/commands`) done locally: see [implementation status](implementation-status.md). Then, with paid-agent approval, one Haiku test supervisor with only the MCP tools accepted, completed and rejected commands; evidence from the database in `docs/evidence-2026-11-09-supervisor-ack.txt`, cost $0.0029. Found: `NO_COLOR=1` makes agent-fleet mistake the prompt suggestion for typing (fleet send exit 4).
+- User (2026-11-09): describe the NO_COLOR bug for another session (done: `docs/bugs/agent-fleet-no-color-user-typing.md`), do stage 5 on `192.168.50.4` so the MacBook stays free, and wire the page composer.
+- Stage 5 (scoped requests, phase record, approval gate, page panel) done; tests and a browser check ran on `.4` in a private checkout with private tmux sockets on loopback. See [implementation status](implementation-status.md). Found: a read-only viewer makes `tmux send-keys` fail (`client is read-only`), so `fleet send` and the watchdog cannot press Enter while the page is open: `docs/bugs/agent-fleet-send-keys-read-only-viewer.md`.
+- Dev setup on `.4`: `rsync -az --delete --exclude node_modules --exclude .git ./ me@192.168.50.4:Development/fleet-control-dev/`, PATH `/opt/homebrew/bin:$HOME/.bun/bin`, agent-fleet `main` copy at `~/Development/agent-fleet-dev`. Nothing runs there after the session.
+- Session 3 (user, 2026-11-09: finish what remains in fleet-control): model observation from Claude Code transcripts, token auth with configurable bind, terminal reconnect, peer hosts in the nav, narrow layout and a measured accessibility pass. See [implementation status](implementation-status.md). Branch has all commits; not merged, no push.
+
+- Installed (owner approved, 2026-11-09): service on `.4` as LaunchAgent, LAN `192.168.50.4:4871` with mkcert TLS and tokens, test fleet only; MacBook MCP `fleet-control-mini` registered at user scope. MacBook-offline test passed. See [implementation status](implementation-status.md) and [installation](installation.md) (includes removal).
+
 ## Next action
 
-First establish the actual target workstation: hostname or SSH alias, operating system and intended execution user. `runner-01` is only a design fixture, not an authorized connection target.
+See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; the `.4` service runs for a test fleet only (no Tailscale listener, owner decision); pointing it at a real fleet needs approval; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
 
-Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
-
-Before code implementation, recheck Git state and create an isolated worktree. The original design pass began without a Git repository; the user subsequently authorized local initialization and an initial snapshot on `main`. Inspect the actual branch and log rather than relying on earlier no-repository notes. No remote creation or push is authorized.
-
-Remaining choices include auth/network setup, host service packaging, durable machine-readable phase records, supervisor acknowledgement, input leases, subagent view mapping and runtime model metadata. Exact production API/MCP names are proposals, not implemented interfaces.
+Recheck Git state before changing code and keep using the worktree. No remote creation or push is authorized for this repository.
 
 ## Authorization boundary
 

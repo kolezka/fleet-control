@@ -29,4 +29,4 @@ open docs/design/terminal-deck.html
 
 The check runs draft event handlers in a minimal DOM fixture. It is not a live browser, API or terminal integration test. The `open` command is macOS-specific; the HTML can be opened directly in another browser.
 
-Do not treat the Bun starter examples in `CLAUDE.md` as implemented product endpoints. `index.ts` is still a greeting.
+Do not treat the Bun starter examples in `CLAUDE.md` as implemented product endpoints. `index.ts` starts a local, loopback-only service over the fleet CLI: session list, screen, a read-only terminal WebSocket (stage 3), and a durable command queue with MCP at `/mcp` (stage 4). It has no auth and is not deployed; see `docs/implementation-status.md`.

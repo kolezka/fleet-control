@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · Fleet Control</title>
+<link rel="stylesheet" href="./deck.css">
+<link rel="stylesheet" href="./live.css">
+</head>
+<body>
+<main class="signin">
+  <form method="post" action="/api/login" class="signincard">
+    <h1>Fleet Control</h1>
+    <p>Paste the access token for this host. It is kept in an HttpOnly cookie on this browser only.</p>
+    <label for="token">Access token</label>
+    <input id="token" name="token" type="password" autocomplete="current-password" required autofocus spellcheck="false">
+    <p class="signinerror" id="failed" role="alert" hidden>That token is not valid for this host.</p>
+    <button type="submit">Sign in</button>
+  </form>
+</main>
+<script>if (new URLSearchParams(location.search).has("failed")) document.getElementById("failed").hidden = false;</script>
+</body>
+</html>

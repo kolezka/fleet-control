@@ -1,0 +1,25 @@
+Fleet Control on 192.168.50.4, LAN + TLS + tokens, test fleet only. Read from the MacBook after reconnecting, 2026-11-09T13:46:19Z.
+Service: LaunchAgent pl.raqz.fleet-control, bound 192.168.50.4:4871, commit dd9919e + deploy-test script.
+
+== requests
+{"run":"deploy-test-run","orchestrator":"mini-orchestrator","phase":"phase-2","revision":2,"phaseStatus":"running"}
+{"id":"req-a81b07dd-b6a2-41bf-ac94-77e1a2af47ec","phase":"phase-1","revision":1,"status":"acknowledged","response":"approve","resolvedBy":"web-mariusz"}
+{"id":"req-39128c12-c6df-4ff0-8b44-c9464d6a37d2","phase":"phase-2","revision":2,"status":"open","response":null,"resolvedBy":null}
+
+== commands
+{"id":"cmd-26944342-a2c4-4ad5-a1e9-21cdfdd60407","status":"delivered","actor":"macbook-session","text":"FCDEPLOY-cmd-1"}
+{"id":"cmd-e37eee3d-83b2-4394-b2be-7ef75c86bf9c","status":"delivered","actor":"mini-orchestrator","text":"FCDEPLOY-offline-2"}
+
+== orchestrator log on .4 (no MacBook client from 13:42:46Z to 13:45:49Z)
+2026-11-09T13:42:46Z
+--- after 60 s without client
+{"approved":true,"reason":"approved by web-mariusz","requestId":"req-a81b07dd-b6a2-41bf-ac94-77e1a2af47ec"}
+{"status":"acknowledged"}
+{"phase":"phase-2","revision":2,"phaseStatus":"running"}
+{"id":"req-39128c12-c6df-4ff0-8b44-c9464d6a37d2","phase":"phase-2","revision":2}
+--- 120 s later, nobody answered
+{"approved":false,"reason":"approval requested, no answer yet","requestId":"req-39128c12-c6df-4ff0-8b44-c9464d6a37d2"}
+{"id":"cmd-e37eee3d-83b2-4394-b2be-7ef75c86bf9c","status":"delivered","actor":"mini-orchestrator"}
+2
+2026-11-09T13:45:49Z
+done
