@@ -1,6 +1,6 @@
 # MacBook and workstation installation
 
-Status: target installation split. This is an inventory, not an executable setup guide. Fleet Control's server and installers have not been implemented, and the actual workstation OS, address and access method are not selected here.
+Status: target installation split plus the service configuration that exists in the feat-fleet-adapter worktree (section "Running the service"). Chosen hosts: 192.168.50.4 (macOS, user `me`) and 192.168.50.15 (Manjaro, user `me`, on hold). Nothing has been installed as a persistent service yet.
 
 ## Component split
 
@@ -67,3 +67,59 @@ Before live use:
 Autostart, watchdog behavior and restart policy must be reviewed before enabling them. Do not automatically resume ambiguous in-flight commands after a restart. Reconcile command and runtime identities first.
 
 A copied database is not a verified backup. Backup location, validation and restore testing remain deployment decisions.
+
+## Running the service
+
+Environment for `bun index.ts`:
+
+| Variable | Meaning |
+| --- | --- |
+| `FLEET_CONF` | Required. The agent-fleet `fleet.conf` of the fleet on this host. |
+| `READONLY_FLEET_BIN` | fleet CLI with `attach --read-only` (agent-fleet main after PR #6). Default: plugin cache, which lacks it until a release. |
+| `FLEET_CONTROL_DB` | SQLite file. Default `:memory:`, which loses commands and requests on restart. |
+| `PORT` | Default 4871. |
+| `FLEET_CONTROL_HOST` | Bind address. Default `127.0.0.1`. Any other value requires `FLEET_CONTROL_TOKENS`; the service refuses to start without it. |
+| `FLEET_CONTROL_TOKENS` | Tokens file: `<principal> <sha256 hex>` per line. Only hashes live on the host. |
+| `FLEET_CONTROL_ALLOWED_HOSTS` | Extra `host:port` values accepted on `/mcp` (DNS rebinding protection), e.g. a Tailscale name. The bind address is added automatically. |
+| `FLEET_CONTROL_TLS_CERT`, `FLEET_CONTROL_TLS_KEY` | Optional PEM files. Without them traffic is plain HTTP, so tokens cross the network in clear text. Use Tailscale (encrypted) or add TLS before using LAN. |
+
+Clear `NO_COLOR` in the service environment: agent-fleet misreads Claude Code's input line when it is set (docs/bugs/agent-fleet-no-color-user-typing.md).
+
+Tokens: `bun scripts/new-token.ts <principal>` prints a token once and the line for the tokens file. One principal per client, e.g. `macbook-session`, `web-mariusz`, `orchestrator`. The principal is recorded as the actor of every command, answer and phase write, and replaces any actor name a client sends. Revoke by deleting the line and restarting the service.
+
+Clients:
+
+- Browser: open `http://<host>:4871/login`, paste a token. It is stored in an HttpOnly, SameSite=Strict cookie (Secure with TLS), so page scripts cannot read it.
+- MCP from the MacBook (Claude Code): `claude mcp add --transport http fleet-control-mini http://<host>:4871/mcp --header "Authorization: Bearer <token>"`. Keep the token out of shared config files.
+
+## launchd on 192.168.50.4 (draft, not installed)
+
+A LaunchAgent for user `me` keeps the service running while `me` is logged in; a LaunchDaemon with `UserName` `me` also runs before login. The fleet's tmux server must run as the same user, so either works as long as it is `me`. Draft `~/Library/LaunchAgents/pl.raqz.fleet-control.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>pl.raqz.fleet-control</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/me/.bun/bin/bun</string><string>index.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/me/Development/fleet-control-service</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/Users/me/.bun/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>FLEET_CONF</key><string>/Users/me/.config/fleet-control/fleet.conf</string>
+    <key>READONLY_FLEET_BIN</key><string>/Users/me/Development/agent-fleet-dev/scripts/fleet</string>
+    <key>FLEET_CONTROL_DB</key><string>/Users/me/Library/Application Support/fleet-control/state.db</string>
+    <key>FLEET_CONTROL_HOST</key><string>100.64.0.6</string>
+    <key>FLEET_CONTROL_TOKENS</key><string>/Users/me/.config/fleet-control/tokens</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>/Users/me/Library/Logs/fleet-control.log</string>
+  <key>StandardErrorPath</key><string>/Users/me/Library/Logs/fleet-control.log</string>
+</dict></plist>
+```
+
+`100.64.0.6` binds Tailscale only. Binding the LAN address as well needs a second instance or `0.0.0.0` plus a firewall rule; decide that with the owner. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
+
+Install steps (need the owner's approval): copy a checkout to the working directory, `bun install --frozen-lockfile`, create the tokens file (`chmod 600`), `launchctl bootstrap gui/$(id -u) <plist>`, then `curl -s -o /dev/null -w '%{http_code}' http://100.64.0.6:4871/api/sessions` must print 401.

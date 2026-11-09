@@ -1,4 +1,6 @@
-// Local service. Requires FLEET_CONF; binds to 127.0.0.1 only and has no auth yet.
+// Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
+// to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
+import { Auth } from "./src/auth.ts";
 import { Commands } from "./src/commands.ts";
 import { Deliverer, fleetSender } from "./src/delivery.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
@@ -31,5 +33,13 @@ const server = serve(
     control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
   },
   Number(process.env.PORT ?? 4871),
+  {
+    hostname: process.env.FLEET_CONTROL_HOST ?? "127.0.0.1",
+    auth: process.env.FLEET_CONTROL_TOKENS ? await Auth.fromFile(process.env.FLEET_CONTROL_TOKENS) : undefined,
+    allowedHosts: (process.env.FLEET_CONTROL_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean),
+    tls: process.env.FLEET_CONTROL_TLS_CERT && process.env.FLEET_CONTROL_TLS_KEY
+      ? { cert: await Bun.file(process.env.FLEET_CONTROL_TLS_CERT).text(), key: await Bun.file(process.env.FLEET_CONTROL_TLS_KEY).text() }
+      : undefined,
+  },
 );
 console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);

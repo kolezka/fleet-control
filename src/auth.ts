@@ -1,0 +1,67 @@
+// Bearer-token auth for REST, WebSocket and MCP. Each token names one principal; that name
+// becomes the actor recorded for commands, answers and phase writes.
+import { createHash, timingSafeEqual } from "node:crypto";
+
+export type Principal = { name: string };
+
+export class AuthConfigError extends Error {}
+
+const NAME = /^[A-Za-z0-9._-]{1,64}$/;
+const sha256 = (s: string) => createHash("sha256").update(s).digest();
+
+// Tokens file: one `<principal> <sha256 hex of token>` per line, `#` comments. Only hashes are
+// stored on the host, so the file leaks no usable secret.
+export function parseTokens(text: string): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  for (const [i, raw] of text.split("\n").entries()) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(\S+)\s+([0-9a-f]{64})$/);
+    if (!m || !NAME.test(m[1]!)) throw new AuthConfigError(`tokens file line ${i + 1}: expected "<name> <sha256 hex>"`);
+    if (out.has(m[1]!)) throw new AuthConfigError(`tokens file line ${i + 1}: duplicate principal ${m[1]}`);
+    out.set(m[1]!, Buffer.from(m[2]!, "hex"));
+  }
+  if (out.size === 0) throw new AuthConfigError("tokens file has no principals");
+  return out;
+}
+
+export const COOKIE = "fc_session";
+
+export class Auth {
+  constructor(private readonly hashes: Map<string, Buffer>) {}
+
+  static async fromFile(path: string): Promise<Auth> {
+    return new Auth(parseTokens(await Bun.file(path).text()));
+  }
+
+  check(token: string | null | undefined): Principal | null {
+    if (!token || token.length > 512) return null;
+    const h = sha256(token);
+    let found: string | null = null;
+    // compare against every entry so timing does not reveal which principal matched
+    for (const [name, want] of this.hashes) if (timingSafeEqual(h, want)) found = name;
+    return found ? { name: found } : null;
+  }
+
+  // Authorization: Bearer for MCP and scripts, the session cookie for the browser page.
+  principal(req: Request): Principal | null {
+    const header = req.headers.get("authorization");
+    if (header) return this.check(header.match(/^Bearer\s+(\S+)$/i)?.[1]);
+    const cookie = req.headers.get("cookie") ?? "";
+    const value = cookie.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
+    return this.check(value ? decodeURIComponent(value) : null);
+  }
+}
+
+export function newToken(): string {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+}
+
+export function tokenLine(name: string, token: string): string {
+  if (!NAME.test(name)) throw new AuthConfigError("principal name must match [A-Za-z0-9._-]{1,64}");
+  return `${name} ${sha256(token).toString("hex")}`;
+}
+
+export function isLoopback(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}

@@ -35,6 +35,13 @@ export function modelDetail(m: Model): string {
   }
 }
 
+// With auth on, a 401 means the cookie is missing or revoked: go to sign-in instead of showing stale data.
+async function api(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (res.status === 401) location.assign("/login");
+  return res;
+}
+
 const state = { selected: "" as string, inspector: true, sessions: [] as Session[] };
 const panes = new Map<string, { term: Terminal; ws: WebSocket }>();
 
@@ -113,7 +120,7 @@ function renderPanes(sessions: Session[]) {
 }
 
 async function load() {
-  const res = await fetch("/api/sessions");
+  const res = await api("/api/sessions");
   const body = await res.json();
   if (!res.ok) {
     $("alert").hidden = false;
@@ -251,7 +258,7 @@ function renderComposer() {
 
 async function poll() {
   try {
-    const [rq, cm] = await Promise.all([fetch("/api/requests"), fetch("/api/commands")]);
+    const [rq, cm] = await Promise.all([api("/api/requests"), api("/api/commands")]);
     if (rq.ok) Object.assign(coord, await rq.json());
     if (cm.ok) coord.commands = ((await cm.json()) as { commands: Command[] }).commands;
     coord.reachable = true;
@@ -268,7 +275,7 @@ async function poll() {
 async function answer(requestId: string, response: string, expectedRevision: number, button: HTMLButtonElement) {
   button.disabled = true;
   try {
-    const res = await fetch(`/api/requests/${encodeURIComponent(requestId)}/resolve`, {
+    const res = await api(`/api/requests/${encodeURIComponent(requestId)}/resolve`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ response, expectedRevision }),
     });
     const body = await res.json();
@@ -291,7 +298,7 @@ $("instructionForm").addEventListener("submit", async (e) => {
   coord.pendingKey ||= crypto.randomUUID();
   ($("sendInstruction") as HTMLButtonElement).disabled = true;
   try {
-    const res = await fetch("/api/commands", {
+    const res = await api("/api/commands", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ idempotencyKey: coord.pendingKey, target, text }),
     });

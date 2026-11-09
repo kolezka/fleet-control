@@ -1,4 +1,7 @@
-// Read-only Fleet Control host service skeleton. Localhost only; no auth yet, so never bind it elsewhere.
+// Fleet Control host service. Loopback without auth for development; any other bind address
+// requires bearer-token auth (see src/auth.ts and docs/installation.md).
+import { Auth, COOKIE, isLoopback, type Principal } from "./auth.ts";
+import login from "../web/login.html";
 import { FleetError, type FleetReader } from "./fleet/cli.ts";
 import { modelState, type ModelState } from "./model.ts";
 import type { Observation } from "./observe/claude.ts";
@@ -119,7 +122,7 @@ function originAllowed(req: Request): boolean {
   const origin = req.headers.get("origin");
   return origin === null || origin === new URL(req.url).origin;
 }
-type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean };
+type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: string };
 
 // Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
 function sameOrigin(req: Request): boolean {
@@ -127,29 +130,79 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
+type Routes = "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps }, port = 4871) {
+export type ServeOptions = {
+  hostname?: string; // default 127.0.0.1
+  auth?: Auth; // required unless hostname is loopback
+  allowedHosts?: string[]; // extra Host header values for MCP, e.g. "192.168.50.4:4871"
+  tls?: { cert: string; key: string }; // PEM text
+};
+
+const unauthorized = () =>
+  Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
+
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps }, port = 4871, opts: ServeOptions = {}) {
+  const hostname = opts.hostname ?? "127.0.0.1";
+  if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
+  const auth = opts.auth;
   const app = createApp(deps);
   const terminal = deps.terminal;
   const control = deps.control;
+
+  // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
+  type Handler = (req: any, server: any) => Response | Promise<Response> | undefined | Promise<Response | undefined>;
+  const guard = (h: (req: any, server: any, who: Principal | null) => ReturnType<Handler>): Handler => (req, srv) => {
+    if (!auth) return h(req, srv, null);
+    const who = auth.principal(req);
+    return who ? h(req, srv, who) : unauthorized();
+  };
+
   const server: ReturnType<typeof Bun.serve<SocketData, Routes>> = Bun.serve<SocketData, Routes>({
-    hostname: "127.0.0.1",
+    hostname,
     port,
+    ...(opts.tls ? { tls: opts.tls } : {}),
     routes: {
       "/": deck,
-      "/api/sessions": { GET: () => app.sessions() },
+      "/login": login,
+      "/api/login": {
+        // Exchanges a token for an HttpOnly cookie, so the page's JavaScript never holds it.
+        POST: async (req) => {
+          if (!auth) return Response.redirect("/", 303);
+          if (!sameOrigin(req)) return forbidden();
+          const form = await req.formData().catch(() => null);
+          const token = form?.get("token");
+          const who = typeof token === "string" ? auth.check(token.trim()) : null;
+          if (!who) return Response.redirect("/login?failed=1", 303);
+          const secure = opts.tls ? "; Secure" : "";
+          return new Response(null, {
+            status: 303,
+            headers: {
+              location: "/",
+              "set-cookie": `${COOKIE}=${encodeURIComponent(token as string)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+            },
+          });
+        },
+      },
+      "/logout": {
+        POST: (req) => {
+          if (!sameOrigin(req)) return forbidden();
+          return new Response(null, { status: 303, headers: { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` } });
+        },
+      },
+      "/api/whoami": { GET: guard((_req, _s, who) => Response.json({ principal: who?.name ?? null, auth: Boolean(auth) })) },
+      "/api/sessions": { GET: guard(() => app.sessions()) },
       "/api/sessions/:name/screen": {
-        GET: (req) => {
+        GET: guard((req) => {
           const raw = new URL(req.url).searchParams.get("lines");
           const lines = raw === null ? 40 : Number(raw);
           return app.screen(req.params.name, lines);
-        },
+        }),
       },
       // The web UI reads and queues commands here; MCP clients use /mcp. Both share one queue.
       "/api/commands": {
-        GET: () => (control ? Response.json({ commands: control.commands.list() }) : noControl()),
-        POST: async (req) => {
+        GET: guard(() => (control ? Response.json({ commands: control.commands.list() }) : noControl())),
+        POST: guard(async (req, _s, who) => {
           if (!control) return noControl();
           if (!originAllowed(req)) return forbidden();
           try {
@@ -158,7 +211,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const { command, created } = control.commands.submit({
               idempotencyKey: str("idempotencyKey"),
               target: str("target"),
-              actor: str("actor") || "web-ui",
+              actor: who?.name ?? (str("actor") || "web-ui"),
               text: str("text"),
             });
             const after = created ? await control.deliverer.deliver(command.id) : command;
@@ -167,27 +220,27 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
             return commandError(e);
           }
-        },
+        }),
       },
       "/api/commands/:id": {
-        GET: (req) => {
+        GET: guard((req) => {
           if (!control) return noControl();
           try {
             return Response.json({ command: control.commands.get(req.params.id), events: control.commands.events(req.params.id) });
           } catch (e) {
             return commandError(e);
           }
-        },
+        }),
       },
       "/api/requests": {
-        GET: () => {
+        GET: guard(() => {
           if (!control?.requests) return noControl();
           return Response.json({ runs: control.requests.runs(), requests: control.requests.list() });
-        },
+        }),
       },
       // A human answer from the page. Bound to the request id and the revision the page showed.
       "/api/requests/:id/resolve": {
-        POST: async (req) => {
+        POST: guard(async (req, _s, who) => {
           if (!control?.requests) return noControl();
           if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
           try {
@@ -195,7 +248,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const request = control.requests.resolve({
               requestId: req.params.id,
               response: typeof b.response === "string" ? b.response : "",
-              actor: "web-ui",
+              actor: who?.name ?? "web-ui",
               expectedRevision: typeof b.expectedRevision === "number" ? b.expectedRevision : -1,
               note: typeof b.note === "string" ? b.note : undefined,
             });
@@ -204,18 +257,19 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
             return commandError(e);
           }
-        },
+        }),
       },
-      // Streamable HTTP MCP endpoint. DNS rebinding protection only admits loopback Host headers.
-      "/mcp": async (req) => {
+      // Streamable HTTP MCP endpoint. DNS rebinding protection admits only the configured Host headers.
+      "/mcp": guard(async (req, _s, who) => {
         if (!control) return noControl();
         if (!originAllowed(req)) return forbidden();
-        return handleMcp(req, control, [`127.0.0.1:${server.port}`, `localhost:${server.port}`]);
-      },
+        const hosts = [`127.0.0.1:${server.port}`, `localhost:${server.port}`, ...(isLoopback(hostname) ? [] : [`${hostname}:${server.port}`]), ...(opts.allowedHosts ?? [])];
+        return handleMcp(req, control, hosts, who?.name);
+      }),
       // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
       // a resize would resize the agent's window, since the viewer may be its only tmux client.
       "/api/sessions/:name/terminal": {
-        GET: (req, server) => {
+        GET: guard((req, server, who) => {
           if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
           if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
           const url = new URL(req.url);
@@ -223,9 +277,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!size || !/^[A-Za-z0-9._-]+$/.test(req.params.name)) {
             return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
           }
-          if (server.upgrade(req, { data: { session: req.params.name, ...size } })) return undefined;
+          if (server.upgrade(req, { data: { session: req.params.name, ...size, principal: who?.name } })) return undefined;
           return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
-        },
+        }),
       },
     },
     websocket: {
