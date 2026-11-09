@@ -89,7 +89,7 @@ The handler check is not browser automation. No production build, live fleet tes
 | Disk free (home fs) | **64G free, 93% used** | 134G free |
 | Live tmux | production sessions `tv-*` incl. `tv-watchdog` on the default socket, plus leftover `fleet-fleetsmoke*` sockets | none (no tmux) |
 
-  Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. `.15` needs agent-fleet available on the host for a host-local service. Low disk on `.15` is a risk for worktrees.
+  Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. Low disk on `.15` is a risk for worktrees.
 - Still open: dependency approval for stage 3.
 - Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
