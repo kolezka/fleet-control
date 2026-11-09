@@ -92,12 +92,12 @@ The handler check is not browser automation. No production build, live fleet tes
   Consequences: on `.4` the fleet CLI (`#!/usr/bin/env bash`) needs `/opt/homebrew/bin` first in PATH, which a non-login SSH command or launchd job does not get by default; the service must set PATH explicitly. `.15` runs a production fleet (`tv-*`); never attach to, send to or kill those sessions; tests use their own private socket. Low disk on `.15` is a risk for worktrees.
 - User then said: do not touch `192.168.50.15` for now. No further contact with either host after the installs above.
 - Approved: `ghostty-web` 0.4.0 pinned in this worktree; a local agent-fleet worktree adding `fleet attach --read-only` (no push).
-- Stage 3 (read-only terminal) done locally on the MacBook against a private test fleet: see [implementation status](implementation-status.md). The agent-fleet change lives on branch `feat/attach-read-only` in `~/Development/agent-fleet.worktrees/attach-read-only` and is not released, so Fleet Control needs `READONLY_FLEET_BIN` pointing there until it is.
+- Stage 3 (read-only terminal) done locally on the MacBook against a private test fleet: see [implementation status](implementation-status.md). The agent-fleet change lives on branch `feat/attach-read-only` in `~/Development/agent-fleet.worktrees/attach-read-only` was merged as kolezka/agent-fleet#6 (`8a1bd2c`). The plugin version was not bumped (still 0.3.0), so installed plugin caches lack it and Fleet Control still needs `READONLY_FLEET_BIN` pointing at a checkout of agent-fleet `main` until a version bump ships.
 - Remaining stages: 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
 
-Decide how the agent-fleet `attach --read-only` change gets released (PR to kolezka/agent-fleet needs push approval), then stage 4 (durable commands and MCP) locally. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
+Decide on an agent-fleet version bump so the plugin cache picks up `attach --read-only`, then stage 4 (durable commands and MCP) locally. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
 
 Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
 
