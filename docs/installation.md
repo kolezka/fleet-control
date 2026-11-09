@@ -110,7 +110,7 @@ A LaunchAgent for user `me` keeps the service running while `me` is logged in; a
     <key>FLEET_CONF</key><string>/Users/me/.config/fleet-control/fleet.conf</string>
     <key>READONLY_FLEET_BIN</key><string>/Users/me/Development/agent-fleet-dev/scripts/fleet</string>
     <key>FLEET_CONTROL_DB</key><string>/Users/me/Library/Application Support/fleet-control/state.db</string>
-    <key>FLEET_CONTROL_HOST</key><string>100.64.0.6</string>
+    <key>FLEET_CONTROL_HOST</key><string>127.0.0.1</string>
     <key>FLEET_CONTROL_TOKENS</key><string>/Users/me/.config/fleet-control/tokens</string>
   </dict>
   <key>RunAtLoad</key><true/>
@@ -120,6 +120,6 @@ A LaunchAgent for user `me` keeps the service running while `me` is logged in; a
 </dict></plist>
 ```
 
-`100.64.0.6` binds Tailscale only. Binding the LAN address as well needs a second instance or `0.0.0.0` plus a firewall rule; decide that with the owner. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
+Owner decision (2026-11-09): do not install anything that listens on Tailscale. The draft binds loopback; the network route is still open. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
 
-Install steps (need the owner's approval): copy a checkout to the working directory, `bun install --frozen-lockfile`, create the tokens file (`chmod 600`), `launchctl bootstrap gui/$(id -u) <plist>`, then `curl -s -o /dev/null -w '%{http_code}' http://100.64.0.6:4871/api/sessions` must print 401.
+Install steps (need the owner's approval): copy a checkout to the working directory, `bun install --frozen-lockfile`, create the tokens file (`chmod 600`), `launchctl bootstrap gui/$(id -u) <plist>`, then `curl -s -o /dev/null -w '%{http_code}' http://<bind address>:4871/api/sessions` must print 401 (or 200 on loopback without tokens).

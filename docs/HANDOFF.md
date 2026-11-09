@@ -102,7 +102,7 @@ The handler check is not browser automation. No production build, live fleet tes
 
 ## Next action
 
-See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; with the owner's approval install the service on `.4` (launchd draft in [installation.md](installation.md)) and run the MacBook-offline test; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
+See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; with the owner's approval install the service on `.4` (launchd draft in [installation.md](installation.md); the owner ruled out a Tailscale listener on 2026-11-09) and run the MacBook-offline test; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
 
 Recheck Git state before changing code and keep using the worktree. No remote creation or push is authorized for this repository.
 

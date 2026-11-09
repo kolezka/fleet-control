@@ -169,7 +169,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Open decisions
 
-1. LAN exposure: Tailscale-only bind, or LAN too (needs TLS or acceptance of clear-text tokens on the LAN).
+1. Network route to the service. Owner decision 2026-11-09: no listener on Tailscale. Remaining options: loopback plus an SSH tunnel from the MacBook, or a LAN bind (needs TLS or acceptance of clear-text tokens on the LAN).
 2. LaunchAgent vs LaunchDaemon on `.4`; when `.15` comes off hold, a systemd user unit there.
 3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers.
 4. Supervisor wakeup when it is busy or a dialog is open; what a command does then.
@@ -182,7 +182,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 ## Suggested next order
 
 1. Verify the agent-fleet `send-keys` fix from Fleet Control once it lands (page open, `fleet send` returns `delivered`).
-2. With approval: install the service on `.4` (launchd, Tailscale bind, tokens), register MCP from the MacBook, then disconnect the MacBook and confirm state, approvals and queued commands survive.
+2. With approval and a chosen network route (not Tailscale): install the service on `.4` (launchd, tokens), register MCP from the MacBook, then disconnect the MacBook and confirm state, approvals and queued commands survive.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
 4. Input lease design, then implementation.
 5. `.15` when the hold is lifted.
