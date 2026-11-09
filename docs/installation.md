@@ -92,7 +92,48 @@ Clients:
 - Browser: open `http://<host>:4871/login`, paste a token. It is stored in an HttpOnly, SameSite=Strict cookie (Secure with TLS), so page scripts cannot read it.
 - MCP from the MacBook (Claude Code): `claude mcp add --transport http fleet-control-mini http://<host>:4871/mcp --header "Authorization: Bearer <token>"`. Keep the token out of shared config files.
 
-## launchd on 192.168.50.4 (draft, not installed)
+## Installed on 192.168.50.4 (2026-11-09, approved by the owner)
+
+LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` with TLS and tokens. Nothing listens on Tailscale or loopback (owner decision). It serves a **test fleet only**: socket `fleet-fctrl-test`, one session `probe-shell` running `cat`, no agent. No production session is attached.
+
+| Item | Path on `.4` |
+| --- | --- |
+| Service checkout (rsync of the branch, no `.git`) | `~/Development/fleet-control-service` |
+| Plist | `~/Library/LaunchAgents/pl.raqz.fleet-control.plist` |
+| fleet.conf (must sit in `FLEET_DIR`: agent-fleet's `watchdog.sh` reads `$FLEET_DIR/fleet.conf`) | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
+| State database | `~/Library/Application Support/fleet-control/state.db` |
+| Tokens (hashes only), certificate, key, public CA, orchestrator token | `~/.config/fleet-control/` (dir 700, key and tokens 600) |
+| Log | `~/Library/Logs/fleet-control.log` |
+| fleet CLI with `attach --read-only` | `~/Development/agent-fleet-dev/scripts/fleet` |
+
+Certificate: issued by the MacBook's existing mkcert CA (`mkcert me@MacBook-Pro-me.local`, already trusted in the MacBook System keychain), SAN `IP:192.168.50.4`, valid until 2029-02-09. The CA private key never left the MacBook; `.4` has only the public `ca.pem` so local clients there can verify the server.
+
+Principals: `macbook-session` (MCP from the MacBook), `web-mariusz` (browser), `mini-orchestrator` (test orchestrator on `.4`). Plain tokens are only in `~/.config/fleet-control/token-*` on the machine that uses them.
+
+MacBook MCP registration (user scope, in `~/.claude.json`): `fleet-control-mini` → `https://192.168.50.4:4871/mcp` with the bearer header. `claude mcp list` reports it connected. Other Node/Bun clients need `NODE_EXTRA_CA_CERTS` pointing at the mkcert CA.
+
+Operate:
+
+```bash
+ssh me@192.168.50.4 'launchctl print gui/$(id -u)/pl.raqz.fleet-control | grep -E "state|pid"'
+ssh me@192.168.50.4 'launchctl kickstart -k gui/$(id -u)/pl.raqz.fleet-control'   # restart
+ssh me@192.168.50.4 'tail -20 ~/Library/Logs/fleet-control.log'
+```
+
+Remove completely:
+
+```bash
+ssh me@192.168.50.4 'launchctl bootout gui/$(id -u)/pl.raqz.fleet-control; rm ~/Library/LaunchAgents/pl.raqz.fleet-control.plist; tmux -L fleet-fctrl-test kill-server'
+claude mcp remove --scope user fleet-control-mini
+# optional: rm -rf ~/Development/fleet-control-service ~/.config/fleet-control ~/.local/share/fleet-control "~/Library/Application Support/fleet-control" on .4
+```
+
+The test session is not started by launchd. After a reboot of `.4` the service comes back but `probe-shell` does not:
+`tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"` (with `/opt/homebrew/bin` on PATH, `NO_COLOR` unset).
+
+Update the service from the worktree: `rsync -az --delete --exclude node_modules --exclude .git --exclude .agents ./ me@192.168.50.4:Development/fleet-control-service/`, then `bun install --frozen-lockfile` there and `kickstart -k`.
+
+## launchd draft (history)
 
 A LaunchAgent for user `me` keeps the service running while `me` is logged in; a LaunchDaemon with `UserName` `me` also runs before login. The fleet's tmux server must run as the same user, so either works as long as it is `me`. Draft `~/Library/LaunchAgents/pl.raqz.fleet-control.plist`:
 

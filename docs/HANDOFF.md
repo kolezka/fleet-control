@@ -100,9 +100,11 @@ The handler check is not browser automation. No production build, live fleet tes
 - Dev setup on `.4`: `rsync -az --delete --exclude node_modules --exclude .git ./ me@192.168.50.4:Development/fleet-control-dev/`, PATH `/opt/homebrew/bin:$HOME/.bun/bin`, agent-fleet `main` copy at `~/Development/agent-fleet-dev`. Nothing runs there after the session.
 - Session 3 (user, 2026-11-09: finish what remains in fleet-control): model observation from Claude Code transcripts, token auth with configurable bind, terminal reconnect, peer hosts in the nav, narrow layout and a measured accessibility pass. See [implementation status](implementation-status.md). Branch has all commits; not merged, no push.
 
+- Installed (owner approved, 2026-11-09): service on `.4` as LaunchAgent, LAN `192.168.50.4:4871` with mkcert TLS and tokens, test fleet only; MacBook MCP `fleet-control-mini` registered at user scope. MacBook-offline test passed. See [implementation status](implementation-status.md) and [installation](installation.md) (includes removal).
+
 ## Next action
 
-See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; with the owner's approval install the service on `.4` (launchd draft in [installation.md](installation.md); the owner ruled out a Tailscale listener on 2026-11-09) and run the MacBook-offline test; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
+See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; the `.4` service runs for a test fleet only (no Tailscale listener, owner decision); pointing it at a real fleet needs approval; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
 
 Recheck Git state before changing code and keep using the worktree. No remote creation or push is authorized for this repository.
 

@@ -120,9 +120,20 @@ Not covered: a real orchestrator using the request tools, phased-delivery writin
 - Accessibility pass against `apple-his@1.0.0` Accessibility > Vision (`p_c0fddc877c056647381b`) and > Mobility (`p_f312d5102c67a3d27304`), measured in Chrome on the live page: all visible text at least 10 px (macOS minimum 10 pt); muted text on the selected tint was 4.38:1 in light mode and is now at least 4.64:1 (dark at least 5.76:1); every control has an accessible name; the history disclosure was raised to 24 px tall; focus rings added where missing. Not a full HIG review: no VoiceOver run, no 200 % text test, no reduced-motion or keyboard-only walkthrough.
 - Tests: 96 pass, 0 fail on the MacBook and on `.4`; `bun check` clean; `design:check` PASS. Negative controls: removing the sidechain filter, the principal override, or the auth guard each make tests fail. On `.4` (loopback, private socket): no token 401, bearer 200, posted command recorded actor `mini-test` although it claimed `orchestrator`, `/mcp` without token 401, bind `0.0.0.0` without tokens refused. Reconnect checked in a browser by restarting the service under an open page. TLS checked on the MacBook with a throwaway self-signed certificate (loopback): HTTPS without token 401, with token 200, plain HTTP refused, sign-in cookie has `Secure`, `HttpOnly`, `SameSite=Strict`.
 
+## Installed on 192.168.50.4: LAN + TLS, test fleet only (2026-11-09, approved)
+
+Setup and removal: [installation.md](installation.md). Evidence read back from the service: [evidence-2026-11-09-mini-deploy.txt](evidence-2026-11-09-mini-deploy.txt).
+
+- LaunchAgent `pl.raqz.fleet-control` listens only on `192.168.50.4:4871` (checked with `lsof`); `https://100.64.0.6:4871` and plain HTTP do not answer. Certificate from the MacBook's mkcert CA, trusted by curl, Chrome and Claude Code on the MacBook.
+- From the MacBook: no token 401, wrong token 401, token 200, `/api/whoami` = `macbook-session`. `claude mcp list` shows `fleet-control-mini` connected. A command submitted over MCP that claimed actor `orchestrator` was recorded as `macbook-session` and reached the `probe-shell` pane (`delivered`; the pane shows it twice because the tty echoes and `cat` prints it).
+- Restart: `launchctl kickstart -k` (pid 27423 → 27882) kept the command, the run and the open request (SQLite file). The gate stayed "approval requested, no answer yet".
+- Browser over LAN TLS (Chrome via agent-browser): sign-in with the `web-mariusz` token, host `mac-mini`, live read-only terminal, request shown and approved; recorded `approve` by `web-mariusz` for phase-1 revision 1, shown as "Answered, awaiting acknowledgement".
+- MacBook offline: the browser was closed and no MacBook client touched `.4` from 13:42:46Z to 13:45:49Z. A script on `.4` acting as orchestrator (token `mini-orchestrator`) saw the gate approved by `web-mariusz`, acknowledged, moved to phase-2 revision 2, asked a new approval, and after 120 s with nobody answering the gate was still closed ("approval requested, no answer yet"). A command it sent was delivered. The MacBook then reconnected and read the same state.
+- Not shown by this: a real agent or phased-delivery as orchestrator, production sessions (none are attached), reboot of `.4` (the test session is not started by launchd), certificate rotation.
+
 ## Not implemented in this project
 
-- Persistent installation on a host, LAN/Tailscale exposure, and MCP used from the MacBook against a remote host. The code supports it; nothing is installed (needs the owner's approval).
+- A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. `.15` has nothing.
 - Using the viewer with real agent sessions: blocked by the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)), handed to a separate agent-fleet session.
 - phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
 - Terminal input and exclusive input leases. The viewer is read-only by design.
@@ -182,7 +193,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 ## Suggested next order
 
 1. Verify the agent-fleet `send-keys` fix from Fleet Control once it lands (page open, `fleet send` returns `delivered`).
-2. With approval: LAN bind with TLS (not Tailscale), install the service on `.4` (launchd, tokens), register MCP from the MacBook, then disconnect the MacBook and confirm state, approvals and queued commands survive.
+2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, after the `send-keys` fix.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
 4. Input lease design, then implementation.
 5. `.15` when the hold is lifted.
