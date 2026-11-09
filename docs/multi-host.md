@@ -81,7 +81,7 @@ Type=simple
 WorkingDirectory=/home/fleet/Development/fleet-control-service
 Environment=PATH=/home/fleet/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Environment=FLEET_CONF=/home/fleet/.local/share/fleet-control/test-fleet/fleet.conf
-Environment=READONLY_FLEET_BIN=/home/fleet/Development/agent-fleet/scripts/fleet
+Environment=READONLY_FLEET_BIN=/home/fleet/Development/fleet-control-service/vendor/agent-fleet/scripts/fleet
 Environment=FLEET_CONTROL_DB=/home/fleet/.local/share/fleet-control/state.db
 Environment=FLEET_CONTROL_HOST=192.0.2.10
 Environment=FLEET_CONTROL_TOKENS=/home/fleet/.config/fleet-control/tokens

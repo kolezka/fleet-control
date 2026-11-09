@@ -6,7 +6,7 @@ import { createTestFleet, defaultFleetBin, type TestFleet } from "./fixture.ts";
 const haveFleet = await Bun.file(defaultFleetBin).exists();
 if (!haveFleet) console.warn(`SKIP live fleet tests: agent-fleet CLI not found at ${defaultFleetBin} (set FLEET_BIN)`);
 
-describe.skipIf(!haveFleet)("FleetCli against agent-fleet 0.3.0 and a private tmux socket", () => {
+describe.skipIf(!haveFleet)("FleetCli against the selected agent-fleet and a private tmux socket", () => {
   let fleet: TestFleet;
   let cli: FleetCli;
   beforeAll(async () => {

@@ -1,3 +1,4 @@
+import { resolveFleetBin } from "../src/fleet/path.ts";
 // Two local services with separate shell-only fleets. Not a Linux/macOS deployment test.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,8 +12,7 @@ import { Requests } from "../src/requests.ts";
 import { serve } from "../src/server.ts";
 import { Store } from "../src/store.ts";
 
-const fleetBin = process.env.READONLY_FLEET_BIN;
-if (!fleetBin) throw new Error("READONLY_FLEET_BIN must point at fleet with attach --read-only");
+const fleetBin = resolveFleetBin();
 const dir = await mkdtemp(join(tmpdir(), "fleet-control-two-hosts-"));
 const fleets: TestFleet[] = [];
 const servers: ReturnType<typeof serve>[] = [];

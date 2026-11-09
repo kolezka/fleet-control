@@ -1,0 +1,3 @@
+[submodule "vendor/agent-fleet"]
+	path = vendor/agent-fleet
+	url = https://github.com/kolezka/agent-fleet.git

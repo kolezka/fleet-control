@@ -1,13 +1,13 @@
+import { resolveFleetBin } from "../fleet/path.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { FleetError } from "../fleet/cli.ts";
-import { createTestFleet, defaultFleetBin, type TestFleet } from "../fleet/fixture.ts";
+import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { clampSize, openViewer, supportsReadOnlyAttach } from "./viewer.ts";
 
-// Until agent-fleet ships `attach --read-only`, point READONLY_FLEET_BIN at a checkout that has it.
-const roBin =
-  process.env.READONLY_FLEET_BIN ??
-  join(process.env.HOME ?? "", "Development/agent-fleet.worktrees/attach-read-only/scripts/fleet");
+const roBin = resolveFleetBin();
 const haveRo = (await Bun.file(roBin).exists()) && (await supportsReadOnlyAttach(roBin));
 if (!haveRo) console.warn(`SKIP viewer tests: no fleet CLI with attach --read-only at ${roBin}`);
 
@@ -51,12 +51,19 @@ describe.skipIf(!haveRo)("read-only viewer over fleet attach --read-only", () =>
 });
 
 test("a CLI without attach --read-only is refused instead of attaching writable", async () => {
-  if (!(await Bun.file(defaultFleetBin).exists()) || (await supportsReadOnlyAttach(defaultFleetBin))) return;
-  const err = await openViewer({
-    fleetBin: defaultFleetBin, confPath: "/nonexistent", session: "x", cols: 80, rows: 24, onData() {}, onExit() {},
-  }).catch((e) => e);
-  expect(err).toBeInstanceOf(FleetError);
-  expect(err.message).toContain("refusing a writable attach");
+  const dir = await mkdtemp(join(tmpdir(), "fleet-old-cli-"));
+  try {
+    const oldCli = join(dir, "fleet");
+    await Bun.write(oldCli, "#!/bin/sh\nprintf 'fleet attach <session>\\n'\n", { mode: 0o755 });
+    await chmod(oldCli, 0o755);
+    const err = await openViewer({
+      fleetBin: oldCli, confPath: "/nonexistent", session: "x", cols: 80, rows: 24, onData() {}, onExit() {},
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(FleetError);
+    expect(err.message).toContain("refusing a writable attach");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("clampSize rejects nonsense sizes", () => {

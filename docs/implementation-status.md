@@ -2,7 +2,13 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
-## Latest: decentralized client (2026-11-09)
+## Latest: pinned CLI dependency (2026-11-09)
+
+`vendor/agent-fleet` is a Git submodule pinned to `5871fa5306ab5f547b9b012018c27fe99ad008a0`. Host service, demos and integration tests share a repository-relative CLI resolver; explicit environment overrides remain. Initialize the submodule when cloning/updating. See [dependency maintenance](agent-fleet-dependency.md).
+
+With overrides unset: **164 pass, 0 skip, 0 fail**, 1076 assertions; typecheck clean; design handler check PASS. The former viewer/send compatibility skip now executes against the merged paste-keys fix and passes. Installed remote services were not changed; earlier evidence sections remain historical.
+
+## Previous: decentralized client (2026-11-09)
 
 Implemented on `feat/decentralized-client`: a loopback-only MacBook gateway (`client.ts`, `src/client-gateway.ts`) connects configured independent host services. Per-host tokens remain server-side; remote connections require verified TLS. The gateway has no fleet database, scheduler or execution queue. Existing direct host API/MCP remains authoritative.
 

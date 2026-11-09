@@ -1,3 +1,4 @@
+import { resolveFleetBin } from "../fleet/path.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -8,9 +9,7 @@ import { openViewer, supportsReadOnlyAttach } from "./viewer.ts";
 
 // Regression for docs/bugs/agent-fleet-send-keys-read-only-viewer.md: an open page (read-only
 // viewer) must not stop fleet send from pressing Enter. Needs an agent-fleet with the fix.
-const fleetBin =
-  process.env.READONLY_FLEET_BIN ??
-  join(process.env.HOME ?? "", "Development/agent-fleet.worktrees/attach-read-only/scripts/fleet");
+const fleetBin = resolveFleetBin();
 const usable = (await Bun.file(fleetBin).exists()) && (await supportsReadOnlyAttach(fleetBin));
 const fixed = usable && /^keys\(\)/m.test(await Bun.file(join(fleetBin, "..", "watchdog.sh")).text());
 if (usable && !fixed) console.warn(`SKIP viewer+send test: ${fleetBin} predates the agent-fleet send-keys fix`);

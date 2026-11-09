@@ -12,7 +12,15 @@ Prepared 2026-11-09. Project: `/Users/me/Development/fleet-control`. This is a s
 
 Do not restart product discovery or redesign the agreed layout without a new reason. The host service is implemented and the macOS test deployment is recorded below. Current work follows [the decentralized-client plan](decentralized-client-plan.md), not a new visual direction.
 
-## Latest: decentralized client
+## Latest: pinned agent-fleet dependency
+
+The decentralized client was merged via PR #3 (`e9bbcbe`). Follow-up branch `chore/pin-agent-fleet` adds `vendor/agent-fleet` as a Git submodule pinned to `5871fa5306ab5f547b9b012018c27fe99ad008a0` (includes PR #7 paste-keys fix). All host entry points and tests now default to that CLI via `src/fleet/path.ts`; explicit `READONLY_FLEET_BIN`, then `FLEET_BIN`, still override it. No plugin-cache or developer-home fallback remains.
+
+Clone with `--recurse-submodules`; existing checkouts run `git submodule update --init --recursive`. See [dependency maintenance](agent-fleet-dependency.md) for updates and rsync copies. Running host services were not changed.
+
+Verification without CLI overrides: **164 pass, 0 skip, 0 fail**, 1076 assertions; typecheck clean in 43 files; design handler check PASS. The real read-only-viewer-plus-send test now runs and verifies `GOT-ENTER` with the command ID. Old-CLI rejection uses a deterministic fixture rather than silently returning when a current CLI is installed. These are local shell compatibility checks, not paid-agent or remote deployment proof.
+
+## Previous: decentralized client
 
 Branch `feat/decentralized-client`, based on `origin/main` at `14cf31e`, in `.agents/worktrees/feat-fleet-adapter`. One MacBook page can now select independent configured host services through a loopback gateway. Host execution and durable state remain remote; there is no central scheduler or duplicated tmux/SSH manager.
 

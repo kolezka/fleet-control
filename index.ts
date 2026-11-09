@@ -4,7 +4,7 @@ import { serveOptionsFromEnv } from "./src/config.ts";
 import { Commands } from "./src/commands.ts";
 import { Deliverer, fleetSender } from "./src/delivery.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
-import { defaultFleetBin } from "./src/fleet/fixture.ts";
+import { resolveFleetBin } from "./src/fleet/path.ts";
 import { Requests } from "./src/requests.ts";
 import { observerForConf } from "./src/observe/claude.ts";
 import { serve } from "./src/server.ts";
@@ -15,7 +15,7 @@ if (!confPath) {
   console.error("FLEET_CONF is required (path to an agent-fleet fleet.conf)");
   process.exit(1);
 }
-const fleetBin = process.env.READONLY_FLEET_BIN ?? defaultFleetBin;
+const fleetBin = resolveFleetBin();
 const observed = await observerForConf(confPath);
 if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
 const observer = "disabled" in observed ? undefined : observed;
