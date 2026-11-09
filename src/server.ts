@@ -2,6 +2,7 @@
 // requires bearer-token auth (see src/auth.ts and docs/installation.md).
 import { Auth, COOKIE, isLoopback, type Principal } from "./auth.ts";
 import login from "../web/login.html";
+import { hostname as osHostname } from "node:os";
 import { FleetError, type FleetReader } from "./fleet/cli.ts";
 import { modelState, type ModelState } from "./model.ts";
 import type { Observation } from "./observe/claude.ts";
@@ -130,14 +131,22 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
+
+export type Peer = { name: string; url: string };
 
 export type ServeOptions = {
+  hostName?: string; // label for this host in the nav; default os.hostname()
+  peers?: Peer[]; // other hosts' own services, shown as links; this service never proxies them
   hostname?: string; // default 127.0.0.1
   auth?: Auth; // required unless hostname is loopback
   allowedHosts?: string[]; // extra Host header values for MCP, e.g. "192.168.50.4:4871"
   tls?: { cert: string; key: string }; // PEM text
 };
+
+function hostLabel(): string {
+  return osHostname().replace(/\.local$/, "");
+}
 
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
@@ -189,6 +198,14 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!sameOrigin(req)) return forbidden();
           return new Response(null, { status: 303, headers: { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` } });
         },
+      },
+      // Each host runs its own service and owns its own state. Peers are listed so the nav can show
+      // and link them; their sessions are not read from here.
+      "/api/hosts": {
+        GET: guard(() => Response.json({
+          self: { name: opts.hostName ?? hostLabel(), url: null },
+          peers: opts.peers ?? [],
+        })),
       },
       "/api/whoami": { GET: guard((_req, _s, who) => Response.json({ principal: who?.name ?? null, auth: Boolean(auth) })) },
       "/api/sessions": { GET: guard(() => app.sessions()) },

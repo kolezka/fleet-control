@@ -42,70 +42,105 @@ async function api(input: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-const state = { selected: "" as string, inspector: true, sessions: [] as Session[] };
-const panes = new Map<string, { term: Terminal; ws: WebSocket }>();
+type Peer = { name: string; url: string };
+const state = { selected: "" as string, inspector: true, sessions: [] as Session[], self: LOCAL, peers: [] as Peer[] };
+const panes = new Map<string, { stop(): void }>();
 
 function css(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 function renderNav(sessions: Session[]) {
-  const hosts = [...new Set(sessions.map((s) => s.host ?? LOCAL))];
+  const hosts = [...new Set(sessions.map((s) => s.host ?? state.self))];
+  if (hosts.length === 0) hosts.push(state.self);
   $("sidebar").innerHTML =
-    `<div class="sidebarhead"><span>Hosts</span><span>${hosts.length}</span></div>` +
+    `<div class="sidebarhead"><span>Hosts</span><span>${hosts.length + state.peers.length}</span></div>` +
     hosts.map((host) => {
-      const list = sessions.filter((s) => (s.host ?? LOCAL) === host);
+      const list = sessions.filter((s) => (s.host ?? state.self) === host);
       return `<section class="hostgroup" aria-label="${esc(host)}"><button class="hostbutton" aria-pressed="true"><span class="hosticon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 20h8m-4-3v3"/></svg></span><span class="hostidentity"><strong>${esc(host)}</strong><small>${list.length} ${list.length === 1 ? "session" : "sessions"}</small></span></button>` +
         `<div class="host-sessions">${list.map((s) => `<button class="session" data-session="${esc(s.name)}" aria-pressed="${state.selected === s.name}"><span class="dot ${s.running ? "good" : ""}"></span><span><strong>${esc(s.name)}</strong><small title="${esc(modelDetail(s.model))}">${s.running ? "Running" : "Not running"} · ${esc(modelLabel(s.model))}</small></span></button>`).join("")}</div></section>`;
     }).join("") +
+    // Another host's sessions live in that host's service; this page only links to it.
+    state.peers.map((p) => `<section class="hostgroup peer" aria-label="${esc(p.name)}"><a class="hostbutton" href="${esc(p.url)}" target="_blank" rel="noopener"><span class="hosticon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 20h8m-4-3v3"/></svg></span><span class="hostidentity"><strong>${esc(p.name)}</strong><small>Own service · open</small></span></a></section>`).join("") +
     `<div class="sidebarfoot"><span>Service runs on this host</span><span>This browser is a read-only client</span></div>`;
 }
 
 const SIZE_HINT = /\x1b\]777;fleet-size;(\d+);(\d+)\x07/;
 
 // The terminal is created at the agent window size announced by agent-fleet, so it never needs a
-// resize of the agent window.
-function openPane(s: Session, el: HTMLElement) {
-  const url = new URL(`/api/sessions/${encodeURIComponent(s.name)}/terminal?cols=80&rows=24`, location.href);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(url);
-  ws.binaryType = "arraybuffer";
-  const dec = new TextDecoder();
+// resize of the agent window. After an unexpected close the pane reconnects with backoff; a new
+// tmux attach redraws the whole screen, so the old terminal is replaced, not appended to.
+type Pane = { stop(): void };
+const RETRY_MS = [1000, 2000, 5000, 10000, 30000];
+
+function openPane(s: Session, el: HTMLElement): Pane {
   const status = el.closest(".terminal")!.querySelector(".termstate")!;
   let term: Terminal | null = null;
-  let pending = "";
-  const create = (cols: number, rows: number) => {
-    term = new Terminal({
-      cols, rows, disableStdin: true, cursorBlink: false, fontSize: 12,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      theme: { background: css("--terminal"), foreground: css("--ink"), cursor: css("--muted") },
-    });
-    term.open(el);
-    panes.set(s.name, { term, ws });
+  let ws: WebSocket | null = null;
+  let stopped = false;
+  let attempt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const connect = () => {
+    const url = new URL(`/api/sessions/${encodeURIComponent(s.name)}/terminal?cols=80&rows=24`, location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const sock = new WebSocket(url);
+    ws = sock;
+    sock.binaryType = "arraybuffer";
+    const dec = new TextDecoder();
+    let pending = "";
+    let fresh = true;
+    sock.onopen = () => { status.textContent = "Read-only · live"; };
+    sock.onmessage = (e) => {
+      let text = dec.decode(e.data as ArrayBuffer, { stream: true });
+      if (fresh) {
+        pending += text;
+        const hint = SIZE_HINT.exec(pending);
+        // Without a hint (older CLI or a remote host) fall back to 80x24 once output has started.
+        if (!hint && pending.length < 64) return;
+        term?.dispose();
+        el.replaceChildren();
+        term = new Terminal({
+          cols: hint ? Number(hint[1]) : 80, rows: hint ? Number(hint[2]) : 24, disableStdin: true, cursorBlink: false, fontSize: 12,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          theme: { background: css("--terminal"), foreground: css("--ink"), cursor: css("--muted") },
+        });
+        term.open(el);
+        fresh = false;
+        attempt = 0;
+        text = pending;
+        pending = "";
+      }
+      text = text.replace(new RegExp(SIZE_HINT.source, "g"), "");
+      // ghostty-web 0.4.0 throws "offset is out of bounds" on an empty write.
+      if (text) term!.write(text);
+    };
+    sock.onclose = (e) => {
+      if (stopped || sock !== ws) return;
+      // 1000: the viewer ended normally (session gone). 1008: the server refused us. Neither is retried.
+      if (e.code === 1000 || e.code === 1008) {
+        status.textContent = e.code === 1000 ? "Viewer ended" : `Refused (${e.code})`;
+        return;
+      }
+      const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]!;
+      attempt++;
+      status.textContent = `Disconnected (${e.code}) · state unknown · retry in ${Math.round(wait / 1000)} s`;
+      timer = setTimeout(connect, wait);
+    };
   };
-  ws.onopen = () => { status.textContent = "Read-only · live"; };
-  ws.onmessage = (e) => {
-    let text = dec.decode(e.data as ArrayBuffer, { stream: true });
-    if (!term) {
-      pending += text;
-      const hint = SIZE_HINT.exec(pending);
-      // Without a hint (older CLI or a remote host) fall back to 80x24 once output has started.
-      if (!hint && pending.length < 64) return;
-      create(hint ? Number(hint[1]) : 80, hint ? Number(hint[2]) : 24);
-      text = pending;
-      pending = "";
-    }
-    text = text.replace(new RegExp(SIZE_HINT.source, "g"), "");
-    // ghostty-web 0.4.0 throws "offset is out of bounds" on an empty write.
-    if (text) term!.write(text);
-  };
-  ws.onclose = (e) => {
-    status.textContent = e.code === 1000 ? "Viewer ended" : `Disconnected (${e.code}) · state unknown`;
+  connect();
+  return {
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+      ws?.close();
+      term?.dispose();
+    },
   };
 }
 
 function renderPanes(sessions: Session[]) {
-  for (const { term, ws } of panes.values()) { ws.close(); term?.dispose(); }
+  for (const p of panes.values()) p.stop();
   panes.clear();
   const running = sessions.filter((s) => s.running);
   const box = $("terminals");
@@ -116,9 +151,34 @@ function renderPanes(sessions: Session[]) {
   box.innerHTML = running.map((s) =>
     `<article class="terminal ${state.selected === s.name ? "active" : ""}" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span class="modelinfo" title="${esc(modelDetail(s.model))}">${esc(modelLabel(s.model))}</span><span>tmux via fleet attach --read-only</span></footer></article>`,
   ).join("");
-  for (const s of running) openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement);
+  for (const s of running) panes.set(s.name, openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement));
 }
 
+// As in the baseline: below 901px the supervisor panel is an overlay, so it starts closed.
+function setInspector(open: boolean, focusToggle = false) {
+  state.inspector = open;
+  $("app").classList.toggle("only-terminal", !open);
+  const b = $("inspectorToggle");
+  b.setAttribute("aria-expanded", String(open));
+  const label = open ? "Hide supervisor panel" : "Show supervisor panel";
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  if (focusToggle) (b as HTMLElement).focus();
+}
+const overlayQuery = window.matchMedia("(max-width: 900px)");
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.inspector && overlayQuery.matches) setInspector(false, true);
+});
+
+let panesRendered = false;
+async function loadHosts() {
+  const res = await api("/api/hosts");
+  if (!res.ok) return;
+  const body = await res.json();
+  state.self = body.self.name;
+  state.peers = body.peers;
+  $("hostTitle").textContent = body.self.name;
+}
 async function load() {
   const res = await api("/api/sessions");
   const body = await res.json();
@@ -131,7 +191,8 @@ async function load() {
   $("alert").hidden = true;
   const sessions: Session[] = body.sessions;
   const runningKey = (list: Session[]) => list.filter((s) => s.running).map((s) => s.name).join("\n");
-  const panesChanged = runningKey(sessions) !== runningKey(state.sessions) || panes.size === 0;
+  const panesChanged = runningKey(sessions) !== runningKey(state.sessions) || !panesRendered;
+  panesRendered = true;
   state.sessions = sessions;
   state.selected ||= sessions.find((s) => s.running)?.name ?? "";
   $("hostSubtitle").textContent = `${sessions.length} ${sessions.length === 1 ? "session" : "sessions"} · read ${new Date(body.readAt).toLocaleTimeString()}`;
@@ -154,14 +215,7 @@ document.addEventListener("click", (e) => {
     renderComposer();
   }
   if (b.dataset.answer) answer(b.dataset.request!, b.dataset.answer, Number(b.dataset.revision), b);
-  if (b.id === "inspectorToggle") {
-    state.inspector = !state.inspector;
-    $("app").classList.toggle("only-terminal", !state.inspector);
-    b.setAttribute("aria-expanded", String(state.inspector));
-    const label = state.inspector ? "Hide supervisor panel" : "Show supervisor panel";
-    b.setAttribute("aria-label", label);
-    b.title = label;
-  }
+  if (b.id === "inspectorToggle") setInspector(!state.inspector);
 });
 
 // Supervisor panel: requests, phase record and commands come from this service. Every label says
@@ -317,6 +371,8 @@ $("instructionForm").addEventListener("submit", async (e) => {
 });
 
 await init();
+setInspector(!overlayQuery.matches);
+await loadHosts().catch(() => {});
 await load();
 await poll();
 setInterval(poll, 3000);
