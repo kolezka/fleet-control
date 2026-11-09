@@ -3,8 +3,9 @@ import { mkdtemp, rm, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const defaultFleetBin =
-  process.env.FLEET_BIN ?? join(process.env.HOME ?? "", ".claude/plugins/cache/kolezka/agent-fleet/0.3.0/scripts/fleet");
+import { resolveFleetBin } from "./path.ts";
+
+export const defaultFleetBin = resolveFleetBin();
 
 export type TestFleet = {
   dir: string;

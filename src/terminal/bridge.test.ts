@@ -1,14 +1,12 @@
+import { resolveFleetBin } from "../fleet/path.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { FleetCli } from "../fleet/cli.ts";
 import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { serve } from "../server.ts";
 import { Store } from "../store.ts";
 import { supportsReadOnlyAttach } from "./viewer.ts";
 
-const roBin =
-  process.env.READONLY_FLEET_BIN ??
-  join(process.env.HOME ?? "", "Development/agent-fleet.worktrees/attach-read-only/scripts/fleet");
+const roBin = resolveFleetBin();
 const haveRo = (await Bun.file(roBin).exists()) && (await supportsReadOnlyAttach(roBin));
 
 const until = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {

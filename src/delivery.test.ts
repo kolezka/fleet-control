@@ -1,3 +1,4 @@
+import { resolveFleetBin } from "./fleet/path.ts";
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { Commands } from "./commands.ts";
 import { classify, Deliverer, fleetSender, type Sender } from "./delivery.ts";
 import { createTestFleet, type TestFleet } from "./fleet/fixture.ts";
 
-const fleetBin = process.env.READONLY_FLEET_BIN ?? join(process.env.HOME ?? "", "Development/agent-fleet.worktrees/attach-read-only/scripts/fleet");
+const fleetBin = resolveFleetBin();
 let fleet: TestFleet;
 beforeAll(async () => { fleet = await createTestFleet(fleetBin); });
 afterAll(async () => { await fleet?.cleanup(); });

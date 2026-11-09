@@ -75,7 +75,7 @@ Environment for `bun index.ts`:
 | Variable | Meaning |
 | --- | --- |
 | `FLEET_CONF` | Required. The agent-fleet `fleet.conf` of the fleet on this host. |
-| `READONLY_FLEET_BIN` | fleet CLI with `attach --read-only` (agent-fleet main after PR #6). Default: plugin cache, which lacks it until a release. |
+| `READONLY_FLEET_BIN` | Explicit CLI override, then `FLEET_BIN`; default is the pinned `vendor/agent-fleet/scripts/fleet`. Initialize with `git submodule update --init --recursive`. See [dependency maintenance](agent-fleet-dependency.md). |
 | `FLEET_CONTROL_DB` | SQLite file. Default `:memory:`, which loses commands and requests on restart. |
 | `PORT` | Default 4871. |
 | `FLEET_CONTROL_HOST` | Bind address. Default `127.0.0.1`. Any other value requires `FLEET_CONTROL_TOKENS`; the service refuses to start without it. |

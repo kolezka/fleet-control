@@ -26,24 +26,23 @@ agent-fleet needs bash 4 or newer; macOS ships 3.2, hence Homebrew bash. launchd
 
 ## 2. Get the code onto the host
 
-The host needs two checkouts: Fleet Control and agent-fleet (for the `fleet` command with `attach --read-only`).
+Fleet Control includes a pinned agent-fleet submodule. Initialize it when cloning or updating.
 
 **host**, if it has GitHub access:
 
 ```bash
-git clone git@github.com:kolezka/fleet-control.git ~/Development/fleet-control-service
+git clone --recurse-submodules git@github.com:kolezka/fleet-control.git ~/Development/fleet-control-service
 cd ~/Development/fleet-control-service
 ~/.bun/bin/bun install --frozen-lockfile
-git clone git@github.com:kolezka/agent-fleet.git ~/Development/agent-fleet
-~/Development/agent-fleet/scripts/fleet help | grep 'attach \[--read-only\]'  # must print a line
+./vendor/agent-fleet/scripts/fleet help | grep 'attach \[--read-only\]'  # must print a line
 ```
 
 **MacBook**, if the host has no GitHub access (this is how .4 was set up): copy from your checkout.
 
 ```bash
-cd ~/Development/fleet-control/.agents/worktrees/feat-fleet-adapter
+cd ~/Development/fleet-control
+git submodule update --init --recursive
 rsync -az --delete --exclude node_modules --exclude .git --exclude .agents ./ me@192.168.50.4:Development/fleet-control-service/
-rsync -az --delete --exclude .git ~/Development/agent-fleet/ me@192.168.50.4:Development/agent-fleet/
 ssh me@192.168.50.4 'cd ~/Development/fleet-control-service && ~/.bun/bin/bun install --frozen-lockfile'
 ```
 
@@ -67,7 +66,7 @@ PATH=/opt/homebrew/bin:$PATH env -u NO_COLOR \
   tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"
 ```
 
-For a real fleet, use its existing `fleet.conf` instead and skip the tmux line. Read "Known limits" in the README first: do not open the page next to real agents until agent-fleet's `send-keys` fix is merged.
+For a real fleet, use its existing `fleet.conf` instead and skip the tmux line. Read "Known limits" in the README first: the pinned CLI includes the viewer/send fix, but this does not establish production-agent safety.
 
 ## 4. Make a certificate
 
@@ -121,7 +120,7 @@ The token name is recorded as the author of everything that client does. To revo
 cd ~/Development/fleet-control-service
 PATH=/opt/homebrew/bin:$HOME/.bun/bin:$PATH env -u NO_COLOR \
   FLEET_CONF=$HOME/.local/share/fleet-control/test-fleet/fleet.conf \
-  READONLY_FLEET_BIN=$HOME/Development/agent-fleet/scripts/fleet \
+  READONLY_FLEET_BIN=$HOME/Development/fleet-control-service/vendor/agent-fleet/scripts/fleet \
   FLEET_CONTROL_DB="$HOME/Library/Application Support/fleet-control/state.db" \
   FLEET_CONTROL_HOST=192.168.50.4 \
   FLEET_CONTROL_HOST_NAME=mac-mini \
@@ -161,7 +160,7 @@ cat > ~/Library/LaunchAgents/pl.raqz.fleet-control.plist <<EOF
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:$HOME/.bun/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>FLEET_CONF</key><string>$HOME/.local/share/fleet-control/test-fleet/fleet.conf</string>
-    <key>READONLY_FLEET_BIN</key><string>$HOME/Development/agent-fleet/scripts/fleet</string>
+    <key>READONLY_FLEET_BIN</key><string>$HOME/Development/fleet-control-service/vendor/agent-fleet/scripts/fleet</string>
     <key>FLEET_CONTROL_DB</key><string>$HOME/Library/Application Support/fleet-control/state.db</string>
     <key>FLEET_CONTROL_HOST</key><string>192.168.50.4</string>
     <key>FLEET_CONTROL_HOST_NAME</key><string>mac-mini</string>
@@ -210,7 +209,7 @@ ssh me@192.168.50.4 'launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pl.
 
 After a reboot the service comes back by itself, the test session does not. Start it again with the tmux line from step 3.
 
-**Update** to a newer version: repeat step 2 (`git pull` or the `rsync` lines), then `bun install --frozen-lockfile` and restart. The database is kept.
+**Update** to a newer version: repeat step 2 (`git pull` or the `rsync` lines), then `git submodule update --init --recursive` (Git installs), `bun install --frozen-lockfile` and restart. With rsync, initialize the submodule on the source first and include `vendor/agent-fleet/` files. The database is kept.
 
 **Uninstall**:
 

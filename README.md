@@ -38,21 +38,19 @@ In short: agent-fleet runs the agents; Fleet Control is the control panel on top
 
 - [Bun](https://bun.sh) 1.4 or newer.
 - tmux 3.x and bash 4+ (on macOS: `brew install tmux bash`).
-- agent-fleet's `fleet` command with `attach --read-only` (agent-fleet `main` after PR #6). The released plugin 0.3.0 does not have it yet, so point `READONLY_FLEET_BIN` at a checkout:
-
-```bash
-git clone git@github.com:kolezka/agent-fleet.git ~/Development/agent-fleet
-```
+- The pinned agent-fleet submodule at `vendor/agent-fleet` (includes read-only attach and the viewer/send fix). No separate checkout is required.
 
 ## Install
 
 To install it on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
 
 ```bash
-git clone git@github.com:kolezka/fleet-control.git
+git clone --recurse-submodules git@github.com:kolezka/fleet-control.git
 cd fleet-control
 bun install
 ```
+
+Existing checkout: `git submodule update --init --recursive`. After `git pull`, run that command again to use the recorded dependency commit. Do not use `--remote` for routine installs. See [dependency maintenance](docs/agent-fleet-dependency.md).
 
 ## Run it
 
@@ -62,7 +60,6 @@ This starts a private tmux server with one harmless session (`probe-shell`, no a
 
 ```bash
 env -u NO_COLOR \
-  READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet \
   PORT=4881 \
   bun scripts/dev-test-fleet.ts
 ```
@@ -74,7 +71,6 @@ Open http://127.0.0.1:4881/. Stop with Ctrl+C; it removes the test session too. 
 ```bash
 env -u NO_COLOR \
   FLEET_CONF=/path/to/your/fleet.conf \
-  READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet \
   FLEET_CONTROL_DB=~/fleet-control-state.db \
   bun run serve
 ```
@@ -103,7 +99,6 @@ Anything other than `127.0.0.1` needs tokens; the service refuses to start witho
    ```bash
    env -u NO_COLOR \
      FLEET_CONF=/path/to/fleet.conf \
-     READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet \
      FLEET_CONTROL_DB=~/fleet-control-state.db \
      FLEET_CONTROL_HOST=192.168.50.4 \
      FLEET_CONTROL_TOKENS=./tokens \
@@ -137,7 +132,7 @@ FLEET_CONTROL_CLIENT_CONFIG="$HOME/.config/fleet-control/client.json" bun run cl
 See [multi-host setup](docs/multi-host.md) for the host list, separate token files, TLS trust and per-host MCP connections. The gateway does not run agents, merge queues or retry uncertain writes. To try two independent local shell-only services without connecting to any workstation:
 
 ```bash
-env -u NO_COLOR READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet bun run demo:two-hosts
+env -u NO_COLOR bun run demo:two-hosts
 ```
 
 Run the client command printed by the demo in another terminal. Both hosts are local fixtures, not proof of Linux/macOS deployment.
@@ -147,7 +142,7 @@ Run the client command printed by the demo in another terminal. Both hosts are l
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `FLEET_CONF` | agent-fleet `fleet.conf` of the fleet to watch | required for `serve` |
-| `READONLY_FLEET_BIN` | `fleet` command that has `attach --read-only` | plugin cache (lacks it) |
+| `READONLY_FLEET_BIN` | Explicit CLI override (takes precedence over `FLEET_BIN`) | `vendor/agent-fleet/scripts/fleet` |
 | `FLEET_CONTROL_DB` | SQLite file | in memory, lost on stop |
 | `PORT` | Port | 4871 |
 | `FLEET_CONTROL_HOST` | Address to listen on | `127.0.0.1` |
@@ -169,7 +164,7 @@ Always clear `NO_COLOR` (`env -u NO_COLOR`). With it set, agent-fleet mistakes C
 ## Checks
 
 ```bash
-env -u NO_COLOR READONLY_FLEET_BIN=~/Development/agent-fleet/scripts/fleet bun test   # unit and real-tmux tests
+env -u NO_COLOR bun test   # unit and real-tmux tests
 bun check                                                                            # types
 bun run design:check                                                                 # the original design mockup's handlers
 ```
@@ -178,7 +173,7 @@ The tests start their own private tmux servers and never touch your sessions.
 
 ## Known limits
 
-- **Do not open the page next to real agents yet.** While a read-only viewer is attached, tmux refuses `send-keys`, so `fleet send` and the watchdog cannot press Enter. The fix is in agent-fleet (branch `fix/paste-keys-read-only`, not merged yet); `src/terminal/viewer-send.test.ts` checks it.
+- The pinned agent-fleet includes the viewer/send fix; the real-shell regression passes. Overrides pointing to older checkouts may still have that bug. This is not production-agent verification.
 - Model detection works for Claude Code only, on the same host as the service.
 - phased-delivery does not yet write its phase record through MCP. Typing into a terminal (input leases) does not exist.
 - 192.168.50.15 is not set up.

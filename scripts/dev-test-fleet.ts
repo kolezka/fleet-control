@@ -1,3 +1,4 @@
+import { resolveFleetBin } from "../src/fleet/path.ts";
 // Local demo: private test fleet (shell sessions only, no model) plus the service on 127.0.0.1.
 // Never points at a real fleet. Ctrl-C kills the private tmux server.
 import { Commands } from "../src/commands.ts";
@@ -10,8 +11,7 @@ import { serveOptionsFromEnv } from "../src/config.ts";
 import { serve } from "../src/server.ts";
 import { Store } from "../src/store.ts";
 
-const fleetBin = process.env.READONLY_FLEET_BIN;
-if (!fleetBin) throw new Error("READONLY_FLEET_BIN must point at a fleet CLI with attach --read-only");
+const fleetBin = resolveFleetBin();
 const fleet = await createTestFleet(fleetBin);
 const observed = await observerForConf(fleet.confPath);
 if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
