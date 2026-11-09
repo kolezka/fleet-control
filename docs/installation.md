@@ -85,7 +85,7 @@ Environment for `bun index.ts`:
 
 Clear `NO_COLOR` in the service environment: agent-fleet misreads Claude Code's input line when it is set (docs/bugs/agent-fleet-no-color-user-typing.md).
 
-Tokens: `bun scripts/new-token.ts <principal>` prints a token once and the line for the tokens file. One principal per client, e.g. `macbook-session`, `web-mariusz`, `orchestrator`. The principal is recorded as the actor of every command, answer and phase write, and replaces any actor name a client sends. Revoke by deleting the line and restarting the service.
+Tokens: `bun scripts/new-token.ts <principal> <tokens-file>` prints a token once and appends its hash line to the tokens file (without the file argument it prints the line instead). One principal per client, e.g. `macbook-session`, `web-mariusz`, `orchestrator`. The principal is recorded as the actor of every command, answer and phase write, and replaces any actor name a client sends. Revoke by deleting the line and restarting the service.
 
 Clients:
 
