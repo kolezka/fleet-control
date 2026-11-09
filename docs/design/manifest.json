@@ -1,0 +1,34 @@
+{
+  "status": "selected implementation baseline, not a shipped runtime",
+  "sourceDraft": ".design/drafts/console/terminal-deck/v4.html",
+  "capturedAt": "2026-11-09T09:48:00.281Z",
+  "modelDisplayImplemented": false,
+  "phoneCapture": "390px draft inside a 500px screenshot frame; right grey strip is outside the design",
+  "files": [
+    {
+      "source": ".design/drafts/console/terminal-deck/v4.html",
+      "destination": "docs/design/terminal-deck.html",
+      "sha256": "3d8253c8d84d1a7cc62db3275df93cdb6f23b3ca2ba682c190be2bbefacd0f0f"
+    },
+    {
+      "source": ".design/shots/console/terminal-deck/v4-dark-1440x900.png",
+      "destination": "docs/design/desktop-dark.png",
+      "sha256": "9c1179c5f37acb57b7633bd06835ad12c434975863a177ecc9bd3f4e819dcaf9"
+    },
+    {
+      "source": ".design/shots/console/terminal-deck/v4-light-1440x900.png",
+      "destination": "docs/design/desktop-light.png",
+      "sha256": "107b22fe9232f960b4fbd09cc899ee08d791f70744e63c8117e5ce9aff97c9f6"
+    },
+    {
+      "source": ".design/shots/console/terminal-deck/v4-dark-390x844.png",
+      "destination": "docs/design/phone-dark.png",
+      "sha256": "8ca924d0de4ab4106455cb0718a7b80489e209b1668a3bc79b3f29157e91319a"
+    },
+    {
+      "source": ".design/shots/console/terminal-deck/v4-light-390x844.png",
+      "destination": "docs/design/phone-light.png",
+      "sha256": "cdf0ffd11f93980d5718687c8c8eba9a768108187f159a7e9f4a4acfb30dc8ac"
+    }
+  ]
+}

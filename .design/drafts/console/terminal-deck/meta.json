@@ -1,0 +1,15 @@
+{
+  "title": "Terminal Deck",
+  "direction": "Full-window terminal workspace, host hierarchy on the left and delivery decisions in a right sidebar.",
+  "status": "selected",
+  "parent": "current",
+  "tokens": "Neutral graphite and porcelain, muted blue selection, system sans-serif chrome, monospace terminal text, 4px spacing scale.",
+  "proposed": [
+    "Supervisor request records, structured workflow and command receipts require a durable host service and CLI/MCP adapters; v4 simulates them in browser memory only.",
+    "Working, disconnected and no-output previews are available by scenario query parameter; real states require structured runtime events.",
+    "Four sessions use equal 2x2 panes; three sessions use equal columns.",
+    "Terminal text scaling up to 200% is proposed from Apple HIG guidance; browser accessibility still needs validation.",
+    "The source's layout presets are omitted from application chrome; production placement is undecided."
+  ],
+  "notes": "v4 adds supervisor requests, workflow state, a command/response history and an instruction composer to the right sidebar. Approval waits for a supervisor acknowledgement; demo submission means locally queued, not delivered. Keeps full-window layout, host hierarchy and remote supervisor fixture. HIG hierarchy and disclosure guidance comes from Docify apple-his@1.0.0. All exchanges are synthetic; no live backend, MCP, Ghostty or PTY is connected."
+}

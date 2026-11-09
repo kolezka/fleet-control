@@ -1,0 +1,14 @@
+{
+  "title": "Workbench",
+  "direction": "A large worker terminal beside supporting sessions, with a persistent phase inspector.",
+  "status": "candidate",
+  "parent": "current",
+  "tokens": "Neutral graphite and porcelain, muted blue selection, system sans-serif chrome, monospace terminal text, 4px spacing scale.",
+  "proposed": [
+    "Working and no-output state previews extend the current synthetic fixture; real states require structured runtime events.",
+    "Asymmetric panes or equal-column layout are proposed presentation changes.",
+    "Terminal text scaling up to 200% is proposed from Apple HIG guidance; browser accessibility still needs validation.",
+    "The source's layout presets are omitted from application chrome; production placement is undecided."
+  ],
+  "notes": "Host selection shows every session on that host. No duplicate top navigation. No live Ghostty, PTY or CLI connection. Worker/reviewer terminals are illustrative, not a claim about Agent subagent capabilities."
+}
