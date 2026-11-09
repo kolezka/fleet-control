@@ -4,6 +4,9 @@ import { modelState } from "./model.ts";
 import type { Store } from "./store.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
+import { CommandError, type Commands } from "./commands.ts";
+import type { Deliverer } from "./delivery.ts";
+import { handleMcp } from "./mcp.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -69,6 +72,21 @@ export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => 
 }
 
 type TerminalDeps = { fleetBin: string; confPath: string };
+type ControlDeps = { commands: Commands; deliverer: Deliverer };
+
+const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
+function commandError(e: unknown): Response {
+  if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
+  return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
+}
+const forbidden = () => Response.json({ error: { kind: "forbidden", message: "cross-origin request" } }, { status: 403 });
+const noControl = () => Response.json({ error: { kind: "unavailable", message: "command queue not configured" } }, { status: 503 });
+
+// Writes from a browser must come from a page this service served. MCP clients send no Origin.
+function originAllowed(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  return origin === null || origin === new URL(req.url).origin;
+}
 type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean };
 
 // Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
@@ -77,10 +95,13 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps }, port = 4871) {
+type Routes = "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/mcp";
+
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps }, port = 4871) {
   const app = createApp(deps);
   const terminal = deps.terminal;
-  return Bun.serve<SocketData, "/" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal">({
+  const control = deps.control;
+  const server: ReturnType<typeof Bun.serve<SocketData, Routes>> = Bun.serve<SocketData, Routes>({
     hostname: "127.0.0.1",
     port,
     routes: {
@@ -92,6 +113,45 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           const lines = raw === null ? 40 : Number(raw);
           return app.screen(req.params.name, lines);
         },
+      },
+      // The web UI reads and queues commands here; MCP clients use /mcp. Both share one queue.
+      "/api/commands": {
+        GET: () => (control ? Response.json({ commands: control.commands.list() }) : noControl()),
+        POST: async (req) => {
+          if (!control) return noControl();
+          if (!originAllowed(req)) return forbidden();
+          try {
+            const body = (await req.json()) as Record<string, unknown>;
+            const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string) : "");
+            const { command, created } = control.commands.submit({
+              idempotencyKey: str("idempotencyKey"),
+              target: str("target"),
+              actor: str("actor") || "web-ui",
+              text: str("text"),
+            });
+            const after = created ? await control.deliverer.deliver(command.id) : command;
+            return Response.json({ command: after, created, events: control.commands.events(command.id) }, { status: created ? 201 : 200 });
+          } catch (e) {
+            if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
+            return commandError(e);
+          }
+        },
+      },
+      "/api/commands/:id": {
+        GET: (req) => {
+          if (!control) return noControl();
+          try {
+            return Response.json({ command: control.commands.get(req.params.id), events: control.commands.events(req.params.id) });
+          } catch (e) {
+            return commandError(e);
+          }
+        },
+      },
+      // Streamable HTTP MCP endpoint. DNS rebinding protection only admits loopback Host headers.
+      "/mcp": async (req) => {
+        if (!control) return noControl();
+        if (!originAllowed(req)) return forbidden();
+        return handleMcp(req, control, [`127.0.0.1:${server.port}`, `localhost:${server.port}`]);
       },
       // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
       // a resize would resize the agent's window, since the viewer may be its only tmux client.
@@ -136,4 +196,5 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     },
     fetch: () => Response.json({ error: { kind: "not_found", message: "not found" } }, { status: 404 }),
   });
+  return server;
 }

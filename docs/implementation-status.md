@@ -67,11 +67,26 @@ Verification (2026-11-09): `bun test` 33 pass / 0 fail. New real-tmux tests: vie
 
 Not covered: agent (`claude`) sessions, remote hosts, several viewers at once, reconnect, auth, the 600px layout, and an accessibility check. Supervisor panel, commands and model collection are still not connected.
 
+## Implemented locally: stage 4, durable commands and MCP (2026-11-09, same branch)
+
+Scope: MacBook only, loopback service, private test fleet with a shell session. No agent (`claude`) session, no supervisor and no remote host took part. User chose the official MCP SDK; `@modelcontextprotocol/sdk` 1.32.2 (MIT) and `zod` 4.6.7 pinned in this worktree.
+
+- **Queue** (`src/commands.ts`): SQLite tables `commands` and `command_events` in the service database. Statuses `queued`, `delivering`, `delivered`, `delivery_unknown`, `accepted`, `rejected`, `running`, `completed`, `failed`, with a fixed transition table. Every change appends an event with actor and detail. Same idempotency key with the same intent returns the original command; with a different intent it is a conflict. On start, a command left in `delivering` becomes `delivery_unknown` (it may have reached the pane), never `queued`.
+- **Delivery** (`src/delivery.ts`): existing `fleet send`, one delivery at a time. The pasted message starts with `Fleet Control command <id> from <actor>:` and says delivery is not approval. Exit 0 with `delivered` is `delivered`. Refusals before any paste (`not sent`, `no session`) leave it `queued`. Anything else, including a crash of the sender, is `delivery_unknown` and is not retried automatically.
+- **Acceptance and execution are explicit**: `delivered` only means the first line appeared in the pane. Only `command_respond` (accepted/rejected) and `command_report` (running/completed/failed with evidence) move it further. Completion before acceptance is refused.
+- **MCP** `POST /mcp` (Streamable HTTP, stateless, JSON responses): tools `command_submit`, `command_deliver` (retry a queued one), `command_get`, `command_list`, `command_events` (cursor), `command_respond`, `command_report`. DNS rebinding protection admits only `127.0.0.1:<port>` and `localhost:<port>` Host headers; a browser Origin from elsewhere gets 403.
+- **REST** for the web UI, same queue: `GET/POST /api/commands`, `GET /api/commands/:id`. POST is same-origin only; 400 bad input or JSON, 409 key conflict, 404 unknown id. The page does not use it yet.
+- `index.ts` and `scripts/dev-test-fleet.ts` wire the queue; `FLEET_CONTROL_DB` keeps it across restarts.
+
+Verification (2026-11-09): `bun test` 51 pass / 0 fail, `bun check` clean. Real `fleet send` against the private test session: command id appears in the pane and status is `delivered`; missing session stays `queued` with `no session ...`; dialog-like text stays `queued` with `not sent`. MCP SDK client against the real server: tool list, submit → delivered, retry with the same key does not paste twice, report before accept refused, accept → completed, REST and MCP see the same command, foreign Host and Origin 403. Negative controls: disabling the intent check fails the conflict test; reconciling to `queued` fails the restart test. End to end with the service process and `curl` (no SDK): command delivered into the tmux pane; after SIGTERM and restart on the same database the command is still listed and the same key returns `created: false`; no test sockets left.
+
+Not covered: a real supervisor reading and answering through MCP (needs a paid `claude` session, not authorized), a Claude Code client registering `/mcp`, auth (anyone local can call it), several hosts, the page using the queue, event streaming (polling only), scoped approvals (stage 5).
+
 ## Not implemented in this project
 
-- Workstation service, authenticated HTTP API and remote MCP tools.
-- Durable command/request storage and resumable event stream.
-- Supervisor command acknowledgement and phase-state adapters.
+- Workstation service, authentication, and MCP reachable from another machine. A local unauthenticated `/mcp` exists (stage 4 above).
+- Scoped requests and approvals bound to request, phase and revision; resumable push event stream (commands can be polled by cursor).
+- A supervisor that actually acknowledges commands, and phase-state adapters. The tools exist; no supervisor uses them yet.
 - Live terminal on a workstation, input, and reconnect. A local read-only viewer exists (stage 3 above).
 - Exclusive input leases. Local read-only is enforced by the service and by tmux; auth is not.
 - Runtime model metadata and freshness handling.

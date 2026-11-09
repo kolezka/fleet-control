@@ -16,6 +16,8 @@
     "typescript": "^7"
   },
   "dependencies": {
-    "ghostty-web": "0.4.0"
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ghostty-web": "0.4.0",
+    "zod": "4.6.7"
   }
 }

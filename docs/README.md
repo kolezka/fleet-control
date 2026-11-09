@@ -36,9 +36,9 @@ For a new coding session, use the [metaprompt](NEXT_SESSION_PROMPT.md), then rea
 
 ## Current state
 
-The project was initialized with Bun. `index.ts` starts a read-only service on 127.0.0.1 over the existing fleet CLI (stages 1-2, local only; see implementation-status.md). It is not deployed and has no auth. The selected interactive design is [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html). It uses synthetic sessions and in-memory state.
+The project was initialized with Bun. `index.ts` starts a service on 127.0.0.1 over the existing fleet CLI (stages 1-4, local only: session list, read-only terminal, durable command queue and MCP; see implementation-status.md). It is not deployed and has no auth. The selected interactive design is [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html). It uses synthetic sessions and in-memory state.
 
-The workstation service, remote MCP endpoint, durable queue, live terminal bridge and model telemetry are not implemented in this prototype. No workstation has been configured by this work.
+The workstation service, authenticated MCP reachable from another machine, scoped approvals, terminal input and model telemetry are not implemented. No workstation has been configured by this work.
 
 Architecture approval does not authorize live shell access, dependency installation, credential changes, deployment, push or merge. This documentation task only records the agreed direction and proposals.
 
