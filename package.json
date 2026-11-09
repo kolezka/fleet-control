@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "typecheck": "bun check",
+    "test": "bun test",
+    "serve": "bun index.ts",
     "design:check": "bun scripts/check-design.ts"
   },
   "devDependencies": {

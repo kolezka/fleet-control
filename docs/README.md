@@ -36,7 +36,7 @@ For a new coding session, use the [metaprompt](NEXT_SESSION_PROMPT.md), then rea
 
 ## Current state
 
-The project was initialized with Bun. The entry point still prints `Hello via Bun!`; it is not a server. The selected interactive design is [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html). It uses synthetic sessions and in-memory state.
+The project was initialized with Bun. `index.ts` starts a read-only service on 127.0.0.1 over the existing fleet CLI (stages 1-2, local only; see implementation-status.md). It is not deployed and has no auth. The selected interactive design is [Terminal Deck v4](../.design/drafts/console/terminal-deck/v4.html). It uses synthetic sessions and in-memory state.
 
 The workstation service, remote MCP endpoint, durable queue, live terminal bridge and model telemetry are not implemented in this prototype. No workstation has been configured by this work.
 

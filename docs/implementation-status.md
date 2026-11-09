@@ -7,7 +7,11 @@ Recorded 2026-11-09. This is a source-scoped status report for the local Fleet C
 | File | Current purpose |
 | --- | --- |
 | `package.json` | Private Bun project; typecheck script; Bun types and TypeScript declarations |
-| `index.ts` | Starter greeting, not an application server |
+| `index.ts` | Starts the read-only loopback service; requires `FLEET_CONF` |
+| `src/fleet/cli.ts` | Adapter over agent-fleet `fleet screen` and `fleet status`, with explicit error kinds |
+| `src/fleet/fixture.ts` | Isolated test fleet: private tmux socket, temp FLEET_DIR, one shell session with no model |
+| `src/server.ts`, `src/store.ts`, `src/model.ts` | Loopback HTTP API, bun:sqlite session registry, model-state rules |
+| `src/*.test.ts`, `src/fleet/*.test.ts` | `bun test` suites (stub fleet plus real CLI on the private socket) |
 | `playground.html` | Initial interactive product-direction comparison |
 | `console.html` | Earlier terminal-first prototype |
 | `.design/drafts/console/terminal-deck/v4.html` | Latest selected coordination mockup |
@@ -34,6 +38,19 @@ The design and documentation pass began without a Git repository. The user subse
 - Inspector visibility and terminal text scaling controls.
 
 No live model observation is displayed in v4. The fixtures do not establish that each role has an attachable terminal in the selected runtime.
+
+## Implemented locally: stages 1-2 (2026-11-09, branch `feat-fleet-adapter`)
+
+Scope: MacBook only, private tmux socket, one shell test session with no model. No workstation was contacted, no dependency was installed, no agent was started (`fleet start` launches `claude` and was not used).
+
+- **Stage 1, fleet adapter** (`src/fleet/cli.ts`): wraps agent-fleet 0.3.0 `fleet screen` and `fleet status`; it does not call tmux or SSH itself. Errors are typed: `config`, `session_missing`, `invalid_name`, `cli_failed`, `malformed_output`. Unknown `fleet status` text fails instead of becoming an empty fleet.
+- **Finding:** in agent-fleet 0.3.0, `fleet screen <missing>` exits 0 and prints `can't find pane` only on stderr, because capture-pane is piped through awk/tail. The adapter detects it from stderr. A proper exit code belongs in agent-fleet itself.
+- **Stage 2, service skeleton** (`src/server.ts`, `src/store.ts`, `src/model.ts`, `index.ts`): `Bun.serve` on `127.0.0.1` only, `GET /api/sessions` and `GET /api/sessions/:name/screen?lines=N`, bun:sqlite registry of known sessions and model observations. Each session carries a model state: `observed`, `configured` (labelled "configured, not observed"), `unknown` (with last observation as history) or `not_applicable` (script session). Observations count as current only for the same runtime instance and within 10 minutes. The fleet CLI exposes no runtime instance yet, so every agent currently shows `unknown` or `configured`. No observation collector exists.
+- Run: `FLEET_CONF=/path/fleet.conf bun run serve`. No auth, so it must stay on loopback.
+
+Verification (2026-11-09, this worktree): `bun test` 26 pass / 0 fail, including real-CLI tests that read known tokens from the test session, get explicit errors for a missing session and a broken or absent `fleet.conf`, and confirm the session is still alive after reads. Negative control: removing the missing-pane check makes the missing-session test fail. `bun check` clean. `bun run design:check` still passes.
+
+This is not a workstation integration, terminal bridge or production test. The tests ran on the Mac against a shell session, not an agent.
 
 ## Not implemented in this project
 

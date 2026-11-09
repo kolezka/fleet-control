@@ -54,7 +54,7 @@ Planned presentation: a compact label beside the session name, with details for 
 ## What actually exists
 
 - A Bun-initialized project with documentation and static interactive designs.
-- `index.ts` still prints a starter greeting.
+- `index.ts` starts a local read-only service over the fleet CLI (stages 1-2 below). It is not connected to any workstation.
 - v4 includes synthetic terminal output, in-memory requests, demo approvals and a command composer.
 - `bun run design:check` checks the preserved design's handlers with a minimal DOM fixture.
 
@@ -69,9 +69,16 @@ No real workstation service, remote MCP server, persistent queue, model collecto
 
 The handler check is not browser automation. No production build, live fleet test, reconnect/restart test or accessibility audit has passed because those integrations do not exist here. Do not upgrade these results into production verification.
 
+## Session 2 update (2026-11-09)
+
+- Plan stages 1-6 proposed; user asked to proceed as a goal. Stages 1-2 done locally on branch `feat-fleet-adapter` (worktree `.agents/worktrees/feat-fleet-adapter`). Details and verification: [implementation status](implementation-status.md). Not merged into main.
+- Target hosts named by the user: `192.168.50.15` (SSH as root, port 27022) and `192.168.50.4`. Access from the MacBook over LAN and Tailscale. Not contacted yet.
+- Still open: role of each host (supervisor/service vs second executor), SSH user/port for `.4`, a non-root execution user (agents should not run as root; plan `REMOTE_USER`), OS of each host, and approval for a read-only reconnaissance SSH call.
+- Remaining stages: 3 read-only terminal (`fleet attach --read-only` extension in agent-fleet, PTY/WebSocket, ghostty-web; needs dependency approval), 4 durable commands and MCP, 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
+
 ## Next action
 
-First establish the actual target workstation: hostname or SSH alias, operating system and intended execution user. `runner-01` is only a design fixture, not an authorized connection target.
+Resolve the open host questions above, then stage 3. `runner-01` is only a design fixture, not an authorized connection target.
 
 Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
 
