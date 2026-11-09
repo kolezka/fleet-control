@@ -4,6 +4,7 @@ import { Deliverer, fleetSender } from "./src/delivery.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
 import { defaultFleetBin } from "./src/fleet/fixture.ts";
 import { Requests } from "./src/requests.ts";
+import { observerForConf } from "./src/observe/claude.ts";
 import { serve } from "./src/server.ts";
 import { Store } from "./src/store.ts";
 
@@ -13,6 +14,9 @@ if (!confPath) {
   process.exit(1);
 }
 const fleetBin = process.env.READONLY_FLEET_BIN ?? defaultFleetBin;
+const observed = await observerForConf(confPath);
+if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
+const observer = "disabled" in observed ? undefined : observed;
 const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
 const commands = new Commands(store.db);
 const unknown = commands.reconcileAfterRestart();
@@ -22,6 +26,7 @@ const server = serve(
   {
     fleet: new FleetCli({ fleetBin, confPath }),
     store,
+    observer,
     terminal: { fleetBin, confPath },
     control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
   },

@@ -29,10 +29,21 @@ test("an observation from a replaced instance is stale history", () => {
     .toEqual({ state: "unknown", lastObserved: obs });
 });
 
-test("an old observation is stale even for the same instance", () => {
+test("an old turn of the live instance stays observed and keeps its own time", () => {
   const later = new Date("2026-11-09T13:00:00Z");
-  expect(modelState({ kind: "agent", configuredModel: null, observation: obs, runtimeInstance: "i1", now: later }).state)
+  expect(modelState({ kind: "agent", configuredModel: null, observation: obs, runtimeInstance: "i1", now: later }))
+    .toEqual({ state: "observed", model: "claude-x", source: "test-fixture", observedAt: obs.observedAt });
+});
+
+test("a turn time in the future is not trusted", () => {
+  const future = { ...obs, observedAt: "2026-11-09T13:00:00Z" };
+  expect(modelState({ kind: "agent", configuredModel: null, observation: future, runtimeInstance: "i1", now }).state)
     .toBe("unknown");
+});
+
+test("the reason for an unknown model is kept", () => {
+  expect(modelState({ kind: "agent", configuredModel: null, observation: obs, runtimeInstance: null, now, reason: "no agent process" }))
+    .toEqual({ state: "unknown", lastObserved: obs, reason: "no agent process" });
 });
 
 test("an unknown runtime instance cannot confirm an observation", () => {

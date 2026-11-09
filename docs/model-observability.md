@@ -1,6 +1,6 @@
 # Session model visibility
 
-Status: requested by the user; runtime collection and UI display are not implemented in Terminal Deck v4. The schema and adapter behavior below are proposals.
+Status: a Claude Code observer exists in the feat-fleet-adapter worktree (see "Implemented source" below). It has been checked against real Claude Code 2.1.319 processes on the MacBook, not against an agent started by agent-fleet. Other harnesses have no observer.
 
 ## What the user should see
 
@@ -55,4 +55,19 @@ When a session is replaced, bind new observations to its new runtime instance. D
 - A known shell watchdog shows no model, while an uninstrumented agent shows unknown.
 - A label is never presented as verified runtime data when it comes only from a static example fixture.
 
-These are future acceptance criteria, not tests that have already passed.
+Covered by tests in `src/model.test.ts`, `src/observe/claude.test.ts` and `src/server.test.ts`: observed with source and time, configured vs observed, model switch, child model not overwriting the parent, missing vs malformed, replacement and disconnect not promoting history, script shows no model, uninstrumented agent shows unknown. Not covered: a fallback inside one turn, and other harnesses.
+
+## Implemented source (Claude Code)
+
+`src/observe/claude.ts`, read-only, runs on the host that owns the fleet:
+
+1. `tmux -L fleet-<FLEET> list-panes -s -t =<session>` gives pane pids (same socket agent-fleet uses).
+2. `ps -A -o pid=,ppid=,lstart=,args=` (C locale, UTC) finds the newest child whose argv starts with `claude`, the same rule as agent-fleet's `claude_pid()`.
+3. `<config>/sessions/<pid>.json` (written by Claude Code) gives `sessionId`, `cwd` and `procStart`. `procStart` must equal the process start time, so a reused pid cannot match an old file.
+4. The last 512 KiB of `<config>/projects/<cwd encoded>/<sessionId>.jsonl` is read backwards for the last assistant record with `isSidechain: false`, a matching `sessionId` and a `message.model` other than `<synthetic>`.
+
+`<config>` is `CLAUDE_CONFIG_DIR` from fleet.conf, the environment, or `~/.claude`. Runtime instance is `claude:<pid>:<sessionId>`. Source label: `claude-code transcript`.
+
+These files are Claude Code internals, not a documented contract. A format change shows as `unknown` with a "malformed" or "unavailable" reason, never as a guessed model. Verified on Claude Code 2.1.319 (macOS); recheck after upgrades.
+
+Freshness policy: the observation is current only while its runtime instance is confirmed alive by a check made for the same API read. The time shown is the time of the last main-thread turn; an idle agent keeps showing the model of its last turn with that time. Stored rows are history only; a new row is written when the model, turn time or instance changes. A conf with `REMOTE_SSH` or `REMOTE_USER` disables the observer, because the process and files are on another host or user; each host's own service observes its sessions.

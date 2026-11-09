@@ -40,6 +40,38 @@ describe("service with a stub fleet", () => {
     expect(body.sessions.find((s: any) => s.name === "agent").model.state).toBe("unknown");
   });
 
+  test("a live observation is shown as observed and kept as history", async () => {
+    const store = seeded();
+    const observation = { model: "m1", source: "claude-code transcript", observedAt: "2026-11-09T10:00:00Z", runtimeInstance: "claude:1:s" };
+    const observer = { observe: async () => ({ kind: "observed" as const, runtimeInstance: "claude:1:s", observation }) };
+    const app = createApp({ fleet: stubFleet(), store, observer });
+    let body = await read(app.sessions());
+    expect(body.sessions.find((s: any) => s.name === "agent").model)
+      .toEqual({ state: "observed", model: "m1", source: "claude-code transcript", observedAt: "2026-11-09T10:00:00Z" });
+    expect(body.sessions.find((s: any) => s.name === "watch").model).toEqual({ state: "not_applicable" });
+    await app.sessions(); // polling again must not duplicate history
+    expect(store.db.query("SELECT count(*) AS n FROM model_observations").get()).toEqual({ n: 1 });
+
+    // the agent is replaced: the old model stays history, never current
+    const replaced = createApp({ fleet: stubFleet(), store, observer: { observe: async () => ({ kind: "no_turn_yet" as const, runtimeInstance: "claude:2:t" }) } });
+    body = await read(replaced.sessions());
+    expect(body.sessions.find((s: any) => s.name === "agent").model)
+      .toEqual({ state: "unknown", lastObserved: observation, reason: "agent running, no main-thread turn yet" });
+
+    // the agent process is gone
+    const gone = createApp({ fleet: stubFleet(), store, observer: { observe: async () => ({ kind: "no_agent_process" as const }) } });
+    expect((await read(gone.sessions())).sessions.find((s: any) => s.name === "agent").model)
+      .toMatchObject({ state: "unknown", reason: "no claude process in this session" });
+  });
+
+  test("an observer failure is unknown, not an error and not observed", async () => {
+    const app = createApp({ fleet: stubFleet(), store: seeded(), observer: { observe: async () => { throw new Error("boom"); } } });
+    const res = await app.sessions();
+    expect(res.status).toBe(200);
+    expect((await read(res)).sessions.find((s: any) => s.name === "agent").model)
+      .toEqual({ state: "configured", model: "opus", note: "configured, not observed" });
+  });
+
   test("fleet failures map to explicit errors, never an empty list", async () => {
     for (const [kind, code] of [["config", 503], ["malformed_output", 502], ["cli_failed", 502]] as const) {
       const fleet = stubFleet({ status: async () => { throw new FleetError(kind, "x"); } });

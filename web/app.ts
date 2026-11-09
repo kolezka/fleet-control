@@ -4,9 +4,9 @@
 import { init, Terminal } from "ghostty-web";
 
 type Model =
-  | { state: "observed"; model: string; observedAt?: string }
+  | { state: "observed"; model: string; source?: string; observedAt?: string }
   | { state: "configured"; model: string; note: string }
-  | { state: "unknown"; lastObserved: { model: string; observedAt: string } | null }
+  | { state: "unknown"; lastObserved: { model: string; observedAt: string } | null; reason?: string }
   | { state: "not_applicable" };
 type Session = { name: string; host: string | null; role: string | null; registered: boolean; running: boolean; model: Model };
 
@@ -20,6 +20,18 @@ export function modelLabel(m: Model): string {
     case "configured": return `Configured ${m.model}, not observed`;
     case "unknown": return m.lastObserved ? `Model unknown, last seen ${m.lastObserved.model}` : "Model unknown";
     case "not_applicable": return "No model (script)";
+  }
+}
+
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+// Full provenance for the label's title and screen readers.
+export function modelDetail(m: Model): string {
+  switch (m.state) {
+    case "observed": return `${m.model}, ${m.source ?? "observed"}${m.observedAt ? `, last main-thread turn ${hhmm(m.observedAt)}` : ""}`;
+    case "configured": return `Configured ${m.model}. No runtime observation for this session.`;
+    case "unknown": return [m.reason ?? "No current observation", m.lastObserved ? `Last observed ${m.lastObserved.model} at ${hhmm(m.lastObserved.observedAt)}, not current` : ""].filter(Boolean).join(". ");
+    case "not_applicable": return "Script session, does not use a model";
   }
 }
 
@@ -37,7 +49,7 @@ function renderNav(sessions: Session[]) {
     hosts.map((host) => {
       const list = sessions.filter((s) => (s.host ?? LOCAL) === host);
       return `<section class="hostgroup" aria-label="${esc(host)}"><button class="hostbutton" aria-pressed="true"><span class="hosticon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 20h8m-4-3v3"/></svg></span><span class="hostidentity"><strong>${esc(host)}</strong><small>${list.length} ${list.length === 1 ? "session" : "sessions"}</small></span></button>` +
-        `<div class="host-sessions">${list.map((s) => `<button class="session" data-session="${esc(s.name)}" aria-pressed="${state.selected === s.name}"><span class="dot ${s.running ? "good" : ""}"></span><span><strong>${esc(s.name)}</strong><small>${s.running ? "Running" : "Not running"} · ${esc(modelLabel(s.model))}</small></span></button>`).join("")}</div></section>`;
+        `<div class="host-sessions">${list.map((s) => `<button class="session" data-session="${esc(s.name)}" aria-pressed="${state.selected === s.name}"><span class="dot ${s.running ? "good" : ""}"></span><span><strong>${esc(s.name)}</strong><small title="${esc(modelDetail(s.model))}">${s.running ? "Running" : "Not running"} · ${esc(modelLabel(s.model))}</small></span></button>`).join("")}</div></section>`;
     }).join("") +
     `<div class="sidebarfoot"><span>Service runs on this host</span><span>This browser is a read-only client</span></div>`;
 }
@@ -95,7 +107,7 @@ function renderPanes(sessions: Session[]) {
     return;
   }
   box.innerHTML = running.map((s) =>
-    `<article class="terminal ${state.selected === s.name ? "active" : ""}" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span>${esc(modelLabel(s.model))}</span><span>tmux via fleet attach --read-only</span></footer></article>`,
+    `<article class="terminal ${state.selected === s.name ? "active" : ""}" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span class="modelinfo" title="${esc(modelDetail(s.model))}">${esc(modelLabel(s.model))}</span><span>tmux via fleet attach --read-only</span></footer></article>`,
   ).join("");
   for (const s of running) openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement);
 }
@@ -109,12 +121,20 @@ async function load() {
     $("hostSubtitle").textContent = "Fleet status unavailable";
     return;
   }
+  $("alert").hidden = true;
   const sessions: Session[] = body.sessions;
+  const runningKey = (list: Session[]) => list.filter((s) => s.running).map((s) => s.name).join("\n");
+  const panesChanged = runningKey(sessions) !== runningKey(state.sessions) || panes.size === 0;
   state.sessions = sessions;
   state.selected ||= sessions.find((s) => s.running)?.name ?? "";
   $("hostSubtitle").textContent = `${sessions.length} ${sessions.length === 1 ? "session" : "sessions"} · read ${new Date(body.readAt).toLocaleTimeString()}`;
   renderNav(sessions);
-  renderPanes(sessions);
+  // Reopening viewers on every refresh would flicker; only labels change in place.
+  if (panesChanged) renderPanes(sessions);
+  else for (const s of sessions) {
+    const info = document.querySelector(`[data-pane="${CSS.escape(s.name)}"] .modelinfo`) as HTMLElement | null;
+    if (info) { info.textContent = modelLabel(s.model); info.title = modelDetail(s.model); }
+  }
 }
 
 document.addEventListener("click", (e) => {
@@ -293,3 +313,4 @@ await init();
 await load();
 await poll();
 setInterval(poll, 3000);
+setInterval(() => load().catch(() => {}), 15000);

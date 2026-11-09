@@ -5,12 +5,16 @@ import { Deliverer, fleetSender } from "../src/delivery.ts";
 import { FleetCli } from "../src/fleet/cli.ts";
 import { Requests } from "../src/requests.ts";
 import { createTestFleet } from "../src/fleet/fixture.ts";
+import { observerForConf } from "../src/observe/claude.ts";
 import { serve } from "../src/server.ts";
 import { Store } from "../src/store.ts";
 
 const fleetBin = process.env.READONLY_FLEET_BIN;
 if (!fleetBin) throw new Error("READONLY_FLEET_BIN must point at a fleet CLI with attach --read-only");
 const fleet = await createTestFleet(fleetBin);
+const observed = await observerForConf(fleet.confPath);
+if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
+const observer = "disabled" in observed ? undefined : observed;
 const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
 store.upsertSession({ name: fleet.session, host: `${process.env.TEST_FLEET_HOST ?? (await import("node:os")).hostname()} (test fleet)`, role: "probe", kind: "script", configuredModel: null });
 const commands = new Commands(store.db);
@@ -18,6 +22,7 @@ commands.reconcileAfterRestart();
 const server = serve({
   fleet: new FleetCli({ fleetBin, confPath: fleet.confPath }),
   store,
+  observer,
   terminal: { fleetBin, confPath: fleet.confPath },
   control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, fleet.confPath)), requests: new Requests(store.db) },
 }, Number(process.env.PORT ?? 4871));

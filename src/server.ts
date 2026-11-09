@@ -1,6 +1,7 @@
 // Read-only Fleet Control host service skeleton. Localhost only; no auth yet, so never bind it elsewhere.
 import { FleetError, type FleetReader } from "./fleet/cli.ts";
-import { modelState } from "./model.ts";
+import { modelState, type ModelState } from "./model.ts";
+import type { Observation } from "./observe/claude.ts";
 import type { Store } from "./store.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
@@ -24,27 +25,55 @@ function errorResponse(e: unknown): Response {
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
 }
 
-export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => Date }) {
+export type ModelObserver = { observe(session: string): Promise<Observation> };
+
+const unknownReason: Record<Exclude<Observation["kind"], "observed">, string> = {
+  no_turn_yet: "agent running, no main-thread turn yet",
+  no_agent_process: "no claude process in this session",
+  unavailable: "model metadata unavailable",
+  malformed: "model metadata malformed",
+};
+
+export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => Date; observer?: ModelObserver }) {
   const now = deps.now ?? (() => new Date());
   const known = () => new Map(deps.store.sessions().map((s) => [s.name, s]));
+
+  // Runs a fresh observation for this read; storage only keeps history.
+  async function modelFor(name: string, kind: "agent" | "script", configuredModel: string | null, running: boolean): Promise<ModelState> {
+    if (kind === "script") return { state: "not_applicable" };
+    let runtimeInstance: string | null = null;
+    let reason: string | undefined = running ? "no model observer configured" : "session not running";
+    if (deps.observer && running) {
+      let o: Observation;
+      try {
+        o = await deps.observer.observe(name);
+      } catch {
+        o = { kind: "unavailable", reason: "observer failed" };
+      }
+      if (o.kind === "observed") {
+        runtimeInstance = o.runtimeInstance;
+        reason = undefined;
+        const last = deps.store.latestObservation(name);
+        if (!last || last.runtimeInstance !== o.observation.runtimeInstance || last.observedAt !== o.observation.observedAt || last.model !== o.observation.model) {
+          deps.store.recordObservation(name, o.observation);
+        }
+      } else {
+        if (o.kind === "no_turn_yet") runtimeInstance = o.runtimeInstance;
+        reason = "reason" in o ? `${unknownReason[o.kind]}: ${o.reason}` : unknownReason[o.kind];
+      }
+    }
+    return modelState({ kind, configuredModel, observation: deps.store.latestObservation(name), runtimeInstance, now: now(), reason });
+  }
 
   return {
     async sessions(): Promise<Response> {
       try {
         const status = await deps.fleet.status();
         const records = known();
-        const sessions = status.sessions.map((s) => {
+        const sessions = await Promise.all(status.sessions.map(async (s) => {
           const rec = records.get(s.name);
-          // The fleet CLI does not expose a runtime instance yet, so observations cannot be bound to one.
-          const model = rec
-            ? modelState({
-                kind: rec.kind,
-                configuredModel: rec.configuredModel,
-                observation: deps.store.latestObservation(s.name),
-                runtimeInstance: null,
-                now: now(),
-              })
-            : { state: "unknown" as const, lastObserved: null };
+          // Unregistered sessions in a fleet are agents unless registered as scripts.
+          const model = await modelFor(s.name, rec?.kind ?? "agent", rec?.configuredModel ?? null, s.running);
           return {
             name: s.name,
             host: rec?.host ?? null,
@@ -54,7 +83,7 @@ export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => 
             contextPct: s.contextPct,
             model,
           };
-        });
+        }));
         return Response.json({ sessions, source: "fleet status", readAt: now().toISOString() });
       } catch (e) {
         return errorResponse(e);
