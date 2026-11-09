@@ -1,0 +1,15 @@
+seq|command_id|status|actor|detail|at
+1|cmd-415824b3-1d2d-47b9-bc71-e8133a45be2c|queued|macbook-test|stored on host|2026-11-09T12:28:11.034Z
+2|cmd-415824b3-1d2d-47b9-bc71-e8133a45be2c|delivering|service|fleet send to supervisor|2026-11-09T12:28:11.034Z
+3|cmd-415824b3-1d2d-47b9-bc71-e8133a45be2c|delivered|service|supervisor: delivered|2026-11-09T12:28:13.205Z
+4|cmd-39f84121-3547-49e1-a050-d7121b508129|queued|macbook-test|stored on host|2026-11-09T12:29:16.100Z
+5|cmd-39f84121-3547-49e1-a050-d7121b508129|delivering|service|fleet send to supervisor|2026-11-09T12:29:16.100Z
+6|cmd-39f84121-3547-49e1-a050-d7121b508129|queued|service|fleet send exit 4: supervisor: text in the input line, not sent|2026-11-09T12:29:16.197Z
+7|cmd-39f84121-3547-49e1-a050-d7121b508129|delivering|service|fleet send to supervisor|2026-11-09T12:30:27.248Z
+8|cmd-39f84121-3547-49e1-a050-d7121b508129|delivered|service|supervisor: delivered|2026-11-09T12:30:29.424Z
+9|cmd-39f84121-3547-49e1-a050-d7121b508129|accepted|test-supervisor|Pure arithmetic, no shell or file access needed.|2026-11-09T12:30:34.373Z
+10|cmd-39f84121-3547-49e1-a050-d7121b508129|completed|test-supervisor|17 * 23 = 391|2026-11-09T12:30:34.540Z
+11|cmd-5df17ee7-08cc-45f8-b1ef-ec1ea5611d6a|queued|macbook-test|stored on host|2026-11-09T12:31:06.000Z
+12|cmd-5df17ee7-08cc-45f8-b1ef-ec1ea5611d6a|delivering|service|fleet send to supervisor|2026-11-09T12:31:06.000Z
+13|cmd-5df17ee7-08cc-45f8-b1ef-ec1ea5611d6a|delivered|service|supervisor: delivered|2026-11-09T12:31:08.179Z
+14|cmd-5df17ee7-08cc-45f8-b1ef-ec1ea5611d6a|rejected|test-supervisor|Requires file deletion, which I cannot do with fleet-control tools.|2026-11-09T12:31:11.522Z

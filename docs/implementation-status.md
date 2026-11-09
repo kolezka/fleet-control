@@ -82,11 +82,29 @@ Verification (2026-11-09): `bun test` 51 pass / 0 fail, `bun check` clean. Real 
 
 Not covered: a real supervisor reading and answering through MCP (needs a paid `claude` session, not authorized), a Claude Code client registering `/mcp`, auth (anyone local can call it), several hosts, the page using the queue, event streaming (polling only), scoped approvals (stage 5).
 
+### Stage 4 acceptance with a real supervisor (2026-11-09, paid, approved by the user)
+
+One Claude Code 2.1.319 session (`--model haiku`, Haiku 5.5) on a private tmux socket `fleet-fcsuptest` on the MacBook, started by `scripts/supervisor-test/run-supervisor.sh`: no user/project settings or plugins (`--setting-sources ""`), only the Fleet Control MCP server (`--strict-mcp-config`), no built-in tools (`--tools ""`), `--permission-mode dontAsk` with only `command_get`, `command_respond` and `command_report` allowed. Its instructions are in `scripts/supervisor-test/prompt.txt`. Commands were submitted by `curl` to `/mcp` as `macbook-test`. Cost reported by `/cost`: $0.0029.
+
+Result, read from the service database (`docs/evidence-2026-11-09-supervisor-ack.txt`), not from the agent's text:
+
+- "Compute 17 * 23": `queued` → `delivering` → `queued` (fleet send exit 4, see below) → retried with `command_deliver` → `delivered` → `accepted` by `test-supervisor` → `completed` with evidence `17 * 23 = 391`.
+- "Delete the file .../prompt.txt": `delivered` → `rejected` by `test-supervisor` ("Requires file deletion..."). The file was still there afterwards.
+- An earlier command stayed `delivered` forever because the session was not logged in (it printed "Login expired"). Delivery was confirmed, but nobody accepted it. This is the case the separate states exist for.
+
+Findings:
+
+- `--setting-sources ""` also drops the `env` block of `~/.claude/settings.json`, which holds this machine's gateway auth. The launcher copies only `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` from it. The values are not stored in the repo.
+- When the tmux server inherits `NO_COLOR=1` (this harness sets it), Claude Code draws its placeholder suggestion without the dim attribute. agent-fleet's `user_typing` then reads the suggestion as typed text and `fleet send` refuses with exit 4. The queue handled it correctly (back to `queued`, safe retry). Starting tmux without `NO_COLOR` fixed it. This is an agent-fleet detection gap to report there; not changed in this session.
+- Workspace trust for the new empty folder had to be accepted once by hand.
+
+Not covered: a supervisor doing real work with shell or file tools, a long-running or busy supervisor, commands arriving while a dialog is open, Opus or Sonnet supervisors, remote hosts.
+
 ## Not implemented in this project
 
 - Workstation service, authentication, and MCP reachable from another machine. A local unauthenticated `/mcp` exists (stage 4 above).
 - Scoped requests and approvals bound to request, phase and revision; resumable push event stream (commands can be polled by cursor).
-- A supervisor that actually acknowledges commands, and phase-state adapters. The tools exist; no supervisor uses them yet.
+- Supervisor acknowledgement in production use and phase-state adapters. A test supervisor with only the MCP tools did accept, complete and reject commands once (above).
 - Live terminal on a workstation, input, and reconnect. A local read-only viewer exists (stage 3 above).
 - Exclusive input leases. Local read-only is enforced by the service and by tmux; auth is not.
 - Runtime model metadata and freshness handling.

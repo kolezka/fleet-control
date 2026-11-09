@@ -94,12 +94,12 @@ The handler check is not browser automation. No production build, live fleet tes
 - Approved: `ghostty-web` 0.4.0 pinned in this worktree; a local agent-fleet worktree adding `fleet attach --read-only` (no push).
 - Stage 3 (read-only terminal) done locally on the MacBook against a private test fleet: see [implementation status](implementation-status.md). The agent-fleet change lives on branch `feat/attach-read-only` in `~/Development/agent-fleet.worktrees/attach-read-only` was merged as kolezka/agent-fleet#6 (`8a1bd2c`). The plugin version was not bumped (still 0.3.0), so installed plugin caches lack it and Fleet Control still needs `READONLY_FLEET_BIN` pointing at a checkout of agent-fleet `main` until a version bump ships.
 - User chose option 2: no agent-fleet version bump for now, stage 4 locally.
-- Stage 4 (durable command queue, `fleet send` delivery, MCP at `/mcp` and REST at `/api/commands`) done locally: see [implementation status](implementation-status.md). Tested only with a shell session; no supervisor has acknowledged a command yet.
+- Stage 4 (durable command queue, `fleet send` delivery, MCP at `/mcp` and REST at `/api/commands`) done locally: see [implementation status](implementation-status.md). Then, with paid-agent approval, one Haiku test supervisor with only the MCP tools accepted, completed and rejected commands; evidence from the database in `docs/evidence-2026-11-09-supervisor-ack.txt`, cost $0.0029. Found: `NO_COLOR=1` makes agent-fleet mistake the prompt suggestion for typing (fleet send exit 4).
 - Remaining stages: 5 scoped requests/approvals, 6 workstation deployment with auth on LAN/Tailscale only.
 
 ## Next action
 
-Options: (a) a supervisor acknowledgement test, which needs a `claude` session and so paid-agent approval; (b) stage 5, scoped requests and approvals, locally; (c) connect the page composer to `/api/commands`. An agent-fleet version bump is still pending before deployment. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
+Options: (a) report the `NO_COLOR` typing-detection gap to agent-fleet; (b) stage 5, scoped requests and approvals, locally; (c) connect the page composer to `/api/commands`. An agent-fleet version bump is still pending before deployment. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
 
 Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
 
