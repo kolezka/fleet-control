@@ -102,7 +102,7 @@ The handler check is not browser automation. No production build, live fleet tes
 
 ## Next action
 
-Options: (a) fix the read-only-viewer `send-keys` bug in agent-fleet (blocks using the viewer with real agents); (b) let phased-delivery write its phase record and requests through the MCP tools; (c) stage 6 deployment on `.4`. An agent-fleet version bump is still pending before deployment. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
+Options: (a) wait for the read-only-viewer `send-keys` fix, which the user handed to a separate agent-fleet session on 2026-11-09 (it blocks using the viewer with real agents), then verify it from Fleet Control; (b) let phased-delivery write its phase record and requests through the MCP tools; (c) stage 6 deployment on `.4`. An agent-fleet version bump is still pending before deployment. Workstation work waits for the user to lift the `.15` hold. `runner-01` is only a design fixture, not an authorized connection target.
 
 Then propose a bounded implementation plan. Recommended first technical milestone: attach to an isolated test session through the existing fleet CLI, read meaningful output, detach without terminating the session, and verify reconnect behavior. Do not use a valuable live agent session as the experiment.
 
