@@ -1,4 +1,5 @@
 import type { SQL } from "bun";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 import { CommandError } from "../commands.ts";
 import { supervisorIdentity, type Principal } from "./auth.ts";
 import { SupervisorIncarnations, type IncarnationCredential } from "./incarnations.ts";
@@ -14,7 +15,7 @@ const validId = (value: unknown): value is string => typeof value === "string" &
 
 // Standalone storage only. A claim remains frozen in central_commands.
 export class CooperativeLifecycle {
-  constructor(private db: SQL, private incarnations: SupervisorIncarnations, private now: () => Date = () => new Date()) {}
+  constructor(private db: SQL, private incarnations: SupervisorIncarnations, private now: () => Date = () => new Date(), private runner?: CooperativeTransactionRunner) {}
 
   async initialize(): Promise<void> {
     await this.db`CREATE TABLE IF NOT EXISTS central_cooperative_lifecycle_events (
@@ -29,7 +30,7 @@ export class CooperativeLifecycle {
     const identity = supervisorIdentity(principal);
     if (![identity.principalId, identity.name, identity.hostId, identity.session].every(validId)) throw new Error("access denied");
     if (!validId(commandId) || !validId(requestId) || !["accepted", "rejected", "running", "completed", "failed"].includes(status) || typeof detail !== "string" || detail.length > 65536 || detail.includes("\0")) throw new CommandError("invalid", "invalid lifecycle request");
-    return this.db.begin(async (tx) => {
+    return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       if (!await this.incarnations.lockForClaim(tx, identity, credential)) throw new Error("access denied");
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [claim] = await tx`SELECT command_id FROM central_cooperative_claims WHERE command_id = ${commandId} AND incarnation_id = ${credential.incarnationId}`;

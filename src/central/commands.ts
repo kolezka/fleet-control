@@ -1,4 +1,5 @@
 import type { SQL, TransactionSQL } from "bun";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 import { CommandError, MAX_TEXT, type Command, type CommandStatus } from "../commands.ts";
 
 export type CentralCommandEvent = { seq: string; commandId: string; status: CommandStatus; actor: string; detail: string; at: string };
@@ -38,7 +39,7 @@ const allowed: Record<CommandStatus, CommandStatus[]> = {
 
 // Call initialize before use. The caller owns and closes the SQL pool.
 export class CentralCommands {
-  constructor(private db: SQL, private now: () => Date = () => new Date()) {}
+  constructor(private db: SQL, private now: () => Date = () => new Date(), private runner?: CooperativeTransactionRunner) {}
 
   async initialize(): Promise<void> {
     await this.db`CREATE TABLE IF NOT EXISTS central_commands (
@@ -61,7 +62,7 @@ export class CentralCommands {
     if (!validScopeValue(input.hostId)) throw new CommandError("invalid", `hostId is required and must be at most ${MAX_SCOPE_LENGTH} characters`);
     if (!validScopeValue(input.target) || !/^[A-Za-z0-9._-]+$/.test(input.target)) throw new CommandError("invalid", `invalid target session: ${String(input.target).slice(0, 64)}`);
     if (!input.idempotencyKey.trim() || !input.actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
-    return this.db.begin(async (tx) => {
+    return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       // Serialize event writers until commit so a cursor never skips an earlier uncommitted sequence.
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [existing] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE idempotency_key = ${input.idempotencyKey}`;
@@ -123,9 +124,12 @@ export class CentralCommands {
   }
 
   async get(id: string): Promise<CentralCommand> {
-    const [command] = await this.db<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id}`;
-    if (!command) throw new CommandError("not_found", `no command ${id}`);
-    return command;
+    const query = async (db: SQL | TransactionSQL) => {
+      const [command] = await db<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id}`;
+      if (!command) throw new CommandError("not_found", `no command ${id}`);
+      return command;
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 
   // Scope and guard must come from the same trusted supervisor identity. The guard
@@ -159,7 +163,7 @@ export class CentralCommands {
   }
 
   async list(status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
-    return this.listWithConnection(this.db, status, scope, pagination);
+    return this.runner ? this.runner((tx) => this.listWithConnection(tx, status, scope, pagination)) : this.listWithConnection(this.db, status, scope, pagination);
   }
 
   private async listWithConnection(db: SQL | TransactionSQL, status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {

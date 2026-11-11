@@ -1,4 +1,5 @@
 import type { SQL } from "bun";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
 export type SupervisorIdentity = { principalId: string; name: string; hostId: string; session: string };
 
@@ -12,7 +13,7 @@ function validIdentity(identity: SupervisorIdentity): boolean {
 // Enrollment and retirement are operator actions, never derived from a request principal.
 // Existing principals are not migrated automatically; the caller must enroll trusted bindings.
 export class SupervisorIdentityRegistry {
-  constructor(private db: SQL) {}
+  constructor(private db: SQL, private runner?: CooperativeTransactionRunner) {}
 
   async initialize(): Promise<void> {
     await this.db`CREATE TABLE IF NOT EXISTS central_supervisor_identities_v2 (
@@ -23,7 +24,7 @@ export class SupervisorIdentityRegistry {
 
   async enroll(identity: SupervisorIdentity): Promise<void> {
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
-    await this.db.begin(async (tx) => {
+    await (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`INSERT INTO central_supervisor_identities_v2 (principal_id, name, host_id, session)
         VALUES (${identity.principalId}, ${identity.name}, ${identity.hostId}, ${identity.session}) ON CONFLICT (principal_id) DO NOTHING`;
       const [stored] = await tx<{ name: string; hostId: string; session: string; retired: boolean }[]>`
@@ -36,17 +37,23 @@ export class SupervisorIdentityRegistry {
 
   async matches(identity: SupervisorIdentity): Promise<boolean> {
     if (!validIdentity(identity)) return false;
-    const rows = await this.db`SELECT principal_id FROM central_supervisor_identities_v2
-      WHERE principal_id = ${identity.principalId} AND name = ${identity.name} AND host_id = ${identity.hostId}
-        AND session = ${identity.session} AND retired = FALSE`;
-    return rows.length === 1;
+    const query = async (db: SQL | import("bun").TransactionSQL) => {
+      const rows = await db`SELECT principal_id FROM central_supervisor_identities_v2
+        WHERE principal_id = ${identity.principalId} AND name = ${identity.name} AND host_id = ${identity.hostId}
+          AND session = ${identity.session} AND retired = FALSE`;
+      return rows.length === 1;
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 
   async retire(identity: SupervisorIdentity): Promise<void> {
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
-    const rows = await this.db`UPDATE central_supervisor_identities_v2 SET retired = TRUE
-      WHERE principal_id = ${identity.principalId} AND name = ${identity.name} AND host_id = ${identity.hostId} AND session = ${identity.session}
-      RETURNING principal_id`;
-    if (rows.length !== 1) throw new Error("supervisor identity does not match an existing binding");
+    const query = async (db: SQL | import("bun").TransactionSQL) => {
+      const rows = await db`UPDATE central_supervisor_identities_v2 SET retired = TRUE
+        WHERE principal_id = ${identity.principalId} AND name = ${identity.name} AND host_id = ${identity.hostId} AND session = ${identity.session}
+        RETURNING principal_id`;
+      if (rows.length !== 1) throw new Error("supervisor identity does not match an existing binding");
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 }

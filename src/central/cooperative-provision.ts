@@ -3,10 +3,11 @@ import type { SQL } from "bun";
 // Trusted administration only: the caller supplies a disposable local database,
 // controls its roles and stops all writers that do not participate in this lock.
 // The marker records installation, not the integrity of the installed objects.
-export async function provisionCooperative(db: SQL, options: { testSchema?: string; beforeCommit?: () => void | Promise<void> } = {}): Promise<void> {
+export async function provisionCooperative(db: SQL, options: { testSchema?: string; runtimeRole?: string; beforeCommit?: () => void | Promise<void> } = {}): Promise<void> {
   const schema = options.testSchema ?? "fleet_cooperative_v1";
   if (options.testSchema !== undefined && !/^cooperative_test_[a-f0-9]{32}$/.test(schema)) throw new Error("invalid disposable test schema");
-  if (options.beforeCommit && !options.testSchema) throw new Error("failure injection requires a disposable test schema");
+  if ((options.beforeCommit || options.runtimeRole) && !options.testSchema) throw new Error("test options require a disposable test schema");
+  if (options.runtimeRole && !/^cooperative_runtime_[a-f0-9]{32}$/.test(options.runtimeRole)) throw new Error("invalid disposable runtime role");
   await db.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`fleet-cooperative-provision:${schema}`}, 0))`;
     await tx`CREATE SCHEMA ${tx(schema)}`;
@@ -36,6 +37,13 @@ export async function provisionCooperative(db: SQL, options: { testSchema?: stri
     await tx`CREATE TRIGGER central_block_reconciliation_mutation BEFORE UPDATE OR DELETE ON ${tx(schema)}.central_cooperative_reconciliations FOR EACH ROW EXECUTE FUNCTION ${tx(schema)}.central_block_reconciliation_mutation()`;
     await tx`CREATE TABLE ${tx(schema)}.central_cooperative_schema_marker (version TEXT PRIMARY KEY CHECK (version = 'fleet_cooperative_v1'))`;
     await tx`INSERT INTO ${tx(schema)}.central_cooperative_schema_marker (version) VALUES ('fleet_cooperative_v1')`;
+    if (options.runtimeRole) {
+      const role = options.runtimeRole;
+      await tx`GRANT USAGE ON SCHEMA ${tx(schema)} TO ${tx(role)}`;
+      await tx`GRANT SELECT ON ${tx(schema)}.central_cooperative_schema_marker, ${tx(schema)}.central_delivery_attempts TO ${tx(role)}`;
+      await tx`GRANT SELECT, INSERT, UPDATE ON ${tx(schema)}.central_commands, ${tx(schema)}.central_supervisor_identities_v2, ${tx(schema)}.central_supervisor_slots_v2, ${tx(schema)}.central_supervisor_incarnations_v2, ${tx(schema)}.central_cooperative_claims, ${tx(schema)}.central_cooperative_lifecycle_events, ${tx(schema)}.central_command_events, ${tx(schema)}.central_command_event_lock TO ${tx(role)}`;
+      await tx`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${tx(schema)} TO ${tx(role)}`;
+    }
     if (options.beforeCommit) await options.beforeCommit();
   });
 }

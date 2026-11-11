@@ -1,4 +1,5 @@
-import type { SQL } from "bun";
+import type { SQL, TransactionSQL } from "bun";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 import { CommandError } from "../commands.ts";
 import type { CentralCommand } from "./commands.ts";
 import type { CooperativeStatus } from "./cooperative-lifecycle.ts";
@@ -14,7 +15,7 @@ export type CooperativeInspectionResult = {
 // The caller must authenticate and authorize the operator before calling this method.
 // Pages are live reads, not a snapshot across calls. Command state is not lifecycle state.
 export class CooperativeInspection {
-  constructor(private db: SQL) {}
+  constructor(private db: SQL, private runner?: CooperativeTransactionRunner) {}
 
   async inspect(commandId: string, options: { limit?: number; cursor?: string } = {}): Promise<CooperativeInspectionResult | null> {
     if (typeof commandId !== "string" || !commandId || commandId.length > 256 || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
@@ -23,7 +24,8 @@ export class CooperativeInspection {
     const cursor = options.cursor ?? "0";
     if (typeof cursor !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(cursor) || BigInt(cursor) > 9223372036854775807n) throw new CommandError("invalid", "invalid cursor");
     type Row = CentralCommand & { incarnationId: string | null; claimRequestId: string | null; claimCreatedAt: string | null; seq: string | null; eventRequestId: string | null; eventStatus: CooperativeStatus | null; eventDetail: string | null; eventAt: string | null };
-    const rows = await this.db<Row[]>`SELECT c.id, c.idempotency_key AS "idempotencyKey", c.host_id AS "hostId", c.target, c.actor, c.text, c.status, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
+    const query = async (db: SQL | TransactionSQL) => {
+    const rows = await db<Row[]>`SELECT c.id, c.idempotency_key AS "idempotencyKey", c.host_id AS "hostId", c.target, c.actor, c.text, c.status, c.created_at AS "createdAt", c.updated_at AS "updatedAt",
       claim.incarnation_id AS "incarnationId", claim.request_id AS "claimRequestId", claim.created_at AS "claimCreatedAt",
       event.seq::text AS seq, event.request_id AS "eventRequestId", event.status AS "eventStatus", event.detail AS "eventDetail", event.at AS "eventAt"
       FROM central_commands c LEFT JOIN central_cooperative_claims claim ON claim.command_id = c.id
@@ -38,5 +40,7 @@ export class CooperativeInspection {
     const hasMore = events.length > limit;
     if (hasMore) events.pop();
     return { command, claim, events, nextCursor: hasMore ? events[events.length - 1]!.seq : null };
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 }

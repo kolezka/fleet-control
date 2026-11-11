@@ -2,6 +2,8 @@ import type { SQL, TransactionSQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
 import type { SupervisorIdentity } from "./identity-registry.ts";
 
+export type CooperativeTransactionRunner = <T>(operation: (tx: TransactionSQL) => Promise<T>) => Promise<T>;
+
 export type IncarnationCredential = { incarnationId: string; token: string };
 
 const digest = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -9,7 +11,7 @@ const digest = (token: string) => createHash("sha256").update(token).digest("hex
 // Initialize SupervisorIdentityRegistry first. Activation is a trusted operator action,
 // never an operation available merely because a requester supplies an identity.
 export class SupervisorIncarnations {
-  constructor(private db: SQL) {}
+  constructor(private db: SQL, private runner?: CooperativeTransactionRunner) {}
 
   async initialize(): Promise<void> {
     await this.db`CREATE TABLE IF NOT EXISTS central_supervisor_slots_v2 (
@@ -27,7 +29,7 @@ export class SupervisorIncarnations {
 
   async activate(identity: SupervisorIdentity): Promise<IncarnationCredential> {
     const token = randomBytes(32).toString("base64url");
-    return this.db.begin(async (tx) => {
+    return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`INSERT INTO central_supervisor_slots_v2 (host_id, session)
         VALUES (${identity.hostId}, ${identity.session}) ON CONFLICT DO NOTHING`;
       await tx`SELECT host_id FROM central_supervisor_slots_v2

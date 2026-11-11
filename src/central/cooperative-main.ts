@@ -10,12 +10,15 @@ import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 import { provisionCooperative } from "./cooperative-provision.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
+import { withCooperativeSchema } from "./schema-guard.ts";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
 // Disposable experiment only. The database and all its roles/writers must be trusted.
 // This creates a fresh schema and never resumes or migrates an existing one. Stores
-// use unqualified SQL on a pinned search_path, not withCooperativeSchema. This is
+// use a transaction-bound schema guard with a separate restricted role. This is
 // not a security boundary, a production installation, or a fence on external work.
 // Set COOPERATIVE_DATABASE_URL to a trusted disposable local PostgreSQL database,
+// COOPERATIVE_RUNTIME_DATABASE_URL to a pre-created restricted disposable login,
 // COOPERATIVE_SCHEMA to cooperative_test_<32 lowercase hex>, and
 // COOPERATIVE_CREDENTIALS_FILE to a private JSON credentials array, and
 // COOPERATIVE_INCARNATION_FILE to an absolute path that does not exist yet. Exactly one
@@ -24,6 +27,7 @@ import { createCooperativeCentralApp } from "./cooperative-server.ts";
 // No host agent, dispatch, automatic execution, TLS, recovery or cleanup is provided.
 export function cooperativeConfig(env: Record<string, string | undefined>) {
   const raw = env.COOPERATIVE_DATABASE_URL;
+  const runtimeRaw = env.COOPERATIVE_RUNTIME_DATABASE_URL;
   const schema = env.COOPERATIVE_SCHEMA;
   const credentialsFile = env.COOPERATIVE_CREDENTIALS_FILE;
   let url: URL;
@@ -31,6 +35,9 @@ export function cooperativeConfig(env: Record<string, string | undefined>) {
   // Fixed database and port match this repository's disposable PostgreSQL fixture.
   // Refuse connection options, alternate hosts, sockets, and database names.
   if (!(["postgres:", "postgresql:"].includes(url.protocol)) || url.hostname !== "127.0.0.1" || url.port !== "57507" || url.pathname !== "/fleet_control_test" || url.search || url.hash || !url.username) throw new Error("refusing non-disposable local database URL");
+  let runtimeUrl: URL;
+  try { runtimeUrl = new URL(runtimeRaw ?? ""); } catch { throw new Error("explicit disposable runtime database URL required"); }
+  if (!["postgres:", "postgresql:"].includes(runtimeUrl.protocol) || runtimeUrl.hostname !== "127.0.0.1" || runtimeUrl.port !== "57507" || runtimeUrl.pathname !== "/fleet_control_test" || runtimeUrl.search || runtimeUrl.hash || !/^cooperative_runtime_[a-f0-9]{32}$/.test(runtimeUrl.username)) throw new Error("refusing non-disposable runtime database URL");
   if (!schema || !/^cooperative_test_[a-f0-9]{32}$/.test(schema)) throw new Error("explicit fresh disposable schema required");
   if (!credentialsFile?.trim()) throw new Error("credentials file required");
   const incarnationFile = env.COOPERATIVE_INCARNATION_FILE;
@@ -38,7 +45,7 @@ export function cooperativeConfig(env: Record<string, string | undefined>) {
   if (env.COOPERATIVE_HOST !== undefined && env.COOPERATIVE_HOST !== "127.0.0.1") throw new Error("listener must bind to 127.0.0.1");
   const port = env.COOPERATIVE_PORT ?? "4873";
   if (!/^\d+$/.test(port) || Number(port) > 65535) throw new Error("invalid port");
-  return { databaseUrl: raw!, schema, credentialsFile, incarnationFile, port: Number(port) };
+  return { databaseUrl: raw!, runtimeDatabaseUrl: runtimeRaw!, runtimeRole: runtimeUrl.username, schema, credentialsFile, incarnationFile, port: Number(port) };
 }
 
 function parseCredentials(text: string): Credential[] {
@@ -80,16 +87,17 @@ export async function startCooperative(env: Record<string, string | undefined> =
   const admin = new SQL(config.databaseUrl);
   let db: SQL | undefined;
   try {
-    await provisionCooperative(admin, { testSchema: config.schema });
+    await provisionCooperative(admin, { testSchema: config.schema, runtimeRole: config.runtimeRole });
     await admin.close();
-    db = new SQL(config.databaseUrl, { connection: { search_path: config.schema } });
-    const [path] = await db`SELECT current_schema() AS name`;
-    if (path?.name !== config.schema) throw new Error("unexpected search path");
-    const identities = new SupervisorIdentityRegistry(db);
-    const incarnations = new SupervisorIncarnations(db);
+    db = new SQL(config.runtimeDatabaseUrl);
+    const pool = db;
+    const runner: CooperativeTransactionRunner = (operation) => withCooperativeSchema(pool, config.schema, operation);
+    await runner(async () => undefined);
+    const identities = new SupervisorIdentityRegistry(db, runner);
+    const incarnations = new SupervisorIncarnations(db, runner);
     await identities.enroll(supervisor);
     const credential = await incarnations.activate(supervisor);
-    const app = createCooperativeCentralApp({ auth, identities, commands: new CentralCommands(db), claims: new CooperativeClaims(db, incarnations), lifecycle: new CooperativeLifecycle(db, incarnations), inspection: new CooperativeInspection(db) });
+    const app = createCooperativeCentralApp({ auth, identities, commands: new CentralCommands(db, undefined, runner), claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner) });
     const pending = new Set<Promise<Response>>();
     const server = Bun.serve({ hostname: "127.0.0.1", port: config.port, fetch(request, server) {
       if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}`) return new Response("invalid host", { status: 403 });
@@ -98,7 +106,6 @@ export async function startCooperative(env: Record<string, string | undefined> =
       void task.then(() => pending.delete(task), () => pending.delete(task));
       return task;
     } });
-    const pool = db;
     let stopping: Promise<void> | undefined;
     const stop = () => stopping ??= (async () => { await server.stop(true); await Promise.allSettled([...pending]); await pool.close(); })();
     try { await writeIncarnationFile(config.incarnationFile, credential); }

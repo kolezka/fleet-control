@@ -5,9 +5,10 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cooperativeConfig, runCooperativeCli, startCooperative } from "./cooperative-main.ts";
+import { disposableCooperativeRole } from "./disposable-role-fixture.ts";
 
 const schema = () => `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
-const valid = { COOPERATIVE_DATABASE_URL: "postgres://test@127.0.0.1:57507/fleet_control_test", COOPERATIVE_SCHEMA: schema(), COOPERATIVE_CREDENTIALS_FILE: "/tmp/credentials", COOPERATIVE_INCARNATION_FILE: "/tmp/fleet-incarnation-never-created.json", COOPERATIVE_PORT: "0" };
+const valid = { COOPERATIVE_DATABASE_URL: "postgres://test@127.0.0.1:57507/fleet_control_test", COOPERATIVE_RUNTIME_DATABASE_URL: `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/fleet_control_test`, COOPERATIVE_SCHEMA: schema(), COOPERATIVE_CREDENTIALS_FILE: "/tmp/credentials", COOPERATIVE_INCARNATION_FILE: "/tmp/fleet-incarnation-never-created.json", COOPERATIVE_PORT: "0" };
 
 test("configuration rejects remote, ambiguous and non-disposable settings", () => {
   expect(cooperativeConfig(valid).port).toBe(0);
@@ -16,6 +17,17 @@ test("configuration rejects remote, ambiguous and non-disposable settings", () =
     { COOPERATIVE_DATABASE_URL: "postgres://test@localhost:57507/fleet_control_test" },
     { COOPERATIVE_DATABASE_URL: "postgres://test@127.0.0.1:57507/fleet_control_test?host=remote" },
     { COOPERATIVE_DATABASE_URL: "postgres://test@127.0.0.1:57507/other" },
+    { COOPERATIVE_RUNTIME_DATABASE_URL: undefined },
+    { COOPERATIVE_RUNTIME_DATABASE_URL: "not a URL" },
+    ...[
+      "postgres://postgres@127.0.0.1:57507/fleet_control_test",
+      `postgres://cooperative_runtime_${"a".repeat(32)}@localhost:57507/fleet_control_test`,
+      `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57508/fleet_control_test`,
+      `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/other`,
+      `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/fleet_control_test?host=remote`,
+      `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/fleet_control_test#fragment`,
+      `https://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/fleet_control_test`,
+    ].map((url) => ({ COOPERATIVE_RUNTIME_DATABASE_URL: url })),
     { COOPERATIVE_SCHEMA: "public" }, { COOPERATIVE_SCHEMA: undefined },
     { COOPERATIVE_HOST: "0.0.0.0" }, { COOPERATIVE_PORT: "65536" },
   ]) expect(() => cooperativeConfig({ ...valid, ...overrides })).toThrow();
@@ -50,11 +62,19 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
     { tokenHash: hash(operator), principal: { role: "operator", name: "operator" } },
     { tokenHash: hash(supervisor), principal: { role: "supervisor", name: "owner", principalId: "owner", hostId: "host", session: "session" } },
   ]));
-  const env = { COOPERATIVE_DATABASE_URL: databaseUrl!, COOPERATIVE_SCHEMA: name, COOPERATIVE_CREDENTIALS_FILE: credentialsFile, COOPERATIVE_INCARNATION_FILE: incarnationFile, COOPERATIVE_PORT: "0" };
-  cooperativeConfig(env);
   let running: Awaited<ReturnType<typeof startCooperative>> | undefined;
+  let fixture: Awaited<ReturnType<typeof disposableCooperativeRole>> | undefined;
   const admin = new SQL(databaseUrl!);
+  const ownedSchemas: string[] = [];
   try {
+    fixture = await disposableCooperativeRole(databaseUrl!);
+    for (const s of [name, failedName]) {
+      const existing = await admin`SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ${s}`;
+      if (existing.length) throw new Error("disposable schema already exists");
+      ownedSchemas.push(s);
+    }
+    const env = { COOPERATIVE_DATABASE_URL: databaseUrl!, COOPERATIVE_RUNTIME_DATABASE_URL: fixture.runtimeUrl, COOPERATIVE_SCHEMA: name, COOPERATIVE_CREDENTIALS_FILE: credentialsFile, COOPERATIVE_INCARNATION_FILE: incarnationFile, COOPERATIVE_PORT: "0" };
+    cooperativeConfig(env);
     const cli = await runCooperativeCli(env);
     running = cli.running;
     const file = await stat(incarnationFile);
@@ -101,9 +121,14 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
     expect(failure!.cause).toBeUndefined();
     expect(await Bun.file(unwritable).exists()).toBe(false);
   } finally {
-    await running?.stop();
-    for (const s of [name, failedName]) await admin`DROP SCHEMA IF EXISTS ${admin(s)} CASCADE`;
-    await admin.close();
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await running?.stop();
+      for (const s of ownedSchemas) await admin`DROP SCHEMA IF EXISTS ${admin(s)} CASCADE`;
+    } finally {
+      try { await fixture?.cleanup(); } finally {
+        await admin.close();
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
   }
 });

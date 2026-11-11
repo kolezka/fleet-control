@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SupervisorIncarnations } from "./incarnations.ts";
+import { cleanupCooperativeRole, disposableCooperativeRole } from "./disposable-role-fixture.ts";
 
 const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
 const token = () => randomBytes(32).toString("base64url");
@@ -26,6 +27,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
   const principal = { role: "supervisor" as const, name: "owner", principalId: "owner", hostId: "host", session: "session" };
   const admin = new SQL(databaseUrl!);
   let db: SQL | undefined;
+  let fixture: Awaited<ReturnType<typeof disposableCooperativeRole>> | undefined;
   let ownedSchema = false;
   const children: Array<{ process: ReturnType<typeof Bun.spawn>; stdout: Promise<string>; stderr: Promise<string> }> = [];
   const secrets = [operator, supervisor, local];
@@ -70,12 +72,14 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
   };
   try {
     expect((await admin`SELECT schema_name FROM information_schema.schemata WHERE schema_name = ${schema}`).length).toBe(0);
+    fixture = await disposableCooperativeRole(databaseUrl!);
+    secrets.push(new URL(fixture.runtimeUrl).password, fixture.runtimeUrl);
     await writeFile(credentialsFile, JSON.stringify([
       { tokenHash: hash(operator), principal: { role: "operator", name: "operator" } },
       { tokenHash: hash(supervisor), principal },
     ]), { mode: 0o600, flag: "wx" });
     const central = await start("src/central/cooperative-main.ts", {
-      COOPERATIVE_DATABASE_URL: databaseUrl!, COOPERATIVE_SCHEMA: schema, COOPERATIVE_CREDENTIALS_FILE: credentialsFile,
+      COOPERATIVE_DATABASE_URL: databaseUrl!, COOPERATIVE_RUNTIME_DATABASE_URL: fixture.runtimeUrl, COOPERATIVE_SCHEMA: schema, COOPERATIVE_CREDENTIALS_FILE: credentialsFile,
       COOPERATIVE_INCARNATION_FILE: incarnationFile, COOPERATIVE_PORT: "0",
     });
     ownedSchema = true;
@@ -132,8 +136,10 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     const nextBefore = await inspect(nextId);
     expect(nextBefore.command.status).toBe("queued");
     expect(nextBefore.claim).toBeNull();
-    db = new SQL(databaseUrl!, { connection: { search_path: schema } });
-    expect((await db`SELECT current_schema() AS name`)[0]!.name).toBe(schema);
+    db = new SQL(fixture.runtimeUrl, { connection: { search_path: schema } });
+    const [runtime] = await db`SELECT current_user AS role, current_schema() AS name`;
+    expect(runtime?.role).toBe(fixture.role);
+    expect(runtime?.name).toBe(schema);
     const replacement = await new SupervisorIncarnations(db).activate(principal);
     secrets.push(replacement.token);
     const incarnations = new SupervisorIncarnations(db);
@@ -182,9 +188,8 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
         // leave an ambiguous schema untouched and identify it for manual inspection.
         try {
           if (ownedSchema) await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`;
-          else if (children.length) console.error(`Inspect possible leftover test schema: ${schema}`);
         }
-        finally { try { await admin.close(); } finally { await rm(directory, { recursive: true, force: true }); } }
+        finally { try { if (fixture) await cleanupCooperativeRole(fixture, schema, !ownedSchema && children.length > 0); } finally { try { await admin.close(); } finally { await rm(directory, { recursive: true, force: true }); } } }
       }
     }
     for (const output of outputs) noSecrets(output);
