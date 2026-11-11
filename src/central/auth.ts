@@ -17,7 +17,7 @@ export type Scope = { hostId?: string; session?: string };
 export class AuthConfigError extends Error {}
 
 const validId = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
+  typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
 
 export class CentralAuth {
   private readonly credentials: { hash: Buffer; principal: Principal }[];

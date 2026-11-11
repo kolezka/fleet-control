@@ -35,6 +35,18 @@ describe("central authentication", () => {
     for (const config of invalid) expect(() => new CentralAuth(config as Credential[])).toThrow(AuthConfigError);
   });
 
+  test("rejects malformed Unicode in configured identities and scopes", () => {
+    for (const invalid of ["bad\ud800", "bad\udc00"]) {
+      for (const principal of [
+        { role: "operator", name: invalid },
+        { role: "host", name: "host", hostId: invalid },
+        { role: "supervisor", name: "supervisor", principalId: invalid, hostId: "host", session: "session" },
+        { role: "supervisor", name: "supervisor", principalId: "id", hostId: "host", session: invalid }
+      ]) expect(() => new CentralAuth([{ tokenHash: hash("token"), principal }] as Credential[])).toThrow(AuthConfigError);
+    }
+    expect(() => new CentralAuth([{ tokenHash: hash("token"), principal: { role: "operator", name: "operator 🛰️" } }])).not.toThrow();
+  });
+
   test("requires an explicitly provisioned supervisor ID and preserves it independently of name and token", () => {
     const supervisor = credentials[2]!.principal;
     if (supervisor.role !== "supervisor") throw new Error("expected supervisor");

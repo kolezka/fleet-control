@@ -44,12 +44,19 @@ pgTest("independent assertions conflict on stale versions and preserve divergent
     const write = (request: string, disposition: "unknown" | "completed" | "failed" | "not-executed", lifecycleSeq: string | null, assertionSeq: string | null, evidence = "evidence") => store.reconcile(operator, command.id, request, disposition, evidence, lifecycleSeq, assertionSeq);
     await expect(store.reconcile(supervisor, command.id, "denied", "unknown", "", null, null)).rejects.toThrow(/denied/);
     await expect(store.reconcile(operator, "missing", "missing", "unknown", "", null, null)).rejects.toThrow(/denied/);
+    await expect(write("bad-unicode", "unknown", null, null, "bad\ud800")).rejects.toThrow(/invalid/);
+    await expect(write("bad\ud800", "unknown", null, null)).rejects.toThrow(/invalid/);
+    await expect(store.reconcile(operator, "bad\ud800", "request", "unknown", "evidence", null, null)).rejects.toThrow(/invalid/);
+    await expect(store.reconcile({ role: "operator", name: "bad\ud800" }, command.id, "request", "unknown", "evidence", null, null)).rejects.toThrow(/denied/);
+    await expect(store.list(operator, "bad\ud800")).rejects.toThrow(/invalid/);
+    await expect(store.listBounded(operator, "bad\ud800", { limit: 1 })).rejects.toThrow(/invalid/);
+    expect(await db`SELECT request_id FROM central_cooperative_reconciliations`).toHaveLength(0);
     await expect(write("invalid", "unknown", "01", null)).rejects.toThrow(/invalid/);
     await expect(write("invalid-version", "unknown", null, "01")).rejects.toThrow(/invalid/);
-    const same = await Promise.all(Array.from({ length: 8 }, (_, i) => (i % 2 ? store : rival).reconcile(operator, command.id, "same", "unknown", "evidence", null, null)));
+    const same = await Promise.all(Array.from({ length: 8 }, (_, i) => (i % 2 ? store : rival).reconcile(operator, command.id, "same", "unknown", "evidence 🛰️", null, null)));
     expect(new Set(same.map((item) => JSON.stringify(item))).size).toBe(1);
     expect(same[0]).toMatchObject({ sequence: "1", supersedesSequence: null });
-    await expect(write("same", "failed", null, null)).rejects.toThrow(/different intent/);
+    await expect(write("same", "failed", null, null, "evidence 🛰️")).rejects.toThrow(/different intent/);
     const contested = await Promise.allSettled([
       write("assessment-a", "completed", null, "1", "saw result"),
       rival.reconcile(operator, command.id, "assessment-b", "failed", "saw error", null, "1")
@@ -65,7 +72,7 @@ pgTest("independent assertions conflict on stale versions and preserve divergent
     await expect(write(losingRequest, loserDisposition, null, "1", loserEvidence)).rejects.toThrow(/stale/);
     const successor = await write(losingRequest, loserDisposition, null, "2", loserEvidence);
     expect(successor).toMatchObject({ sequence: "3", supersedesSequence: "2" });
-    expect(await write("same", "unknown", null, null)).toEqual(same[0]!);
+    expect(await write("same", "unknown", null, null, "evidence 🛰️")).toEqual(same[0]!);
     await lifecycle.report(supervisor, credential, command.id, "reject", "rejected", "rejected");
     const [rejected] = await db<{ seq: string }[]>`SELECT seq::text AS seq FROM central_cooperative_lifecycle_events WHERE command_id = ${command.id} ORDER BY seq DESC LIMIT 1`;
     await expect(write("stale-lifecycle", "completed", null, "3")).rejects.toThrow(/stale/);
