@@ -1,6 +1,7 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { CentralRequests } from "./requests.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
 test("request lists apply a bounded SQL limit after filtering and ordering", async () => {
   let query = "";
@@ -55,11 +56,11 @@ test("request cursors reject malformed values before querying", async () => {
 });
 
 // These tests leave rows in the supplied disposable database.
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("revision-scoped requests serialize answers and phase changes", async () => {
-  const db = new SQL(url!), other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), other = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const a = new CentralRequests(db), b = new CentralRequests(other);
   const runId = `test-${crypto.randomUUID()}`;
   try {
@@ -114,7 +115,7 @@ integration("revision-scoped requests serialize answers and phase changes", asyn
 });
 
 integration("resolution retries require identical normalized intent", async () => {
-  const db = new SQL(url!), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await store.registerRun({ runId, orchestrator: "orch", phase: "plan" });
@@ -142,7 +143,7 @@ integration("resolution retries require identical normalized intent", async () =
 });
 
 integration("gate blocks open approvals while preserving declines and withdrawals", async () => {
-  const db = new SQL(url!), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await store.registerRun({ runId, orchestrator: "orch", phase: "plan" });
@@ -161,7 +162,7 @@ integration("gate blocks open approvals while preserving declines and withdrawal
 });
 
 integration("request pages discover every matching row without truncating gate decisions", async () => {
-  const db = new SQL(url!), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await store.registerRun({ runId, orchestrator: "orch", phase: "plan" });
@@ -197,7 +198,7 @@ integration("request pages discover every matching row without truncating gate d
 });
 
 integration("keyset pages remain stable across concurrent inserts and status changes", async () => {
-  const db = new SQL(url!), other = new SQL(url!), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), other = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await store.registerRun({ runId, orchestrator: "orch", phase: "plan" });
@@ -216,7 +217,7 @@ integration("keyset pages remain stable across concurrent inserts and status cha
 });
 
 integration("failed event insertion rolls back the request transition", async () => {
-  const db = new SQL(url!), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `test-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await store.registerRun({ runId, orchestrator: "orch", phase: "plan" });
@@ -229,7 +230,7 @@ integration("failed event insertion rolls back the request transition", async ()
 
 
 integration("request event cursors preserve exact PostgreSQL bigint values", async () => {
-  const db = new SQL(url!), store = new CentralRequests(db), runId = `cursor-${crypto.randomUUID()}`;
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl)), store = new CentralRequests(db), runId = `cursor-${crypto.randomUUID()}`;
   try {
     await store.initialize();
     await db`INSERT INTO central_request_events (seq, request_id, run_id, kind, actor, detail, at) VALUES (9007199254740992, NULL, ${runId}, 'first', 'test', '', 'now'), (9007199254740993, NULL, ${runId}, 'second', 'test', '', 'now'), (9007199254740994, NULL, ${runId}, 'third', 'test', '', 'now')`;

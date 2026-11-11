@@ -3,12 +3,13 @@ import { expect, test } from "bun:test";
 import { CentralCommands } from "./commands.ts";
 import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("command pagination filters before slicing and orders tied timestamps by id", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const hostId = `pagination-${crypto.randomUUID()}`;
   const store = new CentralCommands(db, () => new Date("2025-01-01T00:00:00.000Z"));
   try {
@@ -42,7 +43,7 @@ integration("command pagination filters before slicing and orders tied timestamp
 });
 
 integration("claimed records are readable but legacy transitions cannot enter or leave them", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const hostId = `claimed-${crypto.randomUUID()}`;
   const store = new CentralCommands(db);
   try {
@@ -65,8 +66,8 @@ integration("claimed records are readable but legacy transitions cannot enter or
 });
 
 integration("PostgreSQL command contract survives concurrency and reconnect", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const key = `test-${crypto.randomUUID()}`;
   const input = { idempotencyKey: key, hostId: "host-a", target: "supervisor", actor: "client", text: "run tests" };
   try {
@@ -113,7 +114,7 @@ integration("PostgreSQL command contract survives concurrency and reconnect", as
 
 
 integration("scoped supervisor transitions guard and write atomically", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const hostId = `scoped-${crypto.randomUUID()}`;
   const store = new CentralCommands(db);
   const scope = { hostId, session: "supervisor" };
@@ -160,7 +161,7 @@ integration("scoped supervisor transitions guard and write atomically", async ()
 });
 
 integration("command event cursors preserve exact PostgreSQL bigint values", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const store = new CentralCommands(db);
   const id = `cursor-${crypto.randomUUID()}`;
   try {
@@ -185,7 +186,7 @@ integration("command event cursors preserve exact PostgreSQL bigint values", asy
 });
 
 integration("guarded reads enforce scope and share the guard transaction", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const hostId = `read-${crypto.randomUUID()}`;
   const store = new CentralCommands(db);
   const scope = { hostId, session: "supervisor" };
@@ -221,9 +222,9 @@ integration("guarded reads enforce scope and share the guard transaction", async
 });
 
 integration("guarded reads serialize with incarnation replacement in both orders", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
-  const inspector = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
+  const inspector = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const incarnations = new SupervisorIncarnations(db);
   const rivalConnection = await other.reserve();
