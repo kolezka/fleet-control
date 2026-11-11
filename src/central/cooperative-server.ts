@@ -8,6 +8,8 @@ import type { CooperativeClaims } from "./cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 import type { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeInspectionRoute } from "./cooperative-inspection-route.ts";
+import { createCooperativeAssertionsRoute } from "./cooperative-assertions-route.ts";
+import type { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
 import type { CentralRequests } from "./requests.ts";
 
 const MAX_BODY = 32 * 1024;
@@ -43,6 +45,7 @@ export function createCooperativeCentralApp(deps: {
   claims: CooperativeClaims;
   lifecycle: CooperativeLifecycle;
   inspection: Pick<CooperativeInspection, "inspect">;
+  reconciliation?: Pick<CooperativeReconciliation, "listBounded">;
   requests?: CentralRequests;
   allowedOrigins?: readonly string[];
 }) {
@@ -64,6 +67,7 @@ export function createCooperativeCentralApp(deps: {
     await next();
   });
   app.route("/", createCooperativeInspectionRoute({ auth: deps.auth, inspection: deps.inspection }));
+  if (deps.reconciliation) app.route("/", createCooperativeAssertionsRoute({ auth: deps.auth, reconciliation: deps.reconciliation }));
   app.post("/api/commands", async (c) => {
     const principal = deps.auth.authenticate(c.req.raw);
     if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);

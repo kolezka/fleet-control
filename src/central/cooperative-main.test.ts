@@ -108,6 +108,27 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
     expect(inspectedText).not.toContain(stored.token);
     expect((JSON.parse(inspectedText) as any).events.map((e: any) => e.status)).toEqual(["accepted", "completed"]);
 
+    const assertionsUrl = `${base}/api/commands/${command.id}/cooperative/assertions`;
+    const operatorHeaders = { authorization: `Bearer ${operator}` };
+    expect((await fetch(assertionsUrl)).status).toBe(401);
+    expect((await fetch(assertionsUrl, { headers: { authorization: `Bearer ${supervisor}` } })).status).toBe(403);
+    expect((await fetch(assertionsUrl, { headers: { ...operatorHeaders, origin: "https://example.com" } })).status).toBe(403);
+    expect((await fetch(`${base}/api/commands/missing/cooperative/assertions`, { headers: operatorHeaders })).status).toBe(404);
+    expect(await (await fetch(assertionsUrl, { headers: operatorHeaders })).json()).toEqual({ assertions: [], nextCursor: null });
+    for (let i = 1; i <= 5; i++) await admin`INSERT INTO ${admin(name)}.central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES (${`fixture-${i}`}, ${command.id}, 'operator', 'unknown', ${`evidence-${i}`}, ${i}, 'now')`;
+    const first = await (await fetch(assertionsUrl, { headers: operatorHeaders })).json() as any;
+    expect(first.assertions.map((row: any) => row.sequence)).toEqual(["1", "2", "3", "4"]);
+    expect(first.nextCursor).toBe("4");
+    const second = await (await fetch(`${assertionsUrl}?cursor=${first.nextCursor}`, { headers: operatorHeaders })).json() as any;
+    expect(second.assertions.map((row: any) => row.sequence)).toEqual(["5"]);
+    expect(second.nextCursor).toBeNull();
+    const runtime = new SQL(fixture.runtimeUrl);
+    try {
+      const [privileges] = await runtime`SELECT current_user AS role, has_table_privilege(current_user, ${`"${name}".central_cooperative_reconciliations`}, 'SELECT') AS can_select, has_table_privilege(current_user, ${`"${name}".central_cooperative_reconciliations`}, 'INSERT') AS can_insert, has_table_privilege(current_user, ${`"${name}".central_cooperative_reconciliations`}, 'UPDATE') AS can_update, has_table_privilege(current_user, ${`"${name}".central_cooperative_reconciliations`}, 'DELETE') AS can_delete`;
+      expect(privileges).toEqual({ role: fixture.role, can_select: true, can_insert: false, can_update: false, can_delete: false });
+      await expect(runtime`INSERT INTO ${runtime(name)}.central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('forbidden', ${command.id}, 'operator', 'unknown', 'evidence', 6, 'now')`).rejects.toThrow();
+    } finally { await runtime.close(); }
+
     // A second start refuses the existing credential file and never overwrites it.
     const before = await Bun.file(incarnationFile).text();
     await expect(startCooperative({ ...env, COOPERATIVE_SCHEMA: schema() })).rejects.toThrow("incarnation file must not exist");

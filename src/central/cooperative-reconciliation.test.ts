@@ -135,6 +135,37 @@ pgTest("assertion listing uses the supplied transaction runner and distinguishes
   }
 });
 
+pgTest("bounded assertion reads reject oversized database fields and the extra row", async () => {
+  const admin = new SQL(url!);
+  const schema = crypto.randomUUID().replaceAll("-", "");
+  const name = `bounded_${schema}`;
+  await admin`CREATE SCHEMA ${admin(name)}`;
+  const db = new SQL(url!, { connection: { search_path: name } });
+  try {
+    await db`CREATE TABLE central_cooperative_claims (command_id TEXT PRIMARY KEY)`;
+    await db`CREATE TABLE central_command_event_lock (id INTEGER PRIMARY KEY)`;
+    await db`INSERT INTO central_command_event_lock VALUES (1)`;
+    await db`INSERT INTO central_cooperative_claims VALUES ('command')`;
+    const store = new CooperativeReconciliation(db);
+    await store.initialize();
+    const operator = { role: "operator" as const, name: "operator" };
+    await db`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('one', 'command', 'actor', 'unknown', 'ok', 1, 'now')`;
+    for (const field of ["actor", "disposition", "evidence", "expected_sequence", "at"]) {
+      await db.unsafe(`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at, ${field === "expected_sequence" ? "expected_sequence" : "supersedes_sequence"}) VALUES ('two', 'command', ${field === "actor" ? "repeat('x', 270337)" : "'actor'"}, ${field === "disposition" ? "repeat('x', 270337)" : "'unknown'"}, ${field === "evidence" ? "repeat('x', 270337)" : "'ok'"}, 2, ${field === "at" ? "repeat('x', 270337)" : "'now'"}, ${field === "expected_sequence" ? "repeat('x', 270337)" : "NULL"})`);
+      await expect(store.listBounded(operator, 'command', { limit: 1 })).rejects.toThrow(/large/);
+      await expect(store.listBounded(operator, 'command', { limit: 2 })).rejects.toThrow(/large/);
+      await db`ALTER TABLE central_cooperative_reconciliations DISABLE TRIGGER central_block_reconciliation_mutation`;
+      await db`DELETE FROM central_cooperative_reconciliations WHERE sequence = 2`;
+      await db`ALTER TABLE central_cooperative_reconciliations ENABLE TRIGGER central_block_reconciliation_mutation`;
+    }
+    expect((await store.listBounded(operator, 'command', { limit: 1 }))?.assertions[0]?.evidence).toBe('ok');
+    expect(await store.listBounded(operator, 'missing', { limit: 1 })).toBeNull();
+  } finally {
+    await db.close();
+    try { await admin`DROP SCHEMA ${admin(name)} CASCADE`; } finally { await admin.close(); }
+  }
+});
+
 pgTest("reconciliation trigger rejects mutations under a hostile caller search path", async () => {
   const admin = new SQL(url!);
   const suffix = crypto.randomUUID().replaceAll("-", "");

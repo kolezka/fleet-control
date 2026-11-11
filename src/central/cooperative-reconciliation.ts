@@ -54,6 +54,40 @@ export class CooperativeReconciliation {
     return this.runner ? this.runner(query) : query(this.db);
   }
 
+  // HTTP-only bounded page. The existing list contract remains unchanged.
+  async listBounded(principal: Principal, commandId: string, options: { limit: number; cursor?: string }): Promise<{ assertions: Reconciliation[]; nextCursor: string | null } | null> {
+    if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
+    if (!validId(commandId) || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 4) throw new CommandError("invalid", "invalid parameters");
+    const cursor = options.cursor ?? "0";
+    if (!/^(0|[1-9][0-9]{0,999})$/.test(cursor)) throw new CommandError("invalid", "invalid cursor");
+    type Row = { present: boolean; oversized: boolean; commandId: string | null; requestId: string | null; actor: string | null; disposition: ReconciliationDisposition | null; evidence: string | null; expectedSequence: string | null; sequence: string | null; supersedesSequence: string | null; at: string | null };
+    const query = async (db: SQL | TransactionSQL) => {
+      // CASE prevents oversized fields crossing the database connection. One statement
+      // gives the length check and values the same snapshot, including the extra row.
+      const rows = await db<Row[]>`SELECT true AS present, assertion.oversized,
+        CASE WHEN NOT assertion.oversized THEN claim.command_id END AS "commandId",
+        CASE WHEN NOT assertion.oversized THEN assertion.request_id END AS "requestId",
+        CASE WHEN NOT assertion.oversized THEN assertion.actor END AS actor,
+        CASE WHEN NOT assertion.oversized THEN assertion.disposition END AS disposition,
+        CASE WHEN NOT assertion.oversized THEN assertion.evidence END AS evidence,
+        CASE WHEN NOT assertion.oversized THEN assertion.expected_sequence END AS "expectedSequence",
+        CASE WHEN NOT assertion.oversized THEN assertion.sequence::text END AS sequence,
+        CASE WHEN NOT assertion.oversized THEN assertion.supersedes_sequence::text END AS "supersedesSequence",
+        CASE WHEN NOT assertion.oversized THEN assertion.at END AS at
+        FROM central_cooperative_claims claim LEFT JOIN LATERAL (
+          SELECT page.*, (octet_length(page.command_id) + octet_length(page.request_id) + octet_length(page.actor) + octet_length(page.disposition) + octet_length(page.evidence) + COALESCE(octet_length(page.expected_sequence), 0) + octet_length(page.sequence::text) + COALESCE(octet_length(page.supersedes_sequence::text), 0) + octet_length(page.at) > 270336) AS oversized
+          FROM (SELECT * FROM central_cooperative_reconciliations WHERE command_id = claim.command_id AND sequence > ${cursor}::numeric ORDER BY sequence LIMIT ${options.limit + 1}) page
+        ) assertion ON true WHERE claim.command_id = ${commandId} ORDER BY assertion.sequence`;
+      if (!rows.length) return null;
+      if (rows.some((row) => row.oversized)) throw new Error("assertion page too large");
+      const assertions = rows.filter((row) => row.sequence !== null).map((row): Reconciliation => ({ commandId: row.commandId!, requestId: row.requestId!, actor: row.actor!, disposition: row.disposition!, evidence: row.evidence!, expectedSequence: row.expectedSequence, sequence: row.sequence!, supersedesSequence: row.supersedesSequence, at: row.at! }));
+      const hasMore = assertions.length > options.limit;
+      if (hasMore) assertions.pop();
+      return { assertions, nextCursor: hasMore ? assertions[assertions.length - 1]!.sequence : null };
+    };
+    return this.runner ? this.runner(query) : query(this.db);
+  }
+
   async reconcile(principal: Principal, commandId: string, requestId: string, disposition: ReconciliationDisposition, evidence: string, expectedSequence: string | null, expectedAssertionSequence: string | null): Promise<Reconciliation> {
     if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
     if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || evidence.includes("\0") || !validSequence(expectedSequence) || !validSequence(expectedAssertionSequence)) throw new CommandError("invalid", "invalid reconciliation request");
