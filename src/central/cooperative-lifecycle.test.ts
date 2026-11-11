@@ -30,7 +30,7 @@ pgTest("claim lifecycle is atomic, owned, idempotent and leaves commands frozen"
     await registry.enroll(principal);
     const credential = await incarnations.activate(principal);
     const { command } = await commands.submit({ idempotencyKey: "one", hostId: "host", target: "session", actor: "operator", text: "work" });
-    await claims.claim(principal, credential, "claim-one");
+    const originalClaim = await claims.claim(principal, credential, "claim-one");
     const report = (request: string, status: "accepted" | "rejected" | "running" | "completed" | "failed", detail = "evidence") => lifecycle.report(principal, credential, command.id, request, status, detail);
     await expect(report("early", "running")).rejects.toThrow(/cannot become/);
     const results = await Promise.all(Array.from({ length: 8 }, (_, i) => (i % 2 ? lifecycle : rival).report(principal, credential, command.id, "accept", "accepted", "evidence")));
@@ -38,6 +38,8 @@ pgTest("claim lifecycle is atomic, owned, idempotent and leaves commands frozen"
     await expect(report("accept", "accepted", "different")).rejects.toThrow(/different intent/);
     await report("run", "running");
     await report("done", "completed");
+    expect(originalClaim?.id).toBe(command.id);
+    expect(await claims.claim(principal, credential, "claim-one")).toEqual(originalClaim);
     expect(await report("accept", "accepted")).toEqual(results[0]!);
     await expect(report("fail", "failed")).rejects.toThrow(/cannot become/);
     expect((await commands.get(command.id)).status).toBe("claimed");
