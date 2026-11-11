@@ -158,6 +158,41 @@ pgTest("bounded assertion reads reject oversized database fields and the extra r
       await db`DELETE FROM central_cooperative_reconciliations WHERE sequence = 2`;
       await db`ALTER TABLE central_cooperative_reconciliations ENABLE TRIGGER central_block_reconciliation_mutation`;
     }
+    const observed: Record<string, unknown>[][] = [];
+    const observingStore = new CooperativeReconciliation(db, undefined, (operation) => db.begin((tx) => {
+      const wrapped = new Proxy(tx, {
+        apply(target, thisArg, args) {
+          return (async () => {
+            const rows = await Reflect.apply(target, thisArg, args);
+            observed.push(rows);
+            return rows;
+          })();
+        }
+      });
+      return operation(wrapped);
+    }));
+    await db`INSERT INTO central_cooperative_claims VALUES ('edge'), ('overflow')`;
+    const actor = "żółw";
+    const evidence = "界".repeat(90000);
+    for (const [commandId, requestId, sequence, extra] of [["edge", "edge-request", 1, 0], ["overflow", "overflow-request", 2, 1]] as const) {
+      const fixedBytes = Buffer.byteLength(commandId + requestId + actor + "unknown" + evidence + "7" + String(sequence) + "1" + "now", "utf8");
+      const sizedEvidence = evidence + "x".repeat(270336 + extra - fixedBytes);
+      expect(Buffer.byteLength(commandId + requestId + actor + "unknown" + sizedEvidence + "7" + String(sequence) + "1" + "now", "utf8")).toBe(270336 + extra);
+      await db`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, expected_sequence, sequence, supersedes_sequence, at) VALUES (${requestId}, ${commandId}, ${actor}, 'unknown', ${sizedEvidence}, '7', ${sequence}, 1, 'now')`;
+    }
+    const edgePage = await observingStore.listBounded(operator, "edge", { limit: 1 });
+    expect(edgePage?.assertions[0]).toMatchObject({ commandId: "edge", requestId: "edge-request", actor, disposition: "unknown", expectedSequence: "7", sequence: "1", supersedesSequence: "1", at: "now" });
+    expect(edgePage?.assertions[0]?.evidence.startsWith(evidence)).toBe(true);
+    expect(observed.at(-1)?.[0]).toMatchObject({ present: true, oversized: false, commandId: "edge", requestId: "edge-request", actor, disposition: "unknown", evidence: edgePage?.assertions[0]?.evidence, expectedSequence: "7", sequence: "1", supersedesSequence: "1", at: "now" });
+    await expect(observingStore.listBounded(operator, "overflow", { limit: 1 })).rejects.toThrow(/large/);
+    const masked = { present: true, oversized: true, commandId: null, requestId: null, actor: null, disposition: null, evidence: null, expectedSequence: null, sequence: null, supersedesSequence: null, at: null };
+    expect(observed.at(-1)).toEqual([masked]);
+    await db`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('overflow-first', 'overflow', 'actor', 'unknown', 'ok', 1, 'now')`;
+    await expect(observingStore.listBounded(operator, "overflow", { limit: 1 })).rejects.toThrow(/large/);
+    const lookahead = observed.at(-1)!;
+    expect(lookahead).toHaveLength(2);
+    expect(lookahead[0]).toMatchObject({ oversized: false, requestId: "overflow-first", evidence: "ok", sequence: "1" });
+    expect(lookahead[1]).toEqual(masked);
     expect((await store.listBounded(operator, 'command', { limit: 1 }))?.assertions[0]?.evidence).toBe('ok');
     expect(await store.listBounded(operator, 'missing', { limit: 1 })).toBeNull();
   } finally {
