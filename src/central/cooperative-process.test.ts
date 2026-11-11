@@ -85,6 +85,11 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     ownedSchema = true;
     expect(Object.keys(central).sort()).toEqual(["incarnationId", "url"]);
     expect(central.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    const toolsResponse = await request(`${central.url}/mcp`, { method: "POST", headers: { authorization: `Bearer ${operator}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+    expect(toolsResponse.status).toBe(200);
+    const tools = (await visible(toolsResponse)).result.tools as { name: string }[];
+    expect(tools.map((tool) => tool.name)).toContain("command_submit");
+    expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("request_") || name.startsWith("run_") || name.startsWith("phase_"))).toEqual([]);
     const incarnation = await Bun.file(incarnationFile).json() as { incarnationId: string; token: string };
     expect(Object.keys(incarnation).sort()).toEqual(["incarnationId", "token"]);
     expect(incarnation.incarnationId).toBe(central.incarnationId);
