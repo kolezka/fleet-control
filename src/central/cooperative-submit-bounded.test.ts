@@ -1,16 +1,17 @@
 import { SQL, type TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
 import { CentralCommands } from "./commands.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { provisionCooperative } from "./cooperative-provision.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const pgTest = url ? test : test.skip;
 
 pgTest("bounded submit preserves replay and rejects oversized existing rows without exposing fields", async () => {
   const parsed = new URL(url!);
   if (parsed.protocol !== "postgres:" || parsed.hostname !== "127.0.0.1" || parsed.port !== "57507" || parsed.pathname !== "/fleet_control_test") throw new Error("refusing non-disposable test database");
-  const db = new SQL({ url: url!, max: 1 });
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL({ url: currentUrl, max: 1 }));
   const schema = `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
   let created = false;
   try {
