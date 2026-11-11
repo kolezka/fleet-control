@@ -50,7 +50,7 @@ describe("isolated cooperative adapter", () => {
     expect(calls).toBe(0);
   });
 
-  test("cancels every early-rejected body without forwarding or waiting", async () => {
+  test("cancels eligible early-rejected bodies without forwarding or waiting", async () => {
     let calls = 0;
     let releaseFetch!: (response: Response) => void;
     const { options } = fixture(async () => { calls++; return new Promise((resolve) => { releaseFetch = resolve; }); });
@@ -104,7 +104,7 @@ describe("isolated cooperative adapter", () => {
     expect(calls).toBe(0);
   });
 
-  test("sanitizes upstream errors, headers and encoded secrets", async () => {
+  test("sanitizes upstream errors, headers and a JSON-escaped secret", async () => {
     for (const fetcher of [
       (async () => { throw new Error(`failure ${supervisorToken} ${incarnationToken}`); }),
       (async () => new Response(supervisorToken, { status: 500, headers: { "x-token": incarnationToken } })),
@@ -157,7 +157,32 @@ describe("isolated cooperative adapter", () => {
     }
   });
 
-  test("passes maximum claim and report through the central MCP envelope", async () => {
+  test("a persistent unsafe claim response remains unknown on manual exact retry", async () => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "cooperative_claim", arguments: { requestId: "request-1" } } });
+    let calls = 0;
+    let committedPayload: string | undefined;
+    const { request } = fixture(async (_url, init) => {
+      calls++;
+      const headers = new Headers(init.headers);
+      expect(headers.get("x-fleet-incarnation-id")).toBe(incarnationId);
+      expect(headers.get("x-fleet-incarnation-token")).toBe(incarnationToken);
+      const payload = String(init.body);
+      if (committedPayload === undefined) committedPayload = payload;
+      else expect(payload).toBe(committedPayload);
+      return Response.json({ jsonrpc: "2.0", id: 7, result: { command: { text: localToken } } });
+    });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const response = await request(undefined, { body });
+      const visible = `${JSON.stringify([...response.headers])} ${await response.text()}`;
+      expect(response.status).toBe(502);
+      expect(visible).toContain("outcome unknown");
+      for (const secret of [localToken, supervisorToken, incarnationToken, incarnationId]) expect(visible).not.toContain(secret);
+      expect(calls).toBe(attempt);
+    }
+    expect(committedPayload).toBe(body);
+  });
+
+  test("passes maximum claim text and report detail through the central MCP envelope", async () => {
     const principal = { name: "supervisor", role: "supervisor" as const, principalId: "id", hostId: "host", session: "session" };
     const auth = new CentralAuth([{ tokenHash: createHash("sha256").update(supervisorToken).digest("hex"), principal }]);
     const detail = "\u0001".repeat(65536);
