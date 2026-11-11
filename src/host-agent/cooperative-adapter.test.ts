@@ -104,6 +104,33 @@ describe("isolated cooperative adapter", () => {
     expect(calls).toBe(0);
   });
 
+  test("rejects secrets that require JSON escaping in requests and responses", async () => {
+    const escapedToken = "\"".repeat(32);
+    let calls = 0;
+    const { options } = fixture(async () => { calls++; return Response.json({ jsonrpc: "2.0", id: 1, result: escapedToken }); });
+    const handler = createCooperativeAdapter({ ...options, supervisorToken: escapedToken });
+    const send = (body: string) => handler(new Request("http://127.0.0.1/mcp", { method: "POST", headers: { authorization: `Bearer ${localToken}`, "content-type": "application/json" }, body }));
+    const request = await send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { value: escapedToken } }));
+    expect(request.status).toBe(400);
+    expect(calls).toBe(0);
+    const keyed = await send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { [escapedToken]: true } }));
+    expect(keyed.status).toBe(400);
+    expect(calls).toBe(0);
+    const duplicate = `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"x":${JSON.stringify(escapedToken)},"x":"safe"}}`;
+    expect((await send(duplicate)).status).toBe(400);
+    expect(calls).toBe(0);
+    const response = await send(rpc);
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain(escapedToken);
+    expect(calls).toBe(1);
+    const structuredToken = '{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}';
+    const structuredHandler = createCooperativeAdapter({ ...options, supervisorToken: structuredToken });
+    const structuredBody = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{ "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }}';
+    const structured = await structuredHandler(new Request("http://127.0.0.1/mcp", { method: "POST", headers: { authorization: `Bearer ${localToken}`, "content-type": "application/json" }, body: structuredBody }));
+    expect(structured.status).toBe(400);
+    expect(calls).toBe(1);
+  });
+
   test("sanitizes upstream errors, headers and a JSON-escaped secret", async () => {
     for (const fetcher of [
       (async () => { throw new Error(`failure ${supervisorToken} ${incarnationToken}`); }),

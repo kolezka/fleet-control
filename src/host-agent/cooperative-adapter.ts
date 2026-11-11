@@ -75,6 +75,28 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
   const endpoint = central.toString();
   const localHash = digest(`Bearer ${localToken}`);
   const secrets = [localToken, supervisorToken, incarnationToken, incarnationId];
+  const containsEncodedSecret = (json: string): boolean => {
+    for (const match of json.matchAll(/"(?:\\.|[^"\\])*"/g)) {
+      const value: string = JSON.parse(match[0]);
+      if (secrets.some((secret) => value.includes(secret))) return true;
+    }
+    return false;
+  };
+  const containsSecret = (value: unknown): boolean => {
+    const pending = [value];
+    while (pending.length) {
+      const item = pending.pop();
+      if (typeof item === "string") {
+        if (secrets.some((secret) => item.includes(secret))) return true;
+      } else if (item && typeof item === "object") {
+        for (const [key, child] of Object.entries(item)) {
+          if (secrets.some((secret) => key.includes(secret))) return true;
+          pending.push(child);
+        }
+      }
+    }
+    return false;
+  };
   if (secrets.some((secret) => endpoint.includes(secret))) throw new Error("invalid adapter configuration");
   let active = 0;
   let earlyCancellations = 0;
@@ -130,7 +152,7 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
           let input: unknown;
           try { input = JSON.parse(raw); } catch { return error(400, "invalid JSON"); }
           if (!input || typeof input !== "object" || Array.isArray(input) || (input as Record<string, unknown>).jsonrpc !== "2.0" || typeof (input as Record<string, unknown>).method !== "string") return error(400, "invalid MCP request");
-          if (secrets.some((secret) => raw.includes(secret) || JSON.stringify(input).includes(secret))) return error(400, "invalid MCP request");
+          if (containsEncodedSecret(raw) || secrets.some((secret) => raw.includes(secret) || JSON.stringify(input).includes(secret))) return error(400, "invalid MCP request");
           if (controller.signal.aborted) throw new Error("aborted");
           forwarded = true;
           const upstream = await centralFetch(endpoint, { method: "POST", redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${supervisorToken}`, "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": incarnationToken, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: raw });
@@ -141,7 +163,7 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
           const text = new TextDecoder("utf-8", { fatal: true }).decode(await readLimited(upstream.body, responseLimit, controller.signal, track));
           const parsed: unknown = JSON.parse(text);
           const normalized = JSON.stringify(parsed);
-          if (secrets.some((secret) => text.includes(secret) || normalized.includes(secret))) return unknown(502);
+          if (containsSecret(parsed) || secrets.some((secret) => text.includes(secret) || normalized.includes(secret))) return unknown(502);
           return new Response(normalized, { status: upstream.status, headers: { "content-type": "application/json" } });
         } catch { return forwarded ? unknown(502) : error(502, "adapter request failed"); }
       })();
