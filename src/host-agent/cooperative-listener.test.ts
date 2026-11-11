@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createConnection } from "node:net";
 import { createCooperativeAdapter } from "./cooperative-adapter";
 import { createCooperativeListener } from "./cooperative-listener";
 
@@ -73,6 +74,46 @@ test("stop drains an active request and is idempotent", async () => {
     await stop;
     expect(listener.stop()).toBe(stop);
   } finally { release(); await listener.stop(); }
+});
+
+test("shutdown does not run a second pipelined handler on the observed connection", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const listener = createCooperativeListener({ handler: async () => { calls++; enter(); await gate; return new Response("done"); }, shutdownTimeoutMs: 1000 });
+  const socket = createConnection({ host: "127.0.0.1", port: listener.port });
+  let stopping = false;
+  const errors: { error: NodeJS.ErrnoException; duringShutdown: boolean }[] = [];
+  socket.on("data", () => {});
+  socket.on("error", (error) => { errors.push({ error, duringShutdown: stopping }); });
+  const closed = new Promise<void>((resolve) => { socket.once("close", () => resolve()); });
+  const within = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 2000); })]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  const request = `GET / HTTP/1.1\r\nHost: 127.0.0.1:${listener.port}\r\nConnection: keep-alive\r\n\r\n`;
+  try {
+    await within(new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); }), "connection");
+    await within(new Promise<void>((resolve, reject) => { socket.write(request, (error) => error ? reject(error) : resolve()); }), "first write");
+    await within(entered, "first handler");
+    const stop = listener.stop();
+    stopping = true;
+    // The first response is still blocked, so this is pipelining, not sequential keep-alive.
+    const writeError = await within(new Promise<NodeJS.ErrnoException | undefined>((resolve) => { socket.write(request, (error) => resolve(error ?? undefined)); }), "second write");
+    release();
+    await within(Promise.all([stop, closed]), "shutdown and socket close");
+    for (const { error, duringShutdown } of errors) {
+      expect(duringShutdown).toBe(true);
+      expect(["ECONNRESET", "EPIPE", "ERR_STREAM_DESTROYED"]).toContain(error.code ?? "");
+    }
+    if (writeError) expect(["ECONNRESET", "EPIPE", "ERR_STREAM_DESTROYED"]).toContain(writeError.code ?? "");
+    // Socket closure can prevent dispatch, so this does not prove the guard ran.
+    expect(calls).toBe(1);
+  } finally { release(); socket.destroy(); await listener.stop(); }
 });
 
 test("stop waits for an accepted handler after the client disconnects", async () => {
