@@ -7,6 +7,7 @@ export type CommandStatus =
   | "delivering" // a delivery attempt is in progress; after a crash this becomes delivery_unknown
   | "delivered" // fleet send confirmed the text appeared in the recipient pane
   | "delivery_unknown" // an attempt may or may not have reached the pane; never retried automatically
+  | "claimed" // cooperatively reserved, not accepted
   | "accepted"
   | "rejected"
   | "running"
@@ -38,6 +39,7 @@ const allowed: Record<CommandStatus, CommandStatus[]> = {
   delivering: ["delivered", "queued", "delivery_unknown"],
   delivered: ["accepted", "rejected"],
   delivery_unknown: ["accepted", "rejected"],
+  claimed: [],
   accepted: ["running", "completed", "failed"],
   running: ["completed", "failed"],
   rejected: [],

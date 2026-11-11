@@ -2,6 +2,28 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Current local central backend prototype
+
+The central backend is a separate local prototype, not a replacement for the existing host service or decentralized client. The current entry point binds to loopback, uses PostgreSQL and mounts an authenticated inventory-only host socket at `/api/host/socket`. Operator-only `GET /api/hosts` lists process-local observations of accepted authenticated sockets and their self-reported session names. Sessions are `null` until inventory arrives; entries disappear on disconnect and are lost on restart. There is no heartbeat or freshness guarantee, so a listed socket does not prove host or session health. The separate client can publish inventory on connection and reconnect, but no running host-agent integration is wired in. Receipts are rejected and dispatch remains disabled.
+
+Supervisor credentials require an explicit `principalId` and a pre-enrolled active PostgreSQL identity binding for the exact name, ID, host and session. Startup checks every configured supervisor; authenticated supervisor HTTP requests recheck the binding. Enrollment and retirement are trusted operator actions, not a runtime-incarnation fence. The phase gate reports approval state but does not authorize or prevent phase changes or execution. A safe restore procedure is neither implemented nor verified.
+
+Command lists over REST and MCP and request lists over MCP expose keyset pagination, with a default page size of 100 and a maximum of 1,000. Traversal is not a snapshot: concurrent inserts or status changes can be missed. The request gate queries independently of the paginated list. Run lists and event queries remain unbounded.
+
+A standalone SQLite receipt outbox stores pending terminal receipts and retains acknowledged records for deduplication, but it is not connected to the host journal, executor, client or central socket. There is no receipt replay or acknowledgement protocol and no actual dispatch. Recovery remains manual and uncoordinated. This prototype is not production ready. The earlier focused test run with PostgreSQL integration disabled reported 73 pass, 12 skip and 0 fail; it does not verify PostgreSQL or a live delivery path. See [central backend status](central-server-status.md) for setup, test scope and limits.
+
+Beyond that entry point, the working tree contains three separate, unmounted pieces: a standalone cooperative HTTP app (`src/central/cooperative-server.ts`), a host-side adapter and loopback listener (`src/host-agent/cooperative-adapter.ts`, `src/host-agent/cooperative-listener.ts`), and a fresh-install provisioner and schema guard (`src/central/cooperative-provision.ts`, `src/central/schema-guard.ts`). Only their tests import them: `src/central/main.ts`, `index.ts` and `client.ts` do not, no CLI calls the provisioner, and no agent, host service or deployed service uses them. The adapter is an in-memory handler, not a process; the listener binds only loopback; the provisioner creates a new schema and fails if it exists, so it does not upgrade or repair anything; the guard checks only the role, search path and installation marker. None of this makes a cooperative path available at runtime. Details and limits: [central backend status](central-server-status.md).
+
+Latest run in this checkout (2026-11-11), with `CENTRAL_TEST_DATABASE_URL` unset: full `bun test` 278 pass, 50 skip, 0 fail across 56 files; `bun check` clean. This supersedes the 73 pass / 12 skip / 0 fail figure above. All PostgreSQL-backed tests, including the provisioner, the guard's role checks and the adapter-to-central integration test, were skipped, so PostgreSQL behavior was not verified by this run. No live agent, remote host or deployed service was involved.
+
+Parallel implementation is unsettled. These are conservative source-inspection claims, not a deployment or live-agent verification. The sections below record earlier service work and verification, not central-backend acceptance.
+
+## Correction: send-keys blocker vs the pinned fix (2026-11-11)
+
+Several sections below say the viewer-plus-send test is skipped, or that a read-only viewer blocks `tmux send-keys`, `fleet send` and the watchdog. That was true of the agent-fleet checkout used then. The repository now pins `vendor/agent-fleet` at `5871fa5` (PR #7, the paste-keys fix; see the pinned-dependency section and [dependency maintenance](agent-fleet-dependency.md)). In this checkout `scripts/watchdog.sh` no longer calls `tmux send-keys`; its `keys()` helper pastes raw bytes, and `src/terminal/viewer-send.test.ts` ran and passed against the pinned CLI with the read-only viewer attached.
+
+What stays open: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md) still says `Status: open` and describes the fix as uncommitted; it was outside the scope of this edit and is stale. A real Claude Code agent receiving the pasted Enter with the page open has not been checked. The viewer should not be used with real agent sessions until that check and the owner's authorization. This fix lives only in the repository's pinned submodule: the installed `.4` service was not upgraded and still runs its earlier code, `.15` was not contacted, and nothing was deployed or pushed.
+
 ## Latest: pinned CLI dependency (2026-11-09)
 
 `vendor/agent-fleet` is a Git submodule pinned to `5871fa5306ab5f547b9b012018c27fe99ad008a0`. Host service, demos and integration tests share a repository-relative CLI resolver; explicit environment overrides remain. Initialize the submodule when cloning/updating. See [dependency maintenance](agent-fleet-dependency.md).
@@ -14,7 +36,7 @@ Implemented on `feat/decentralized-client`: a loopback-only MacBook gateway (`cl
 
 The live deck now nests sessions under selectable hosts and scopes terminal sockets, requests, commands, drafts and idempotent retry intents by host. An unavailable host is unknown, not stopped; it cannot enable commands or approvals, and other hosts continue independently. The selected full-window layout is preserved.
 
-Verification: **161 pass, 3 skip, 0 fail**, typecheck clean, design handler check PASS. Real local services with separate SQLite stores, two private shell fleets and browser renders verified host isolation, approval scope, draft switching and offline behavior. The viewer-plus-send test is skipped because the selected agent-fleet checkout lacks its separate send-keys fix. Details: [multi-host evidence](evidence-2026-11-09-multi-host.md).
+Verification: **161 pass, 3 skip, 0 fail**, typecheck clean, design handler check PASS. Real local services with separate SQLite stores, two private shell fleets and browser renders verified host isolation, approval scope, draft switching and offline behavior. The viewer-plus-send test was skipped then because the selected agent-fleet checkout lacked its separate send-keys fix (superseded: see the 2026-11-11 correction near the top). Details: [multi-host evidence](evidence-2026-11-09-multi-host.md).
 
 Run/install: [multi-host guide](multi-host.md), [plan and acceptance](decentralized-client-plan.md). No Linux workstation was contacted or deployed for this change. The existing `.4` service was not upgraded. `.15` remains on hold. Linux systemd instructions are a template, not runtime proof.
 
@@ -126,7 +148,7 @@ Not covered: a supervisor doing real work with shell or file tools, a long-runni
 - Tests: `src/requests.test.ts` (15), `src/requests.api.test.ts` (5: MCP ask, REST answer, gate; MacBook-vs-page conflict; stale revision, foreign or missing Origin; worker cannot write phase). Full suite on `.4` (private checkout `~/Development/fleet-control-dev`, private tmux sockets, loopback only): 71 pass, 0 fail; `bun check` clean; `design:check` PASS. Negative controls: removing staling, the conflict check, the revision check in `gate`, or the Origin-required check each make one test fail.
 - Browser check on `.4`'s service through an SSH tunnel (Chrome via agent-browser, 1440x900, dark): request, workflow, commands and composer render in the baseline layout; Approve in the page recorded `approve` by `web-ui` for revision 1 and showed "Answered, awaiting acknowledgement"; the instruction reached the pane text.
 
-Finding, not fixed: with the read-only viewer attached, `tmux send-keys` is refused with `client is read-only`, so `fleet send` pasted the instruction but could not press Enter (exit 7). The command was recorded as `delivery_unknown`, which is correct. This also blocks every watchdog `send-keys` while a viewer is open. Write-up and repro: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md). The viewer must not be used with real agent sessions until this is fixed.
+Finding (historical; fixed in the pinned agent-fleet, see the 2026-11-11 correction near the top): with the read-only viewer attached, `tmux send-keys` is refused with `client is read-only`, so `fleet send` pasted the instruction but could not press Enter (exit 7). The command was recorded as `delivery_unknown`, which is correct. This also blocks every watchdog `send-keys` while a viewer is open. Write-up and repro: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md). The viewer must not be used with real agent sessions until this is fixed.
 
 Not covered: a real orchestrator using the request tools, phased-delivery writing its phase record through `phase_update`, multiple runs in the panel, push updates instead of polling, 600px layout, accessibility review, HIG review through Docify.
 
@@ -152,7 +174,7 @@ Setup and removal: [installation.md](installation.md). Evidence read back from t
 ## Not implemented in this project
 
 - A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. `.15` has nothing.
-- Using the viewer with real agent sessions: blocked by the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)), handed to a separate agent-fleet session.
+- Using the viewer with real agent sessions: the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)) is fixed in the pinned `vendor/agent-fleet` (see the 2026-11-11 correction above), but a real Claude Code agent receiving the pasted Enter with the viewer open is unchecked, the installed `.4` service was not upgraded, and real-session use needs the owner's authorization.
 - phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
 - Terminal input and exclusive input leases. The viewer is read-only by design.
 - Push event stream (the page polls every 3 s for requests and commands, 15 s for sessions).
@@ -210,8 +232,8 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Suggested next order
 
-1. Verify the agent-fleet `send-keys` fix from Fleet Control once it lands (page open, `fleet send` returns `delivered`).
-2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, after the `send-keys` fix.
+1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Still open: the same with a real Claude Code agent, and upgrading the installed `.4` service (not authorized so far).
+2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, after the real-agent check above and the `.4` upgrade decision.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
 4. Input lease design, then implementation.
 5. `.15` when the hold is lifted.
