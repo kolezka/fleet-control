@@ -107,6 +107,31 @@ test("MCP accepts maximum lifecycle detail including escaped and UTF-8 text", as
   }
 });
 
+test("oversized streams handle rejected cancellation without an unhandled rejection", async () => {
+  const f = fixture();
+  const cancellationError = new Error("stream cancellation failed");
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    for (const [path, limit] of [["/api/commands", 32 * 1024], ["/mcp", 512 * 1024]] as const) {
+      let cancelled = false;
+      const body = new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(limit + 1)); },
+        cancel() { cancelled = true; return Promise.reject(cancellationError); },
+      });
+      const request = new Request(`http://localhost${path}`, { method: "POST", headers: headers("operator"), body, duplex: "half" } as RequestInit);
+      expect((await f.app.fetch(request)).status).toBe(413);
+      expect(cancelled).toBe(true);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(unhandled).toEqual([]);
+    expect(f.calls).toHaveLength(0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 test("MCP streaming rejects bodies over its limit without content length", async () => {
   const f = fixture();
   const body = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(512 * 1024)); controller.enqueue(new Uint8Array(1)); controller.close(); } });

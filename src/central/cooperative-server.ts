@@ -28,7 +28,7 @@ async function readBody(request: Request, maxBody = MAX_BODY): Promise<Uint8Arra
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > maxBody) { void reader.cancel(); throw new RangeError(); }
+      if (size > maxBody) { void reader.cancel().catch(() => {}); throw new RangeError(); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
