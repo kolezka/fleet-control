@@ -75,6 +75,23 @@ pgTest("independent assertions conflict on stale versions and preserve divergent
     expect(await write("rollback", "unknown", rejected!.seq, "4")).toMatchObject({ sequence: "5", supersedesSequence: "4" });
     await db`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, expected_sequence, sequence, supersedes_sequence, at) VALUES ('large-fixture', ${command.id}, 'operator', 'unknown', '', ${rejected!.seq}, 9007199254740993, 5, 'fixture')`;
     expect(await write("large-next", "unknown", rejected!.seq, "9007199254740993")).toMatchObject({ sequence: "9007199254740994", supersedesSequence: "9007199254740993" });
+    const beforeRead = await db`SELECT * FROM central_cooperative_reconciliations ORDER BY sequence`;
+    await expect(store.list(supervisor, command.id)).rejects.toThrow(/denied/);
+    await expect(store.list({ role: "operator", name: " " }, command.id)).rejects.toThrow(/denied/);
+    expect(await store.list(operator, "missing")).toBeNull();
+    for (const cursor of ["", "01", "-1", "1.0", "1".repeat(1001)]) await expect(store.list(operator, command.id, { cursor })).rejects.toThrow(/cursor/);
+    for (const limit of [0, 1001, 1.5, NaN]) await expect(store.list(operator, command.id, { limit })).rejects.toThrow(/limit/);
+    const firstPage = await store.list(operator, command.id, { limit: 2 });
+    expect(firstPage?.assertions.map((item) => item.sequence)).toEqual(["1", "2"]);
+    expect(firstPage?.nextCursor).toBe("2");
+    const nextPage = await store.list(operator, command.id, { limit: 2, cursor: firstPage!.nextCursor! });
+    expect(nextPage?.assertions.map((item) => item.sequence)).toEqual(["3", "4"]);
+    const largePage = await store.list(operator, command.id, { limit: 1, cursor: "5" });
+    expect(largePage?.assertions[0]).toMatchObject({ sequence: "9007199254740993", supersedesSequence: "5", expectedSequence: rejected!.seq });
+    expect(largePage?.nextCursor).toBe("9007199254740993");
+    expect((await store.list(operator, command.id, { cursor: largePage!.nextCursor! }))?.assertions.map((item) => item.sequence)).toEqual(["9007199254740994"]);
+    expect(await store.list(operator, command.id, { cursor: "9".repeat(1000) })).toEqual({ assertions: [], nextCursor: null });
+    expect(await db`SELECT * FROM central_cooperative_reconciliations ORDER BY sequence`).toEqual(beforeRead);
     expect(await db`SELECT * FROM central_commands WHERE id = ${command.id}`).toEqual(before.command);
     expect(await db`SELECT * FROM central_cooperative_claims WHERE command_id = ${command.id}`).toEqual(before.claim);
     expect(await db`SELECT * FROM central_command_events WHERE command_id = ${command.id} ORDER BY seq`).toEqual(before.events);
@@ -82,6 +99,39 @@ pgTest("independent assertions conflict on stale versions and preserve divergent
   } finally {
     await Promise.all([db.close(), other.close()]);
     try { await admin`DROP SCHEMA ${admin(schema)} CASCADE`; } finally { await admin.close(); }
+  }
+});
+
+pgTest("assertion listing uses the supplied transaction runner and distinguishes empty claims", async () => {
+  const admin = new SQL(url!);
+  const suffix = crypto.randomUUID().replaceAll("-", "");
+  const safe = `assertion_safe_${suffix}`;
+  const shadow = `assertion_shadow_${suffix}`;
+  await admin`CREATE SCHEMA ${admin(safe)}`;
+  await admin`CREATE SCHEMA ${admin(shadow)}`;
+  const db = new SQL(url!, { connection: { search_path: shadow } });
+  try {
+    await admin.unsafe(`CREATE TABLE "${safe}".central_cooperative_claims (command_id TEXT PRIMARY KEY)`);
+    await admin.unsafe(`CREATE TABLE "${safe}".central_command_event_lock (id INTEGER PRIMARY KEY)`);
+    await admin.unsafe(`INSERT INTO "${safe}".central_command_event_lock VALUES (1)`);
+    const trusted = new SQL(url!, { connection: { search_path: safe } });
+    try {
+      await new CooperativeReconciliation(trusted).initialize();
+      await trusted`INSERT INTO central_cooperative_claims VALUES ('empty'), ('present')`;
+      await trusted`INSERT INTO central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('real', 'present', 'operator', 'unknown', 'real evidence', 1, 'now')`;
+      await db`CREATE TABLE central_cooperative_claims (command_id TEXT PRIMARY KEY)`;
+      await db`CREATE TABLE central_cooperative_reconciliations (command_id TEXT, request_id TEXT, actor TEXT, disposition TEXT, evidence TEXT, expected_sequence TEXT, sequence NUMERIC, supersedes_sequence NUMERIC, at TEXT)`;
+      await db`INSERT INTO central_cooperative_claims VALUES ('present')`;
+      await db`INSERT INTO central_cooperative_reconciliations VALUES ('present', 'decoy', 'operator', 'unknown', 'shadow', NULL, 1, NULL, 'now')`;
+      const store = new CooperativeReconciliation(db, undefined, (operation) => trusted.begin(operation));
+      const operator = { role: "operator" as const, name: "operator" };
+      expect(await store.list(operator, "empty")).toEqual({ assertions: [], nextCursor: null });
+      expect((await store.list(operator, "present"))?.assertions[0]?.requestId).toBe("real");
+      expect(await store.list(operator, "absent")).toBeNull();
+    } finally { await trusted.close(); }
+  } finally {
+    await db.close();
+    try { await admin`DROP SCHEMA ${admin(safe)} CASCADE`; await admin`DROP SCHEMA ${admin(shadow)} CASCADE`; } finally { await admin.close(); }
   }
 });
 

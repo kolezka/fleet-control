@@ -1,4 +1,4 @@
-import type { SQL } from "bun";
+import type { SQL, TransactionSQL } from "bun";
 import { CommandError } from "../commands.ts";
 import type { Principal } from "./auth.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
@@ -28,6 +28,30 @@ export class CooperativeReconciliation {
       await tx`DROP TRIGGER IF EXISTS central_block_reconciliation_mutation ON central_cooperative_reconciliations`;
       await tx`CREATE TRIGGER central_block_reconciliation_mutation BEFORE UPDATE OR DELETE ON central_cooperative_reconciliations FOR EACH ROW EXECUTE FUNCTION central_block_reconciliation_mutation()`;
     });
+  }
+
+  // Missing commands and claims both return null; a claim without assertions returns an empty page.
+  // Pages are live reads, not a snapshot across calls.
+  async list(principal: Principal, commandId: string, options: { limit?: number; cursor?: string } = {}): Promise<{ assertions: Reconciliation[]; nextCursor: string | null } | null> {
+    if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
+    if (!validId(commandId)) throw new CommandError("invalid", "invalid command ID");
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new CommandError("invalid", "invalid limit");
+    const cursor = options.cursor ?? "0";
+    if (typeof cursor !== "string" || !/^(0|[1-9][0-9]{0,999})$/.test(cursor)) throw new CommandError("invalid", "invalid cursor");
+    type Row = { commandId: string; requestId: string | null; actor: string | null; disposition: ReconciliationDisposition | null; evidence: string | null; expectedSequence: string | null; sequence: string | null; supersedesSequence: string | null; at: string | null };
+    const query = async (db: SQL | TransactionSQL) => {
+      const rows = await db<Row[]>`SELECT claim.command_id AS "commandId", assertion.request_id AS "requestId", assertion.actor, assertion.disposition, assertion.evidence, assertion.expected_sequence AS "expectedSequence", assertion.sequence::text AS sequence, assertion.supersedes_sequence::text AS "supersedesSequence", assertion.at
+        FROM central_cooperative_claims claim LEFT JOIN LATERAL (
+          SELECT * FROM central_cooperative_reconciliations WHERE command_id = claim.command_id AND sequence > ${cursor}::numeric ORDER BY sequence LIMIT ${limit + 1}
+        ) assertion ON true WHERE claim.command_id = ${commandId} ORDER BY assertion.sequence`;
+      if (!rows.length) return null;
+      const assertions = rows.filter((row) => row.sequence !== null).map((row): Reconciliation => ({ commandId: row.commandId, requestId: row.requestId!, actor: row.actor!, disposition: row.disposition!, evidence: row.evidence!, expectedSequence: row.expectedSequence, sequence: row.sequence!, supersedesSequence: row.supersedesSequence, at: row.at! }));
+      const hasMore = assertions.length > limit;
+      if (hasMore) assertions.pop();
+      return { assertions, nextCursor: hasMore ? assertions[assertions.length - 1]!.sequence : null };
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 
   async reconcile(principal: Principal, commandId: string, requestId: string, disposition: ReconciliationDisposition, evidence: string, expectedSequence: string | null, expectedAssertionSequence: string | null): Promise<Reconciliation> {
