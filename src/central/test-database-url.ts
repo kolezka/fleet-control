@@ -25,3 +25,9 @@ export function centralTestDatabaseUrl(env: Readonly<Record<string, string | und
   }
   return value;
 }
+
+export function withValidatedTestDatabaseUrl<T>(env: Readonly<Record<string, string | undefined>>, expectedUrl: string, connect: (url: string) => T): T {
+  const url = centralTestDatabaseUrl(env);
+  if (!url || url !== expectedUrl) throw new Error("test database URL changed before SQL creation");
+  return connect(url);
+}

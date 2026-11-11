@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { centralTestDatabaseUrl } from "./test-database-url";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url";
 
 const valid = "postgres://user:password@127.0.0.1:57507/fleet_control_test";
 
@@ -45,6 +45,26 @@ describe("centralTestDatabaseUrl", () => {
       }
     }
     expect(centralTestDatabaseUrl({ OTHER: "allowed", CENTRAL_TEST_DATABASE_URL: valid })).toBe(valid);
+  });
+
+  test("rechecks the environment before invoking the connection factory", () => {
+    const env: Record<string, string | undefined> = { CENTRAL_TEST_DATABASE_URL: valid };
+    let calls = 0;
+    const connect = (url: string) => { calls++; return url; };
+    expect(centralTestDatabaseUrl(env)).toBe(valid);
+    env.PGDATABASE = "other";
+    expect(() => withValidatedTestDatabaseUrl(env, valid, connect)).toThrow("refusing ambient PostgreSQL environment variables");
+    delete env.PGDATABASE;
+    env.CENTRAL_TEST_DATABASE_URL = "postgres://user@127.0.0.1:57507/other";
+    expect(() => withValidatedTestDatabaseUrl(env, valid, connect)).toThrow();
+    env.CENTRAL_TEST_DATABASE_URL = "postgres://other@127.0.0.1:57507/fleet_control_test";
+    expect(() => withValidatedTestDatabaseUrl(env, valid, connect)).toThrow("test database URL changed before SQL creation");
+    env.CENTRAL_TEST_DATABASE_URL = undefined;
+    expect(() => withValidatedTestDatabaseUrl(env, valid, connect)).toThrow();
+    expect(calls).toBe(0);
+    env.CENTRAL_TEST_DATABASE_URL = valid;
+    expect(withValidatedTestDatabaseUrl(env, valid, connect)).toBe(valid);
+    expect(calls).toBe(1);
   });
 
   test("does not expose invalid URL credentials", () => {

@@ -1,12 +1,13 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { CentralCommands } from "./commands.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("command cursors bind every filter across pages", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const hostId = `cursor-${crypto.randomUUID()}`;
   const store = new CentralCommands(db, () => new Date("2025-01-01T00:00:00.000Z"));
   const scope = { hostId, target: "session" };
