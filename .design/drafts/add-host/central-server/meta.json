@@ -1,0 +1,16 @@
+{
+  "title": "Add host",
+  "direction": "Add a host from the GUI: one-time join code and a copyable command, the owner runs it on the host.",
+  "status": "candidate",
+  "versions": {
+    "v1": {}
+  },
+  "proposed": [
+    "Central server (Hono on Bun + PostgreSQL) holding hosts, sessions, requests, commands and history; does not exist yet.",
+    "Host agent that connects out to the server, reports sessions, heartbeats and delivery outcomes; does not exist yet.",
+    "Live push instead of 3 s / 15 s polling.",
+    "`fleet-control agent join` and one-time join codes with expiry and revoke; `agent install-service` for launchd/systemd.",
+    "Pending host row until the agent connects."
+  ],
+  "notes": "Parent is console/central-server v1 (cross-target, recorded in notes because version lineage resolves within a target). The sheet is anchored over the deck so the sidebar stays visible."
+}

@@ -1,0 +1,23 @@
+{
+  "title": "Central server deck",
+  "direction": "Same Terminal Deck, fed by one server: real host connection state in the sidebar and one request queue for all hosts on the right.",
+  "status": "candidate",
+  "versions": {
+    "v1": {
+      "parent": {
+        "draft": "terminal-deck",
+        "version": 4
+      }
+    }
+  },
+  "proposed": [
+    "Central server (Hono on Bun + PostgreSQL) holding hosts, sessions, requests, commands and history; does not exist yet.",
+    "Host agent that connects out to the server, reports sessions, heartbeats and delivery outcomes; does not exist yet.",
+    "Live push instead of 3 s / 15 s polling.",
+    "Host connection state, agent version and disconnect time in the sidebar (from agent heartbeats).",
+    "Request queue across hosts with a host tag; offline requests require revalidation before action.",
+    "Server connection indicator in the titlebar.",
+    "Add host entry point in the sidebar."
+  ],
+  "notes": "Layout, tokens and panel order are unchanged from the selected Terminal Deck. Workflow, commands and composer stay scoped to the selected host. Host names, models and versions are sample data."
+}

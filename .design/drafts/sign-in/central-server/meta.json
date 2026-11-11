@@ -1,0 +1,12 @@
+{
+  "title": "Server sign-in",
+  "direction": "Existing token sign-in, now for the server instead of one host, with the server address and TLS state shown.",
+  "status": "candidate",
+  "versions": {
+    "v1": {}
+  },
+  "proposed": [
+    "Server address and certificate state on the sign-in card."
+  ],
+  "notes": "Based on web/login.html. The error line is shown on purpose to review the error state."
+}
