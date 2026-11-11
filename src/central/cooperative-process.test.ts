@@ -145,6 +145,10 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     const [runtime] = await db`SELECT current_user AS role, current_schema() AS name`;
     expect(runtime?.role).toBe(fixture.role);
     expect(runtime?.name).toBe(schema);
+    expect(await db`SELECT id FROM central_commands WHERE id = ${id}`).toEqual([{ id }]);
+    for (const table of ["central_runs", "central_requests", "central_request_events", "central_request_event_lock"]) {
+      await expect(db`SELECT * FROM ${db(table)} LIMIT 1`).rejects.toThrow("permission denied");
+    }
     const replacement = await new SupervisorIncarnations(db).activate(principal);
     secrets.push(replacement.token);
     const incarnations = new SupervisorIncarnations(db);
