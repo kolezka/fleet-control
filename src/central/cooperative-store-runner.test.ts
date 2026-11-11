@@ -62,6 +62,11 @@ pgTest("injected runner encloses each cooperative operation in one transaction",
     await once(() => lifecycle.report(identity, credential, command.id, "report", "accepted", "accepted"));
     const result = await once(() => inspection.inspect(command.id));
     expect(result?.events[0]?.status).toBe("accepted");
+    const bounded = await once(() => inspection.inspectBounded(command.id, { limit: 1 }));
+    expect(bounded).toEqual(result);
+    const beforeInvalid = calls;
+    await expect(inspection.inspectBounded(command.id, { limit: 5 })).rejects.toThrow("invalid limit");
+    expect(calls).toBe(beforeInvalid);
     for (const table of ["central_command_event_lock", "central_cooperative_claims", "central_cooperative_lifecycle_events", "central_cooperative_reconciliations"]) {
       await db`CREATE TABLE ${db(shadowSchema)}.${db(table)} AS SELECT * FROM ${db(schema)}.${db(table)}`;
     }
