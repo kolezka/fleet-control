@@ -1,4 +1,4 @@
-import { SQL } from "bun";
+import { SQL, type TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
 import { CentralCommands } from "./commands.ts";
 import { CentralAttempts } from "./attempts.ts";
@@ -53,6 +53,38 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     expect((await db`SELECT count(*)::int AS count FROM central_cooperative_lifecycle_events`)[0]!.count).toBe(3);
     for (const options of [{ limit: 0 }, { limit: 1001 }, { cursor: "01" }, { cursor: "9223372036854775808" }, { cursor: "-1" }]) await expect(inspection.inspect(command.id, options)).rejects.toThrow();
     await expect(inspection.inspect("")).rejects.toThrow();
+
+    // Capture the actual PostgreSQL result before inspectBounded processes it.
+    let sqlRows: Record<string, unknown>[] = [];
+    const capturingDb = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      const query = db(strings, ...values);
+      return query.then((rows: Record<string, unknown>[]) => { sqlRows = rows; return rows; });
+    }) as unknown as TransactionSQL;
+    const bounded = new CooperativeInspection(db, async (operation) => operation(capturingDb));
+    const firstEvent = page!.events[0]!;
+    const rowFields = [...Object.values(page!.command), ...Object.values(page!.claim!), ...Object.values(firstEvent)];
+    const baseBytes = rowFields.reduce((sum, value) => sum + Buffer.byteLength(String(value), "utf8"), 0) - Buffer.byteLength(firstEvent.detail, "utf8");
+    const detailBytes = 270336 - baseBytes;
+    const boundaryDetail = "é".repeat(Math.floor(detailBytes / 2)) + (detailBytes % 2 ? "x" : "");
+    expect(Buffer.byteLength(boundaryDetail, "utf8") + baseBytes).toBe(270336);
+    await db`UPDATE central_cooperative_lifecycle_events SET detail = ${boundaryDetail} WHERE seq = ${firstEvent.seq}::bigint`;
+    const boundary = await bounded.inspectBounded(command.id, { limit: 1 });
+    expect(boundary!.events[0]!.detail).toBe(boundaryDetail);
+    expect(boundary!.nextCursor).toBe(firstEvent.seq);
+    expect(sqlRows[0]!.oversized).toBe(false);
+    expect(sqlRows[0]!.eventDetail).toBe(boundaryDetail);
+
+    await db`UPDATE central_cooperative_lifecycle_events SET detail = ${boundaryDetail + "x"} WHERE seq = ${firstEvent.seq}::bigint`;
+    await expect(bounded.inspectBounded(command.id, { limit: 1 })).rejects.toThrow("inspection page too large");
+    expect(sqlRows[0]!.oversized).toBe(true);
+    expect(Object.entries(sqlRows[0]!).filter(([key]) => key !== "oversized").every(([, value]) => value === null)).toBe(true);
+    await db`UPDATE central_cooperative_lifecycle_events SET detail = ${boundaryDetail} WHERE seq = ${firstEvent.seq}::bigint`;
+    await db`UPDATE central_cooperative_lifecycle_events SET detail = ${boundaryDetail + "xxxxxxxxxx"} WHERE seq = ${page!.events[1]!.seq}::bigint`;
+    await expect(bounded.inspectBounded(command.id, { limit: 1 })).rejects.toThrow("inspection page too large");
+    expect(sqlRows[0]!.oversized).toBe(false);
+    expect(sqlRows[1]!.oversized).toBe(true);
+    expect(Object.entries(sqlRows[1]!).filter(([key]) => key !== "oversized").every(([, value]) => value === null)).toBe(true);
+
   } finally {
     await db.close();
     try { await admin`DROP SCHEMA ${admin(schema)} CASCADE`; } finally { await admin.close(); }
