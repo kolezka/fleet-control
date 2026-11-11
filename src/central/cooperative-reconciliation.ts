@@ -59,7 +59,7 @@ export class CooperativeReconciliation {
     if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
     if (!validId(commandId) || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 4) throw new CommandError("invalid", "invalid parameters");
     const cursor = options.cursor ?? "0";
-    if (!/^(0|[1-9][0-9]{0,999})$/.test(cursor)) throw new CommandError("invalid", "invalid cursor");
+    if (typeof cursor !== "string" || !/^(0|[1-9][0-9]{0,999})$/.test(cursor)) throw new CommandError("invalid", "invalid cursor");
     type Row = { present: boolean; oversized: boolean; commandId: string | null; requestId: string | null; actor: string | null; disposition: ReconciliationDisposition | null; evidence: string | null; expectedSequence: string | null; sequence: string | null; supersedesSequence: string | null; at: string | null };
     const query = async (db: SQL | TransactionSQL) => {
       // CASE prevents oversized fields crossing the database connection. One statement

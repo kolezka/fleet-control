@@ -11,6 +11,14 @@ import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
 const pgTest = url ? test : test.skip;
 
+test("bounded assertion reads reject non-string cursors before querying", async () => {
+  const store = new CooperativeReconciliation({} as SQL, undefined, async () => { throw new Error("unexpected query"); });
+  const operator = { role: "operator" as const, name: "operator" };
+  for (const cursor of [1, { toString: () => "1" }]) {
+    await expect(store.listBounded(operator, "command", { limit: 1, cursor: cursor as unknown as string })).rejects.toThrow("invalid cursor");
+  }
+});
+
 pgTest("independent assertions conflict on stale versions and preserve divergent evidence", async () => {
   const admin = new SQL(url!);
   const schema = `reconciliation_test_${crypto.randomUUID().replaceAll("-", "")}`;
