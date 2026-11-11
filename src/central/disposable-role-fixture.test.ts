@@ -10,6 +10,17 @@ test("disposable role rejects non-local URLs before connecting", async () => {
   await expect(disposableCooperativeRole("postgres://postgres@127.0.0.1:57507/other")).rejects.toThrow("refusing non-disposable");
 });
 
+test("disposable role rejects hostile ambient PGDATABASE before connecting", async () => {
+  const previous = process.env.PGDATABASE;
+  try {
+    process.env.PGDATABASE = "hostile_database";
+    await expect(disposableCooperativeRole("postgres://postgres@127.0.0.1:57507/fleet_control_test")).rejects.toThrow("refusing ambient PostgreSQL environment variables");
+  } finally {
+    if (previous === undefined) delete process.env.PGDATABASE;
+    else process.env.PGDATABASE = previous;
+  }
+});
+
 test("ambiguous fixture close failure does not replace startup failure", async () => {
   const startupError = new Error("startup failed");
   const messages: string[] = [];

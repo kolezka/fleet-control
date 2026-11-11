@@ -39,6 +39,17 @@ test("configuration requires an absolute incarnation file path", () => {
     expect(() => cooperativeConfig({ ...valid, COOPERATIVE_INCARNATION_FILE: value })).toThrow("absolute incarnation file path required");
 });
 
+test("startup rejects hostile ambient PGDATABASE even with a sanitized custom env", async () => {
+  const previous = process.env.PGDATABASE;
+  try {
+    process.env.PGDATABASE = "hostile_database";
+    await expect(startCooperative({ ...valid, COOPERATIVE_CREDENTIALS_FILE: "/nonexistent/cooperative-credentials" })).rejects.toThrow("refusing ambient PostgreSQL environment variables");
+  } finally {
+    if (previous === undefined) delete process.env.PGDATABASE;
+    else process.env.PGDATABASE = previous;
+  }
+});
+
 test("startup refuses an existing incarnation file and leaves it untouched", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fleet-cooperative-"));
   try {

@@ -12,6 +12,7 @@ import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
 import { provisionCooperative } from "./cooperative-provision.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import { withCooperativeSchema } from "./schema-guard.ts";
+import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
 // Disposable experiment only. The database and all its roles/writers must be trusted.
@@ -77,6 +78,7 @@ async function writeIncarnationFile(path: string, credential: { incarnationId: s
 
 export async function startCooperative(env: Record<string, string | undefined> = process.env) {
   const config = cooperativeConfig(env);
+  rejectAmbientPostgresEnvironment(process.env);
   // Checked early so no schema is provisioned; the exclusive create below is the real guard.
   if (!(await missing(config.incarnationFile))) throw new Error("incarnation file must not exist");
   let credentials: Credential[];
@@ -85,11 +87,13 @@ export async function startCooperative(env: Record<string, string | undefined> =
   const auth = new CentralAuth(credentials);
   const supervisor = credentials.find((c) => c.principal.role === "supervisor")!.principal;
   if (supervisor.role !== "supervisor") throw new Error("supervisor required");
+  rejectAmbientPostgresEnvironment(process.env);
   const admin = new SQL(config.databaseUrl);
   let db: SQL | undefined;
   try {
     await provisionCooperative(admin, { testSchema: config.schema, runtimeRole: config.runtimeRole });
     await admin.close();
+    rejectAmbientPostgresEnvironment(process.env);
     db = new SQL(config.runtimeDatabaseUrl);
     const pool = db;
     const runner: CooperativeTransactionRunner = (operation) => withCooperativeSchema(pool, config.schema, operation);

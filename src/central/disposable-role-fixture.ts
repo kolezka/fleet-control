@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import { randomBytes } from "node:crypto";
+import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
 
 export async function cleanupCooperativeRole(
   fixture: Awaited<ReturnType<typeof disposableCooperativeRole>>, schema: string, ambiguous: boolean, report: (message: string) => void = console.error,
@@ -12,6 +13,7 @@ export async function cleanupCooperativeRole(
 
 // This helper is for the trusted, disposable local test cluster only.
 export async function disposableCooperativeRole(adminUrl: string) {
+  rejectAmbientPostgresEnvironment(process.env);
   let url: URL;
   try { url = new URL(adminUrl); } catch { throw new Error("invalid disposable database URL"); }
   if (!["postgres:", "postgresql:"].includes(url.protocol) || url.hostname !== "127.0.0.1" || url.port !== "57507" || url.pathname !== "/fleet_control_test" || !url.username || url.search || url.hash) {
