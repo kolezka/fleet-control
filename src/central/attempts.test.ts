@@ -1,14 +1,15 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { CentralCommands } from "./commands.ts";
 import { CentralAttempts } from "./attempts.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("delivery attempts serialize dispatch and authenticate idempotent receipts", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const commands = new CentralCommands(db);
     const attempts = new CentralAttempts(db);
@@ -63,7 +64,7 @@ integration("delivery attempts serialize dispatch and authenticate idempotent re
 });
 
 integration("a queued command with a prior attempt cannot be dispatched again", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const commands = new CentralCommands(db);
     const attempts = new CentralAttempts(db);
@@ -85,7 +86,7 @@ integration("a queued command with a prior attempt cannot be dispatched again", 
 });
 
 integration("restart reconciliation marks interrupted attempts unknown without claiming delivery", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const commands = new CentralCommands(db);
     const attempts = new CentralAttempts(db);
@@ -107,8 +108,8 @@ integration("restart reconciliation marks interrupted attempts unknown without c
 });
 
 integration("receipts and responses commute without losing audit or execution state", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const commands = new CentralCommands(db);
     const secondCommands = new CentralCommands(other);

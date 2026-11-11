@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { withCooperativeSchema } from "./schema-guard";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const authorized = url === "postgres://postgres@127.0.0.1:57507/fleet_control_test";
 
 test("rejects invalid identifiers before opening a transaction", async () => {
@@ -16,7 +17,7 @@ describe.skipIf(!authorized)("cooperative schema guard on disposable PostgreSQL"
   test("pins each transaction, rejects unsafe roles and requires an exact marker", async () => {
     const suffix = crypto.randomUUID().replaceAll("-", "");
     const role = `cg_role_${suffix}`, schema = `cg_schema_${suffix}`;
-    const admin = new SQL(url!);
+    const admin = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
     let roleCreated = false, schemaCreated = false;
     let db: SQL | undefined;
     try {
@@ -31,8 +32,11 @@ describe.skipIf(!authorized)("cooperative schema guard on disposable PostgreSQL"
       await admin`INSERT INTO ${admin(schema)}.central_cooperative_schema_marker VALUES ('fleet_cooperative_v1')`;
       await admin`GRANT USAGE ON SCHEMA ${admin(schema)} TO ${admin(role)}`;
       await admin`GRANT SELECT ON ${admin(schema)}.central_cooperative_schema_marker TO ${admin(role)}`;
-      const roleUrl = new URL(url!); roleUrl.username = role;
-      db = new SQL(roleUrl.toString(), { max: 1 });
+      db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => {
+        const roleUrl = new URL(currentUrl);
+        roleUrl.username = role;
+        return new SQL(roleUrl.toString(), { max: 1 });
+      });
       await db`CREATE TEMP TABLE central_cooperative_schema_marker (version TEXT)`;
       await db`INSERT INTO central_cooperative_schema_marker VALUES ('hostile')`;
       const result = await withCooperativeSchema(db, schema, async (tx) => {

@@ -1,12 +1,14 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { CentralRequests, type RequestMutationGuard } from "./requests.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("guards run in the mutation transaction, before locks, and roll back on denial", async () => {
-  const db = new SQL(url!), other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const store = new CentralRequests(db);
   const runId = `fenced-${crypto.randomUUID()}`;
   const rejectedRunId = `fenced-${crypto.randomUUID()}`;

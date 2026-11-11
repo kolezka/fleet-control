@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { CentralRequests } from "./requests.ts";
 
 test("scoped gate requires a guard before reading owner and decision", async () => {
@@ -24,11 +25,12 @@ test("scoped gate requires a guard before reading owner and decision", async () 
   expect(calls).toEqual([]);
 });
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("scoped gate fences before owner and decision and rolls back guard writes on denial", async () => {
-  const db = new SQL(url!), other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const store = new CentralRequests(db);
   const runId = `gate-fenced-${crypto.randomUUID()}`, marker = `gate-marker-${crypto.randomUUID()}`;
   try {

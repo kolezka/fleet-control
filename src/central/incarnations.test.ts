@@ -1,9 +1,10 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { SupervisorIdentityRegistry, type SupervisorIdentity } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 
-const url: string = process.env.CENTRAL_TEST_DATABASE_URL ?? "";
+const url = centralTestDatabaseUrl(process.env);
 const pgTest = url ? test : test.skip;
 const identity = (): SupervisorIdentity => ({ principalId: crypto.randomUUID(), name: "supervisor", hostId: crypto.randomUUID(), session: "session-a" });
 
@@ -24,7 +25,7 @@ async function waitForBlock(db: SQL, pid: number, blockerPid: number): Promise<b
 }
 
 pgTest("activation replaces credentials without rebinding and retirement fences claims", async () => {
-  const db = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const incarnations = new SupervisorIncarnations(db);
   const principal = identity();
@@ -55,8 +56,8 @@ pgTest("activation replaces credentials without rebinding and retirement fences 
 });
 
 pgTest("concurrent activations serialize and exactly one credential remains valid", async () => {
-  const db = new SQL(url);
-  const other = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const first = new SupervisorIncarnations(db);
   const second = new SupervisorIncarnations(other);
@@ -71,8 +72,8 @@ pgTest("concurrent activations serialize and exactly one credential remains vali
 });
 
 pgTest("claim lock orders replacement and identity retirement after the claim transaction", async () => {
-  const db = new SQL(url);
-  const other = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const incarnations = new SupervisorIncarnations(db);
   const rivalConnection = await other.reserve();
@@ -108,7 +109,7 @@ pgTest("claim lock orders replacement and identity retirement after the claim tr
 });
 
 pgTest("replacement fences a different principal in the same slot and leaves other slots alone", async () => {
-  const db = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const incarnations = new SupervisorIncarnations(db);
   const first = identity();
@@ -128,8 +129,8 @@ pgTest("replacement fences a different principal in the same slot and leaves oth
 });
 
 pgTest("concurrent first activations across principals leave only one valid credential", async () => {
-  const db = new SQL(url);
-  const other = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const first = new SupervisorIncarnations(db);
   const second = new SupervisorIncarnations(other);
@@ -146,9 +147,9 @@ pgTest("concurrent first activations across principals leave only one valid cred
 });
 
 pgTest("retirement waiting on identity cannot deadlock a claim behind replacement", async () => {
-  const db = new SQL(url);
-  const rivalDb = new SQL(url);
-  const claimDb = new SQL(url);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const rivalDb = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const claimDb = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const registry = new SupervisorIdentityRegistry(db);
   const incarnations = new SupervisorIncarnations(db);
   const rivalConnection = await rivalDb.reserve();

@@ -1,13 +1,14 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 integration("principal IDs keep immutable bindings and retirement tombstones", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   const identity = { principalId: crypto.randomUUID(), name: `supervisor-${crypto.randomUUID()}`, hostId: "host-a", session: "session-a" };
   try {
     const registry = new SupervisorIdentityRegistry(db);
@@ -45,8 +46,8 @@ integration("principal IDs keep immutable bindings and retirement tombstones", a
 });
 
 integration("concurrent enrollment of different bindings has exactly one winner", async () => {
-  const db = new SQL(url!);
-  const other = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
+  const other = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const first = new SupervisorIdentityRegistry(db);
     const second = new SupervisorIdentityRegistry(other);
@@ -63,7 +64,7 @@ integration("concurrent enrollment of different bindings has exactly one winner"
 });
 
 integration("invalid identities cannot be enrolled or retired", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (validatedUrl) => new SQL(validatedUrl));
   try {
     const registry = new SupervisorIdentityRegistry(db);
     await registry.initialize();
