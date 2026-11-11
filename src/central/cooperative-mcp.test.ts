@@ -53,6 +53,16 @@ pgTest("cooperative MCP fences identity, claims and lifecycle over isolated Post
       expect((await commands.events(unsafe.id)).map((event) => event.status)).toEqual(["queued"]);
     }
     await db`UPDATE central_commands SET target = ${"other"} WHERE id = ${unsafe.id}`;
+    const unsafeId = (await commands.submit({ idempotencyKey: "unsafe-id", hostId: "host", target: "session", actor: "operator", text: `work ${credential.incarnationId}` })).command;
+    for (let i = 0; i < 2; i++) {
+      const rejected = await call("cooperative_claim", { requestId: "unsafe-id-claim" });
+      expect(rejected.isError).toBe(true);
+      expect(rejected.content).toEqual([{ type: "text", text: "request failed" }]);
+      expect((await commands.get(unsafeId.id)).status).toBe("queued");
+      expect(await db`SELECT 1 FROM central_cooperative_claims WHERE request_id = ${"unsafe-id-claim"}`).toHaveLength(0);
+      expect((await commands.events(unsafeId.id)).map((event) => event.status)).toEqual(["queued"]);
+    }
+    await db`UPDATE central_commands SET target = ${"other"} WHERE id = ${unsafeId.id}`;
     const own = (await commands.submit({ idempotencyKey: "own", hostId: "host", target: "session", actor: "operator", text: "work" })).command;
     await commands.submit({ idempotencyKey: "foreign", hostId: "host", target: "other", actor: "operator", text: "foreign" });
     expect(body(await call("cooperative_claim", { requestId: "empty" })).command).toBeNull();
@@ -76,6 +86,12 @@ pgTest("cooperative MCP fences identity, claims and lifecycle over isolated Post
     expect(cachedResponse.content).toEqual([{ type: "text", text: "request failed" }]);
     expect(JSON.stringify(cachedResponse).includes(credential.token)).toBe(false);
     expect((await commands.get(cachedUnsafe.id)).status).toBe("claimed");
+    const cachedUnsafeId = (await commands.submit({ idempotencyKey: "cached-unsafe-id", hostId: "host", target: "session", actor: "operator", text: `work ${credential.incarnationId}` })).command;
+    expect((await claims.claim(principal, credential, "cached-unsafe-id"))?.id).toBe(cachedUnsafeId.id);
+    const cachedIdResponse = await call("cooperative_claim", { requestId: "cached-unsafe-id" });
+    expect(cachedIdResponse.isError).toBe(true);
+    expect(cachedIdResponse.content).toEqual([{ type: "text", text: "request failed" }]);
+    expect((await commands.get(cachedUnsafeId.id)).status).toBe("claimed");
     await incarnations.activate(principal);
     const stale = await call("cooperative_claim", { requestId: "claim" });
     expect(stale.isError).toBe(true);

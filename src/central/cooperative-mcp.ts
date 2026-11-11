@@ -36,7 +36,10 @@ export function buildCooperativeMcpServer(
     inputSchema: { requestId: z.string().min(1).max(256) },
   }, async ({ requestId }) => attempt(async () => {
     if (requestId.includes(incarnation.token)) throw new Error("sensitive request");
-    return { command: await deps.claims.claim(identity, incarnation, requestId, (command) => !JSON.stringify({ command }).includes(incarnation.token)) };
+    return { command: await deps.claims.claim(identity, incarnation, requestId, (command) => {
+      const response = JSON.stringify({ command });
+      return !response.includes(incarnation.token) && !response.includes(incarnation.incarnationId);
+    }) };
   }));
   server.registerTool("cooperative_report", {
     description: "Report a lifecycle transition for a command claimed by this incarnation. Reuse requestId only for the same report. Reports do not change the frozen command row.",
