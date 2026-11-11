@@ -104,8 +104,11 @@ export function createCooperativeCentralApp(deps: {
     if (request.method === "POST") {
       let body: Uint8Array<ArrayBuffer>;
       try { body = await readBody(request, MAX_MCP_BODY); } catch { return c.json({ error: "body too large" }, 413); }
+      let decoded: string;
+      try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(body); }
+      catch { return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400); }
       let parsed: unknown;
-      try { parsed = JSON.parse(new TextDecoder().decode(body)); } catch { /* Let the transport handle malformed JSON. */ }
+      try { parsed = JSON.parse(decoded); } catch { /* Let the transport handle malformed JSON. */ }
       if (Array.isArray(parsed)) return c.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batches are not supported" } }, 400);
       if (parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "id")) {
         const id = (parsed as Record<string, unknown>).id;

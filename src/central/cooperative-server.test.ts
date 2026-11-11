@@ -39,6 +39,24 @@ function fixture(submitError?: Error, requests?: unknown) {
 const headers = (who: string, credential?: string) => ({ authorization: `Bearer ${who}`, "content-type": "application/json", accept: "application/json, text/event-stream", ...(credential ? { "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": credential } : {}) });
 const rpc = (method: string, params: unknown = {}) => JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
 
+test("MCP rejects invalid UTF-8 without submitting a command", async () => {
+  const f = fixture();
+  const call = (body: Uint8Array<ArrayBuffer>) => f.app.request("/mcp", { method: "POST", headers: headers("operator"), body });
+  const payload = rpc("tools/call", { name: "command_submit", arguments: { hostId: "host", target: "session", text: "X", idempotencyKey: "one" } });
+  const bytes = new TextEncoder().encode(payload);
+  const index = bytes.indexOf(88);
+  expect(index).toBeGreaterThan(-1);
+  bytes[index] = 255;
+  const invalid = await call(bytes);
+  expect(invalid.status).toBe(400);
+  expect((await invalid.json()).error.code).toBe(-32700);
+  expect(f.calls).toHaveLength(0);
+  const valid = await call(new TextEncoder().encode(payload.replace("\"X\"", "\"�\"")));
+  expect(valid.status).toBe(200);
+  expect((await valid.json()).result.isError).not.toBe(true);
+  expect((f.calls[0] as { text: string }).text).toBe("�");
+});
+
 test("cooperative app rejects any supplied request store", () => {
   expect(() => fixture(undefined, undefined)).not.toThrow();
   for (const value of [{}, null, false]) {
