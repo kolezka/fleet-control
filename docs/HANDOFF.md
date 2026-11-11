@@ -16,7 +16,7 @@ Do not restart product discovery or redesign the agreed layout without a new rea
 
 Updated 2026-11-11. Work moves to another machine; this section is the handoff.
 
-**Where the code is.** Branch `central-server-backend`, draft [PR #6](https://github.com/kolezka/fleet-control/pull/6), based on `main` at `6b23049`. As of 2026-11-11, commits through `a3b3ffa` are local only; the last confirmed remote head is `11389ea` after push timed out. Check both heads before continuing. Read [central server status](central-server-status.md) before claiming anything works. Draft PR #5 (`feat/host-agent-receipt-outbox`) holds only the receipt outbox, which PR #6 also contains; the owner has not yet decided whether to close #5.
+**Where the code is.** Branch `central-server-backend`, draft [PR #6](https://github.com/kolezka/fleet-control/pull/6), based on `main` at `6b23049`. As of 2026-11-12, local and remote heads matched at `d33f05c`; the PR was open and draft. Check both heads before continuing. Read [central server status](central-server-status.md) before claiming anything works. Draft PR #5 (`feat/host-agent-receipt-outbox`) holds only the receipt outbox, which PR #6 also contains; the owner has not yet decided whether to close #5.
 
 **Goal.** A central Bun/Hono/PostgreSQL server holds control state (commands, approvals, supervisor identities); hosts keep execution. UI changes are out of scope for this work (the current Terminal Deck stays). No remote host access or deployment without separate authorization. Hono and a local PostgreSQL test container are authorized dependencies.
 
@@ -29,7 +29,7 @@ Updated 2026-11-11. Work moves to another machine; this section is the handoff.
 - Never activate a supervisor implicitly on a server that reuses a schema. `cooperative-main.ts` does it only because every start provisions a fresh schema.
 - No restore script: check-then-`pg_restore` cannot be made safe. `scripts/central-backup.ts` is an unverified dump.
 
-**What runs today (verified locally, synthetic client only).** `bun src/central/cooperative-main.ts` requires `COOPERATIVE_DATABASE_URL` for trusted provisioning and `COOPERATIVE_RUNTIME_DATABASE_URL` for a pre-created restricted login named `cooperative_runtime_<32 hex>` on the same disposable database. It also requires `COOPERATIVE_SCHEMA=cooperative_test_<32 hex>`, `COOPERATIVE_CREDENTIALS_FILE` (one supervisor, at least one operator) and `COOPERATIVE_INCARNATION_FILE` (absolute path that must not exist; written once with mode 0600, never printed). Its process test covers operator submission, claims, reports, inspection and incarnation replacement. Last full run: **355 pass, 0 fail, 3,548 assertions** with the disposable PostgreSQL fixture; `bun run typecheck` clean (120 files). The runtime role fixture is test-only and does not establish a production provisioning procedure.
+**What runs today (verified locally, synthetic client only).** `bun src/central/cooperative-main.ts` requires `COOPERATIVE_DATABASE_URL` for trusted provisioning and `COOPERATIVE_RUNTIME_DATABASE_URL` for a pre-created restricted login named `cooperative_runtime_<32 hex>` on the same disposable database. It also requires `COOPERATIVE_SCHEMA=cooperative_test_<32 hex>`, `COOPERATIVE_CREDENTIALS_FILE` (one supervisor, at least one operator) and `COOPERATIVE_INCARNATION_FILE` (absolute path that must not exist; written once with mode 0600, never printed). Its process test covers operator submission, claims, reports, inspection and incarnation replacement. An earlier full run passed 365 tests with the disposable PostgreSQL fixture. Later changes were checked with scoped tests; do not run the full suite or fleet/tmux tests without separate authorization. The runtime role fixture is test-only and does not establish a production provisioning procedure.
 
 **Test database on a new machine.** PostgreSQL tests skip without `CENTRAL_TEST_DATABASE_URL`, and a skip is not a pass. The tests and `cooperative-main.ts` refuse any database other than `127.0.0.1:57507/fleet_control_test`. Create a disposable one:
 
@@ -38,7 +38,7 @@ git submodule update --init --recursive
 bun install
 docker run -d --name fleet-control-central-test -p 127.0.0.1:57507:5432 \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=fleet_control_test postgres:17
-CENTRAL_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:57507/fleet_control_test bun test
+# Run only explicitly reviewed test files. The full suite includes fleet and tmux tests.
 ```
 
 Trust auth is acceptable only because the port binds to loopback and the data is disposable. If Docker reports SQLSTATE 53100 `No space left on device`, the Docker VM disk is full, not the host disk.
