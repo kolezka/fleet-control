@@ -131,6 +131,90 @@ pgTest("independent assertions conflict on stale versions and preserve divergent
   }
 });
 
+pgTest("lifecycle reports and null-sequence assertions serialize in both lock orders", async () => {
+  const timeouts = { statement_timeout: "8000", lock_timeout: "7000" };
+  const admin = new SQL(url!, { connection: timeouts });
+  const schema = `reconciliation_race_${crypto.randomUUID().replaceAll("-", "")}`;
+  const db = new SQL(url!, { connection: { ...timeouts, search_path: schema, application_name: `${schema}_report` }, max: 1 });
+  const other = new SQL(url!, { connection: { ...timeouts, search_path: schema, application_name: `${schema}_assertion` }, max: 1 });
+  const barrier = new SQL(url!, { connection: { ...timeouts, search_path: schema, application_name: `${schema}_barrier` }, max: 1 });
+  const observer = new SQL(url!, { connection: { ...timeouts, search_path: schema } });
+  const pending: Promise<unknown>[] = [];
+  const errors: unknown[] = [];
+  try {
+    await admin`CREATE SCHEMA ${admin(schema)}`;
+    const supervisor = { role: "supervisor" as const, principalId: "owner", name: "owner", hostId: "host", session: "session" };
+    const operator = { role: "operator" as const, name: "operator" };
+    const commands = new CentralCommands(db);
+    const registry = new SupervisorIdentityRegistry(db);
+    const incarnations = new SupervisorIncarnations(db);
+    const claims = new CooperativeClaims(db, incarnations);
+    const lifecycle = new CooperativeLifecycle(db, incarnations, () => new Date("2026-01-02T00:00:00.000Z"));
+    const store = new CooperativeReconciliation(other, () => new Date("2026-01-01T00:00:00.000Z"));
+    await commands.initialize(); await new CentralAttempts(db).initialize(); await registry.initialize(); await incarnations.initialize(); await claims.initialize(); await lifecycle.initialize(); await store.initialize();
+    await registry.enroll(supervisor);
+    const credential = await incarnations.activate(supervisor);
+    async function claimed(key: string) {
+      const { command } = await commands.submit({ idempotencyKey: key, hostId: "host", target: "session", actor: "operator", text: key });
+      await claims.claim(supervisor, credential, `claim-${key}`);
+      return command;
+    }
+    async function waitBlocked(app: string, blockingApp: string) {
+      for (let i = 0; i < 200; i++) {
+        const rows = await observer`SELECT 1 FROM pg_stat_activity waiting JOIN pg_stat_activity blocking ON blocking.pid = ANY(pg_blocking_pids(waiting.pid)) WHERE waiting.application_name = ${app} AND blocking.application_name = ${blockingApp} AND waiting.wait_event_type = 'Lock'`;
+        if (rows.length) return;
+        await observer`SELECT pg_sleep(0.01)`;
+      }
+      throw new Error(`timed out waiting for database lock: ${app} blocked by ${blockingApp}`);
+    }
+    await db`CREATE FUNCTION pause_race_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtext(current_schema())); RETURN NEW; END $$`;
+    await db`CREATE TRIGGER pause_lifecycle BEFORE INSERT ON central_cooperative_lifecycle_events FOR EACH ROW EXECUTE FUNCTION pause_race_insert()`;
+    await db`CREATE TRIGGER pause_assertion BEFORE INSERT ON central_cooperative_reconciliations FOR EACH ROW EXECUTE FUNCTION pause_race_insert()`;
+    const first = await claimed("assertion-first");
+    const second = await claimed("report-first");
+    for (const [command, assertionFirst] of [[first, true], [second, false]] as const) {
+      await barrier`SELECT pg_advisory_lock(hashtext(${schema}))`;
+      const report = () => lifecycle.report(supervisor, credential, command.id, `report-${command.text}`, "accepted", "report evidence");
+      const assertion = () => store.reconcile(operator, command.id, `assertion-${command.text}`, "unknown", "operator evidence", null, null);
+      const winning = (assertionFirst ? assertion() : report()).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      pending.push(winning);
+      await waitBlocked(assertionFirst ? `${schema}_assertion` : `${schema}_report`, `${schema}_barrier`);
+      const losing = assertionFirst ? report() : assertion();
+      const outcome = losing.then((value) => ({ value, error: null }), (error: Error) => ({ value: null, error }));
+      pending.push(outcome);
+      await waitBlocked(assertionFirst ? `${schema}_report` : `${schema}_assertion`, assertionFirst ? `${schema}_assertion` : `${schema}_report`);
+      await barrier`SELECT pg_advisory_unlock(hashtext(${schema}))`;
+      const winner = await winning;
+      if (winner.status === "rejected") throw winner.reason;
+      const result = await outcome;
+      if (assertionFirst) expect(result.error).toBeNull();
+      else expect(result.error?.message).toMatch(/stale lifecycle sequence/);
+    }
+    expect(await db`SELECT seq::text AS seq, command_id, incarnation_id, request_id, status, detail, at FROM central_cooperative_lifecycle_events ORDER BY seq`).toEqual([
+      { seq: "1", command_id: first.id, incarnation_id: credential.incarnationId, request_id: "report-assertion-first", status: "accepted", detail: "report evidence", at: "2026-01-02T00:00:00.000Z" },
+      { seq: "2", command_id: second.id, incarnation_id: credential.incarnationId, request_id: "report-report-first", status: "accepted", detail: "report evidence", at: "2026-01-02T00:00:00.000Z" },
+    ]);
+    expect(await db`SELECT command_id, request_id, actor, disposition, evidence, expected_sequence, sequence::text AS sequence, supersedes_sequence::text AS supersedes_sequence, at FROM central_cooperative_reconciliations ORDER BY sequence`).toEqual([
+      { command_id: first.id, request_id: "assertion-assertion-first", actor: "operator", disposition: "unknown", evidence: "operator evidence", expected_sequence: null, sequence: "1", supersedes_sequence: null, at: "2026-01-01T00:00:00.000Z" },
+    ]);
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    try { await barrier`SELECT pg_advisory_unlock_all()`; } catch (error) { errors.push(error); }
+    try { await barrier.close(); } catch (error) { errors.push(error); }
+    await Promise.allSettled(pending);
+    const closed = await Promise.allSettled([db.close(), other.close(), observer.close()]);
+    for (const result of closed) if (result.status === "rejected") errors.push(result.reason);
+    try { await admin`DROP SCHEMA IF EXISTS ${admin(schema)} CASCADE`; } catch (error) { errors.push(error); }
+    try { await admin.close(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Race test or cleanup failed");
+}, 15000);
+
 pgTest("assertion listing uses the supplied transaction runner and distinguishes empty claims", async () => {
   const admin = new SQL(url!);
   const suffix = crypto.randomUUID().replaceAll("-", "");
