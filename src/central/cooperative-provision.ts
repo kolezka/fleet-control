@@ -42,7 +42,7 @@ export async function provisionCooperative(db: SQL, options: { testSchema?: stri
       await tx`GRANT USAGE ON SCHEMA ${tx(schema)} TO ${tx(role)}`;
       await tx`GRANT SELECT ON ${tx(schema)}.central_cooperative_schema_marker, ${tx(schema)}.central_delivery_attempts, ${tx(schema)}.central_cooperative_reconciliations TO ${tx(role)}`;
       await tx`GRANT SELECT, INSERT, UPDATE ON ${tx(schema)}.central_commands, ${tx(schema)}.central_supervisor_identities_v2, ${tx(schema)}.central_supervisor_slots_v2, ${tx(schema)}.central_supervisor_incarnations_v2, ${tx(schema)}.central_cooperative_claims, ${tx(schema)}.central_cooperative_lifecycle_events, ${tx(schema)}.central_command_events, ${tx(schema)}.central_command_event_lock TO ${tx(role)}`;
-      await tx`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${tx(schema)} TO ${tx(role)}`;
+      await tx`GRANT USAGE ON SEQUENCE ${tx(schema)}.central_command_events_seq_seq, ${tx(schema)}.central_supervisor_incarnations_v2_ordinal_seq, ${tx(schema)}.central_cooperative_lifecycle_events_seq_seq TO ${tx(role)}`;
     }
     if (options.beforeCommit) await options.beforeCommit();
   });

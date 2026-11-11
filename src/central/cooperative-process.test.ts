@@ -149,6 +149,15 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     for (const table of ["central_runs", "central_requests", "central_request_events", "central_request_event_lock"]) {
       await expect(db`SELECT * FROM ${db(table)} LIMIT 1`).rejects.toThrow("permission denied");
     }
+    const allowedSequences = ["central_command_events_seq_seq", "central_supervisor_incarnations_v2_ordinal_seq", "central_cooperative_lifecycle_events_seq_seq"];
+    const deniedSequences = ["central_request_events_seq_seq", "central_delivery_attempts_ordinal_seq"];
+    for (const sequence of deniedSequences) {
+      await expect(db`SELECT nextval(${`${schema}.${sequence}`}::regclass)`).rejects.toThrow("permission denied");
+    }
+    for (const sequence of [...allowedSequences, ...deniedSequences]) {
+      await expect(db`SELECT last_value FROM ${db(schema)}.${db(sequence)}`).rejects.toThrow("permission denied");
+      await expect(db`SELECT setval(${`${schema}.${sequence}`}::regclass, 1)`).rejects.toThrow("permission denied");
+    }
     const replacement = await new SupervisorIncarnations(db).activate(principal);
     secrets.push(replacement.token);
     const incarnations = new SupervisorIncarnations(db);
