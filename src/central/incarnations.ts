@@ -1,6 +1,6 @@
 import type { SQL, TransactionSQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
-import type { SupervisorIdentity } from "./identity-registry.ts";
+import { validIdentity, type SupervisorIdentity } from "./identity-registry.ts";
 
 export type CooperativeTransactionRunner = <T>(operation: (tx: TransactionSQL) => Promise<T>) => Promise<T>;
 
@@ -28,6 +28,7 @@ export class SupervisorIncarnations {
   }
 
   async activate(identity: SupervisorIdentity): Promise<IncarnationCredential> {
+    if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
     const token = randomBytes(32).toString("base64url");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`INSERT INTO central_supervisor_slots_v2 (host_id, session)
@@ -54,7 +55,7 @@ export class SupervisorIncarnations {
   // locks first can commit before revocation; one that locks after revocation fails.
   // This fences later database claims, not work already claimed or external effects.
   async lockForClaim(tx: TransactionSQL, identity: SupervisorIdentity, credential: IncarnationCredential): Promise<boolean> {
-    if (!identity || !credential || typeof credential.incarnationId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(credential.incarnationId)
+    if (!validIdentity(identity) || !credential || typeof credential.incarnationId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(credential.incarnationId)
       || typeof credential.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(credential.token)) return false;
     const [slot] = await tx`SELECT host_id FROM central_supervisor_slots_v2
       WHERE host_id = ${identity.hostId} AND session = ${identity.session} FOR UPDATE`;

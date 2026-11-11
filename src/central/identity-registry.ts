@@ -4,9 +4,9 @@ import type { CooperativeTransactionRunner } from "./incarnations.ts";
 export type SupervisorIdentity = { principalId: string; name: string; hostId: string; session: string };
 
 const validId = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
+  typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
 
-function validIdentity(identity: SupervisorIdentity): boolean {
+export function validIdentity(identity: SupervisorIdentity): boolean {
   return !!identity && validId(identity.principalId) && validId(identity.name) && validId(identity.hostId) && validId(identity.session);
 }
 

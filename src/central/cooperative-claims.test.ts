@@ -58,6 +58,17 @@ pgTest("claims serialize, persist empty requests, fence legacy mutations and rep
     expect(location.trigger_schema).toBe(isolated.schema);
     const [otherLocation] = await other`SELECT current_schema() AS schema`;
     expect(otherLocation.schema).toBe(isolated.schema);
+    const aliasBase = `alias-${crypto.randomUUID()}`;
+    const malformed = { ...principal, principalId: `${aliasBase}\ud800` };
+    const replacementIdentity = { ...principal, principalId: `${aliasBase}\ufffd` };
+    await expect(identities.enroll(malformed)).rejects.toThrow("invalid supervisor identity");
+    expect(await identities.matches(malformed)).toBe(false);
+    await identities.enroll(replacementIdentity);
+    await expect(incarnations.activate(malformed)).rejects.toThrow();
+    const replacementCredential = await incarnations.activate(replacementIdentity);
+    await expect(claims.claim(malformed, replacementCredential, "alias-claim")).rejects.toThrow("access denied");
+    expect(await db`SELECT 1 FROM central_cooperative_claims WHERE request_id = ${"alias-claim"}`).toHaveLength(0);
+    expect(await identities.matches(replacementIdentity)).toBe(true);
     await identities.enroll(principal);
     const credential = await incarnations.activate(principal);
     for (const requestId of ["bad\ud800", "bad\udc00"]) {
