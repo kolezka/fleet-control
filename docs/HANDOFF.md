@@ -12,7 +12,48 @@ Prepared 2026-11-09. Project: `/Users/me/Development/fleet-control`. This is a s
 
 Do not restart product discovery or redesign the agreed layout without a new reason. The host service is implemented and the macOS test deployment is recorded below. Current work follows [the decentralized-client plan](decentralized-client-plan.md), not a new visual direction.
 
-## Latest: pinned agent-fleet dependency
+## Latest: central server and cooperative supervisor (in progress)
+
+Updated 2026-11-11. Work moves to another machine; this section is the handoff.
+
+**Where the code is.** Branch `central-server-backend`, draft [PR #6](https://github.com/kolezka/fleet-control/pull/6), based on `main` at `6b23049`. Everything is committed and pushed; nothing local is needed to continue. Read [central server status](central-server-status.md) before claiming anything works. Draft PR #5 (`feat/host-agent-receipt-outbox`) holds only the receipt outbox, which PR #6 also contains; the owner has not yet decided whether to close #5.
+
+**Goal.** A central Bun/Hono/PostgreSQL server holds control state (commands, approvals, supervisor identities); hosts keep execution. UI changes are out of scope for this work (the current Terminal Deck stays). No remote host access or deployment without separate authorization. Hono and a local PostgreSQL test container are authorized dependencies.
+
+**Decisions to keep.**
+
+- Delivery is cooperative: the supervisor model calls MCP `cooperative_claim` and `cooperative_report` itself, because `fleet send` resolves the tmux pane by name repeatedly and cannot be bound to one runtime instance (see `vendor/agent-fleet/scripts/watchdog.sh`). There is no tmux paste fallback and no wakeup of an idle agent. The owner chose this.
+- Each supervisor process gets an incarnation credential. Activation revokes the previous incarnation for that host and session. Claims and reports lock slot, identity and incarnation in the same PostgreSQL transaction. Fencing cannot cancel external effects that already started.
+- A claim is a reservation, not acceptance or execution. The command row stays `claimed`; progress lives in `central_cooperative_lifecycle_events`. Unknown outcomes are never retried automatically.
+- In cooperative mode, legacy supervisor MCP reads and writes must stay off: they expose command text to stale processes and are not incarnation-fenced.
+- Never activate a supervisor implicitly on a server that reuses a schema. `cooperative-main.ts` does it only because every start provisions a fresh schema.
+- No restore script: check-then-`pg_restore` cannot be made safe. `scripts/central-backup.ts` is an unverified dump.
+
+**What runs today (verified locally, synthetic client only).** `bun src/central/cooperative-main.ts` with `COOPERATIVE_DATABASE_URL`, `COOPERATIVE_SCHEMA=cooperative_test_<32 hex>`, `COOPERATIVE_CREDENTIALS_FILE` (one supervisor, at least one operator) and `COOPERATIVE_INCARNATION_FILE` (absolute path that must not exist; written once with mode 0600, never printed). Its test covers operator submit, supervisor claim, accepted and completed reports and operator inspection. Last full run: **337 pass, 0 fail, 3,026 assertions**; `bun run typecheck` clean (111 files).
+
+**Test database on a new machine.** PostgreSQL tests skip without `CENTRAL_TEST_DATABASE_URL`, and a skip is not a pass. The tests and `cooperative-main.ts` refuse any database other than `127.0.0.1:57507/fleet_control_test`. Create a disposable one:
+
+```bash
+git submodule update --init --recursive
+bun install
+docker run -d --name fleet-control-central-test -p 127.0.0.1:57507:5432 \
+  -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=fleet_control_test postgres:17
+CENTRAL_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:57507/fleet_control_test bun test
+```
+
+Trust auth is acceptable only because the port binds to loopback and the data is disposable. If Docker reports SQLSTATE 53100 `No space left on device`, the Docker VM disk is full, not the host disk.
+
+**Not done, in priority order.**
+
+1. Run the host adapter (`src/host-agent/cooperative-adapter.ts`) behind the loopback listener (`src/host-agent/cooperative-listener.ts`) as a real process against `cooperative-main.ts`. The adapter accepts `https` only, except the test-only loopback `http` flag; choose an explicit local test mode, never a production fallback.
+2. Test with a real supervisor agent calling the adapter. This needs the owner's separate authorization because it touches a live agent session.
+3. Recovery for claims held by a dead incarnation: operator assertions exist (`cooperative-reconciliation.ts`), but no release or replay path, by design.
+4. Wire `schema-guard.ts` into stores per transaction, or keep documenting that stores rely on the connection search path. The guard is not a sandbox (`pg_temp` stays on the path).
+5. Migration from the legacy entry point (`src/central/main.ts`), restore rehearsal, TLS. Not started.
+
+The delivery-attempt, host-socket, executor, journal and outbox modules are building blocks with no end-to-end path. The journal now rejects writes inside a caller transaction; recovery still assumes one exclusive executor, which nothing enforces.
+
+## Previous: pinned agent-fleet dependency
 
 The decentralized client was merged via PR #3 (`e9bbcbe`). Follow-up branch `chore/pin-agent-fleet` adds `vendor/agent-fleet` as a Git submodule pinned to `5871fa5306ab5f547b9b012018c27fe99ad008a0` (includes PR #7 paste-keys fix). All host entry points and tests now default to that CLI via `src/fleet/path.ts`; explicit `READONLY_FLEET_BIN`, then `FLEET_BIN`, still override it. No plugin-cache or developer-home fallback remains.
 
