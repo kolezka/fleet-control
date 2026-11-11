@@ -152,6 +152,11 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     for (const table of ["central_cooperative_claims", "central_cooperative_lifecycle_events", "central_command_events"]) {
       await expect(db`UPDATE ${db(table)} SET ${db(table === "central_cooperative_claims" ? "request_id" : table === "central_command_events" ? "detail" : "status")} = ${"unchanged"} WHERE false`).rejects.toThrow("permission denied");
     }
+    for (const [table, column] of [["central_commands", "text"], ["central_supervisor_identities_v2", "retired"], ["central_supervisor_slots_v2", "session"], ["central_supervisor_incarnations_v2", "token_hash"]]) {
+      const [privilege] = await db`SELECT has_column_privilege(current_user, ${`${schema}.${table}`}, ${column}, 'UPDATE') AS allowed`;
+      expect(privilege.allowed).toBe(false);
+    }
+    await expect(db`INSERT INTO central_command_event_lock (id) VALUES (2)`).rejects.toThrow("permission denied");
     const allowedSequences = ["central_command_events_seq_seq", "central_supervisor_incarnations_v2_ordinal_seq", "central_cooperative_lifecycle_events_seq_seq"];
     const deniedSequences = ["central_request_events_seq_seq", "central_delivery_attempts_ordinal_seq"];
     for (const sequence of deniedSequences) {
