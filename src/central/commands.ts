@@ -56,6 +56,14 @@ export class CentralCommands {
   }
 
   async submit(input: CentralCommandInput): Promise<{ command: CentralCommand; created: boolean }> {
+    return this.submitWithMode(input, false);
+  }
+
+  async submitBounded(input: CentralCommandInput): Promise<{ command: CentralCommand; created: boolean }> {
+    return this.submitWithMode(input, true);
+  }
+
+  private async submitWithMode(input: CentralCommandInput, bounded: boolean): Promise<{ command: CentralCommand; created: boolean }> {
     const text = input.text.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
     if (text.length > MAX_TEXT) throw new CommandError("invalid", `instruction text is longer than ${MAX_TEXT} characters`);
@@ -65,10 +73,20 @@ export class CentralCommands {
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       // Serialize event writers until commit so a cursor never skips an earlier uncommitted sequence.
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
-      const [existing] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE idempotency_key = ${input.idempotencyKey}`;
+      let existing: CentralCommand | undefined;
+      if (bounded) {
+        const [row] = await tx<{ command: CentralCommand | null }[]>`SELECT CASE WHEN
+          octet_length(id)::bigint + octet_length(idempotency_key) + octet_length(host_id) + octet_length(target) + octet_length(actor) + octet_length(text) + octet_length(status) + octet_length(created_at) + octet_length(updated_at) <= 270336
+          THEN json_build_object('id', id, 'idempotencyKey', idempotency_key, 'hostId', host_id, 'target', target, 'actor', actor, 'text', text, 'status', status, 'createdAt', created_at, 'updatedAt', updated_at) END AS command
+          FROM central_commands WHERE idempotency_key = ${input.idempotencyKey}`;
+        if (row && !row.command) throw new Error("command read too large");
+        existing = row?.command ?? undefined;
+      } else {
+        [existing] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE idempotency_key = ${input.idempotencyKey}`;
+      }
       if (existing) {
         if (existing.hostId !== input.hostId || existing.target !== input.target || existing.text !== text || existing.actor !== input.actor) {
-          throw new CommandError("conflict", `idempotency key ${input.idempotencyKey} was used for a different command (${existing.id})`);
+          throw new CommandError("conflict", bounded ? "idempotency key was used for a different command" : `idempotency key ${input.idempotencyKey} was used for a different command (${existing.id})`);
         }
         return { command: existing, created: false };
       }
@@ -186,6 +204,55 @@ export class CentralCommands {
     const commands = rows.slice(0, limit);
     const last = commands[commands.length - 1];
     return { commands, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify([last.createdAt, last.id, hostId, target, filterStatus])).toString("base64url") : null };
+  }
+
+  // Cooperative operator reads return at most one bounded JSON value per row.
+  async getBounded(id: string): Promise<CentralCommand> {
+    const query = async (db: SQL | TransactionSQL) => {
+      const [row] = await db<{ command: CentralCommand | null }[]>`SELECT CASE WHEN
+        octet_length(id)::bigint + octet_length(idempotency_key) + octet_length(host_id) + octet_length(target) + octet_length(actor) + octet_length(text) + octet_length(status) + octet_length(created_at) + octet_length(updated_at) <= 270336
+        THEN json_build_object('id', id, 'idempotencyKey', idempotency_key, 'hostId', host_id, 'target', target, 'actor', actor, 'text', text, 'status', status, 'createdAt', created_at, 'updatedAt', updated_at) END AS command
+        FROM central_commands WHERE id = ${id}`;
+      if (!row) throw new CommandError("not_found", "command not found");
+      if (!row.command) throw new Error("command read too large");
+      return row.command;
+    };
+    return this.runner ? this.runner(query) : query(this.db);
+  }
+
+  async listBounded(status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
+    if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
+    if ((scope?.hostId !== undefined && !validScopeValue(scope.hostId)) || (scope?.target !== undefined && !validScopeValue(scope.target))) throw new CommandError("invalid", "invalid scope");
+    const limit = pagination.limit ?? 4;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new CommandError("invalid", "invalid limit");
+    const cursor = pagination.cursor === undefined ? null : decodeCursor(pagination.cursor);
+    const hostId = scope?.hostId ?? null;
+    const target = scope?.target ?? null;
+    const filterStatus = status ?? null;
+    if (cursor && (cursor.hostId !== hostId || cursor.target !== target || cursor.status !== filterStatus)) throw new CommandError("invalid", "invalid cursor");
+    const createdAt = cursor?.createdAt ?? null;
+    const id = cursor?.id ?? null;
+    const query = async (db: SQL | TransactionSQL) => {
+      const rows = await db<{ command: CentralCommand | null; sentinel: boolean }[]>`WITH candidates AS MATERIALIZED (
+        SELECT *, row_number() OVER (ORDER BY created_at, id) AS position FROM central_commands
+        WHERE (${hostId}::text IS NULL OR host_id = ${hostId}) AND (${target}::text IS NULL OR target = ${target})
+          AND (${filterStatus}::text IS NULL OR status = ${filterStatus})
+          AND (${createdAt}::text IS NULL OR (created_at, id) > (${createdAt}, ${id}))
+        ORDER BY created_at, id LIMIT ${limit + 1}
+      )
+      SELECT position > ${limit} AS sentinel, CASE WHEN position <= ${limit} THEN CASE WHEN
+        octet_length(id)::bigint + octet_length(idempotency_key) + octet_length(host_id) + octet_length(target) + octet_length(actor) + octet_length(text) + octet_length(status) + octet_length(created_at) + octet_length(updated_at) <= 270336
+        THEN json_build_object('id', id, 'idempotencyKey', idempotency_key, 'hostId', host_id, 'target', target, 'actor', actor, 'text', text, 'status', status, 'createdAt', created_at, 'updatedAt', updated_at) END END AS command
+      FROM candidates ORDER BY position`;
+      const pageRows = rows.filter((row) => !row.sentinel);
+      if (pageRows.some((row) => !row.command)) throw new Error("command read too large");
+      const commands = pageRows.map((row) => row.command!);
+      const last = commands[commands.length - 1];
+      const nextCursor = rows.length > limit && last ? Buffer.from(JSON.stringify([last.createdAt, last.id, hostId, target, filterStatus])).toString("base64url") : null;
+      if (nextCursor) decodeCursor(nextCursor);
+      return { commands, nextCursor };
+    };
+    return this.runner ? this.runner(query) : query(this.db);
   }
 
   async events(id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {

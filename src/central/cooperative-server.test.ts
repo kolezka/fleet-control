@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { CommandError } from "../commands.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CooperativeCommands } from "./cooperative-server.ts";
 import type { CooperativeClaims } from "./cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 
@@ -22,11 +22,10 @@ function fixture(submitError?: Error) {
   let active = true;
   let fail = false;
   const calls: unknown[] = [];
-  const commands: CentralMcpCommands = {
-    async submit(input) { calls.push(input); if (submitError) throw submitError; return { command: { ...input, id: "cmd", status: "queued", createdAt: "now", updatedAt: "now" }, created: true }; },
-    async get() { throw new Error("unused"); },
-    async list() { return { commands: [], nextCursor: null }; },
-    async transition() { throw new Error("legacy mutation must not run"); },
+  const commands: CooperativeCommands = {
+    async submitBounded(input) { calls.push(input); if (submitError) throw submitError; return { command: { ...input, id: "cmd", status: "queued", createdAt: "now", updatedAt: "now" }, created: true }; },
+    async getBounded() { throw new Error("unused"); },
+    async listBounded() { return { commands: [], nextCursor: null }; },
   };
   const check = (identity: unknown, credential: { incarnationId: string; token: string }) => {
     calls.push({ identity, credential });
@@ -93,6 +92,60 @@ test("command errors retain central REST status mapping", async () => {
     const response = await fixture(error).app.request("/api/commands", { method: "POST", headers: headers("operator"), body });
     expect(response.status).toBe(status);
     expect(await response.json()).toEqual({ error: status === 500 ? "request failed" : error.message });
+  }
+});
+
+test("MCP rejects batches before invoking operations for both roles", async () => {
+  for (const [who, credential, name, args] of [
+    ["operator", undefined, "command_submit", { hostId: "host", target: "session", text: "work", idempotencyKey: "batch" }],
+    ["supervisor", token, "cooperative_claim", { requestId: "batch" }],
+  ] as const) {
+    for (const batch of [[], [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }], [{ jsonrpc: "2.0", method: "tools/call", params: { name, arguments: args } }, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } }]]) {
+      const f = fixture();
+      const response = await f.app.request("/mcp", { method: "POST", headers: headers(who, credential), body: JSON.stringify(batch) });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batches are not supported" } });
+      expect(f.calls).toHaveLength(0);
+    }
+  }
+});
+
+test("MCP preserves malformed JSON errors and single notifications", async () => {
+  for (const [who, credential] of [["operator", undefined], ["supervisor", token]] as const) {
+    const f = fixture();
+    const post = (body: string) => f.app.request("/mcp", { method: "POST", headers: headers(who, credential), body });
+    const malformed = await post("[");
+    expect(malformed.status).toBe(400);
+    expect((await malformed.json()).error.code).toBe(-32700);
+    const notification = await post(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }));
+    expect(notification.status).toBe(202);
+    expect(await notification.text()).toBe("");
+    expect(f.calls).toHaveLength(0);
+  }
+});
+
+test("MCP rejects invalid request IDs before dispatch for both roles", async () => {
+  for (const [who, credential, name, args] of [
+    ["operator", undefined, "command_submit", { hostId: "host", target: "session", text: "work", idempotencyKey: "id-validation" }],
+    ["supervisor", token, "cooperative_claim", { requestId: "id-validation" }],
+  ] as const) {
+    for (const id of ["x".repeat(257), "😀".repeat(129), true, {}, [], 1.5, 9007199254740992, -9007199254740992, 1e100]) {
+      const f = fixture();
+      const response = await f.app.request("/mcp", { method: "POST", headers: headers(who, credential), body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } });
+      expect(f.calls).toHaveLength(0);
+    }
+    const nullResponse = await fixture().app.request("/mcp", { method: "POST", headers: headers(who, credential), body: JSON.stringify({ jsonrpc: "2.0", id: null, method: "tools/list" }) });
+    expect(nullResponse.status).toBe(400);
+    expect((await nullResponse.json()).error.message).not.toBe("Invalid request");
+    for (const id of ["", "x".repeat(256), "😀".repeat(128), 0, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
+      const f = fixture();
+      const response = await f.app.request("/mcp", { method: "POST", headers: headers(who, credential), body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
+      expect(response.status).toBe(200);
+      expect((await response.json()).id).toEqual(id);
+      expect(f.calls).toHaveLength(1);
+    }
   }
 });
 

@@ -114,6 +114,14 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     };
     const content = (body: any) => JSON.parse(body.result.content[0].text);
     const id = await submit("first");
+    const operatorCall = async (name: string, args: object) => {
+      const response = await request(`${central.url}/mcp`, { method: "POST", headers: { authorization: `Bearer ${operator}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
+      expect(response.status).toBe(200);
+      return await visible(response);
+    };
+    expect(content(await operatorCall("command_get", { id })).command.id).toBe(id);
+    expect(content(await operatorCall("command_list", {})).commands.map((command: { id: string }) => command.id)).toContain(id);
+    expect((await operatorCall("command_list", { limit: 5 })).result.isError).toBe(true);
     const initial = await inspect(id);
     expect(initial.command.status).toBe("queued");
     expect((await call("cooperative_claim", { requestId: "claim" }, token())).status).toBe(401);

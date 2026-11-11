@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { CommandError, MAX_TEXT } from "../commands.ts";
 import { supervisorIdentity, type CentralAuth, type SupervisorIdentityLookup } from "./auth.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommands } from "./commands.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";
 import type { CooperativeClaims } from "./cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
@@ -38,10 +39,12 @@ async function readBody(request: Request, maxBody = MAX_BODY): Promise<Uint8Arra
   return result;
 }
 
+export type CooperativeCommands = Pick<CentralCommands, "submitBounded" | "getBounded" | "listBounded">;
+
 export function createCooperativeCentralApp(deps: {
   auth: CentralAuth;
   identities: SupervisorIdentityLookup;
-  commands: CentralMcpCommands;
+  commands: CooperativeCommands;
   claims: CooperativeClaims;
   lifecycle: CooperativeLifecycle;
   inspection: Pick<CooperativeInspection, "inspectBounded">;
@@ -49,6 +52,12 @@ export function createCooperativeCentralApp(deps: {
   requests?: CentralRequests;
   allowedOrigins?: readonly string[];
 }) {
+  const commands: CentralMcpCommands = {
+    submit: (...args) => deps.commands.submitBounded(...args),
+    get: (...args) => deps.commands.getBounded(...args),
+    list: (...args) => deps.commands.listBounded(...args),
+    transition: async () => { throw new Error("legacy mutation unavailable"); },
+  };
   const app = new Hono();
   app.onError((error, c) => {
     if (error instanceof CommandError) return c.json({ error: error.message }, error.kind === "not_found" ? 404 : error.kind === "conflict" ? 409 : 400);
@@ -78,7 +87,7 @@ export function createCooperativeCentralApp(deps: {
     if (!input || typeof input !== "object" || Array.isArray(input)) return c.json({ error: "invalid command" }, 400);
     const body = input as Record<string, unknown>;
     if (typeof body.hostId !== "string" || !body.hostId.trim() || body.hostId.length > 256 || typeof body.target !== "string" || body.target.length > 256 || typeof body.text !== "string" || body.text.length > MAX_TEXT || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 200) return c.json({ error: "invalid command" }, 400);
-    const result = await deps.commands.submit({ hostId: body.hostId, target: body.target, text: body.text, idempotencyKey: body.idempotencyKey, actor: principal.name });
+    const result = await deps.commands.submitBounded({ hostId: body.hostId, target: body.target, text: body.text, idempotencyKey: body.idempotencyKey, actor: principal.name });
     return c.json(result, result.created ? 201 : 200);
   });
   app.all("/mcp", async (c) => {
@@ -95,10 +104,19 @@ export function createCooperativeCentralApp(deps: {
     if (request.method === "POST") {
       let body: Uint8Array<ArrayBuffer>;
       try { body = await readBody(request, MAX_MCP_BODY); } catch { return c.json({ error: "body too large" }, 413); }
+      let parsed: unknown;
+      try { parsed = JSON.parse(new TextDecoder().decode(body)); } catch { /* Let the transport handle malformed JSON. */ }
+      if (Array.isArray(parsed)) return c.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batches are not supported" } }, 400);
+      if (parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "id")) {
+        const id = (parsed as Record<string, unknown>).id;
+        if (id !== null && !(typeof id === "string" && id.length <= 256) && !(typeof id === "number" && Number.isSafeInteger(id))) {
+          return c.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } }, 400);
+        }
+      }
       request = new Request(request.url, { method: request.method, headers: request.headers, body });
     }
     const server = principal.role === "operator"
-      ? buildCentralMcpServer({ commands: deps.commands, requests: deps.requests }, principal)
+      ? buildCentralMcpServer({ commands, requests: deps.requests }, principal, { commandListLimit: 4 })
       : buildCooperativeMcpServer({ claims: deps.claims, lifecycle: deps.lifecycle }, principal, credential!);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try { await server.connect(transport); return await transport.handleRequest(request); }

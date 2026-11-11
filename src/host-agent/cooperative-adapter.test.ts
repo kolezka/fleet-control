@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { MAX_TEXT } from "../commands.ts";
 import { CentralAuth } from "../central/auth.ts";
 import { createCooperativeCentralApp } from "../central/cooperative-server.ts";
-import type { CentralMcpCommands } from "../central/mcp.ts";
+import type { CooperativeCommands } from "../central/cooperative-server.ts";
 import type { CooperativeClaims } from "../central/cooperative-claims.ts";
 import type { CooperativeLifecycle } from "../central/cooperative-lifecycle.ts";
 
@@ -164,7 +164,7 @@ describe("isolated cooperative adapter", () => {
     const command = { id: "cmd", idempotencyKey: "key", hostId: "host", target: "session", actor: "operator", text, status: "claimed", createdAt: "now", updatedAt: "now" };
     const claims = { async claim() { return command; } } as unknown as CooperativeClaims;
     const lifecycle = { async report(_p: unknown, _c: unknown, commandId: string, requestId: string, status: string, detail: string) { return { commandId, requestId, status, detail, at: "now" }; } } as unknown as CooperativeLifecycle;
-    const app = createCooperativeCentralApp({ auth, identities: { async matches() { return true; } }, commands: {} as CentralMcpCommands, claims, lifecycle, inspection: { async inspectBounded() { return null; } } });
+    const app = createCooperativeCentralApp({ auth, identities: { async matches() { return true; } }, commands: {} as CooperativeCommands, claims, lifecycle, inspection: { async inspectBounded() { return null; } } });
     const { request } = fixture(async (url, init) => app.fetch(new Request(url, init)));
     const call = async (name: string, args: object) => {
       const response = await request(undefined, { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });

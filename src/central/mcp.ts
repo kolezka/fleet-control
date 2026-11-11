@@ -18,15 +18,25 @@ export type CentralMcpCommands = {
 const MAX_COMMAND_CURSOR = 8192;
 const statuses = ["queued", "delivering", "delivered", "delivery_unknown", "claimed", "accepted", "rejected", "running", "completed", "failed"] as const;
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
-const attempt = async (fn: () => Promise<unknown>) => {
-  try { return json(await fn()); }
+const MAX_COOPERATIVE_READ_RESPONSE_BYTES = 2 * 1024 * 1024;
+// Each UTF-16 code unit in an accepted request ID can require six JSON bytes.
+const MAX_RPC_ID = "\u0000".repeat(256);
+const readResult = (value: unknown) => {
+  const result = json(value);
+  const envelope = JSON.stringify({ jsonrpc: "2.0", id: MAX_RPC_ID, result });
+  return Buffer.byteLength(envelope, "utf8") <= MAX_COOPERATIVE_READ_RESPONSE_BYTES
+    ? result
+    : { isError: true, content: [{ type: "text" as const, text: "response exceeds read budget" }] };
+};
+const attempt = async (fn: () => Promise<unknown>, boundedRead = false) => {
+  try { const value = await fn(); return boundedRead ? readResult(value) : json(value); }
   catch (error) {
     return { isError: true, content: [{ type: "text" as const, text: error instanceof RequestError && error.kind === "forbidden" ? "request failed" : error instanceof CommandError || error instanceof RequestError ? `${error.kind}: ${error.message}` : "request failed" }] };
   }
 };
 
 // The principal must come from authentication, never from MCP arguments.
-export function buildCentralMcpServer(deps: { commands: CentralMcpCommands; requests?: CentralRequests }, principal: Principal) {
+export function buildCentralMcpServer(deps: { commands: CentralMcpCommands; requests?: CentralRequests }, principal: Principal, options: { commandListLimit?: number } = {}) {
   if (!principal || !["operator", "supervisor"].includes(principal.role) || !principal.name?.trim()) throw new Error("MCP access denied");
   if (principal.role === "supervisor" && (typeof principal.principalId !== "string" || !principal.principalId.trim() || !authorize(principal, "supervisor", { hostId: principal.hostId, session: principal.session }))) throw new Error("MCP access denied");
   const { commands } = deps;
@@ -51,10 +61,10 @@ export function buildCentralMcpServer(deps: { commands: CentralMcpCommands; requ
   }
   server.registerTool("command_get", {
     description: "Read one command within your scope.", inputSchema: { id: z.string().min(1) }, annotations: { readOnlyHint: true },
-  }, async ({ id }) => attempt(async () => ({ command: await scoped(id) })));
+  }, async ({ id }) => attempt(async () => ({ command: await scoped(id) }), principal.role === "operator" && options.commandListLimit !== undefined));
   server.registerTool("command_list", {
-    description: "List commands within your scope, ordered oldest first. Pass nextCursor to continue.", inputSchema: { status: z.enum(statuses).optional(), limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().min(1).max(MAX_COMMAND_CURSOR).optional() }, annotations: { readOnlyHint: true },
-  }, async ({ status, limit, cursor }) => attempt(async () => commands.list(status, principal.role === "supervisor" ? { hostId: principal.hostId!, target: principal.session! } : undefined, { ...(limit === undefined ? {} : { limit }), ...(cursor === undefined ? {} : { cursor }) })) );
+    description: "List commands within your scope, ordered oldest first. Pass nextCursor to continue.", inputSchema: { status: z.enum(statuses).optional(), limit: options.commandListLimit === undefined ? z.number().int().min(1).max(1000).optional() : z.number().int().min(1).max(options.commandListLimit).default(options.commandListLimit), cursor: z.string().min(1).max(MAX_COMMAND_CURSOR).optional() }, annotations: { readOnlyHint: true },
+  }, async ({ status, limit, cursor }) => attempt(async () => commands.list(status, principal.role === "supervisor" ? { hostId: principal.hostId!, target: principal.session! } : undefined, { ...(limit === undefined ? {} : { limit }), ...(cursor === undefined ? {} : { cursor }) }), principal.role === "operator" && options.commandListLimit !== undefined));
 
   if (principal.role === "supervisor") {
     server.registerTool("command_respond", {

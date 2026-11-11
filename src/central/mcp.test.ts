@@ -9,6 +9,9 @@ import { CentralAuth, type Principal } from "./auth.ts";
 import { createHash } from "node:crypto";
 import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage } from "./commands.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { createCooperativeCentralApp } from "./cooperative-server.ts";
+import type { CooperativeClaims } from "./cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 
 class FakeCommands implements CentralMcpCommands {
   rows: CentralCommand[] = [];
@@ -22,6 +25,9 @@ class FakeCommands implements CentralMcpCommands {
     this.rows.push(command);
     return { command, created: true };
   }
+  async submitBounded(input: CentralCommandInput) { return this.submit(input); }
+  async getBounded(id: string) { return this.get(id); }
+  async listBounded(status?: CommandStatus, scope?: CommandListScope, pagination?: CommandListPagination) { return this.list(status, scope, pagination); }
   async get(id: string) {
     const command = this.rows.find((row) => row.id === id);
     if (!command) throw new CommandError("not_found", "missing");
@@ -56,6 +62,72 @@ async function connect(commands: FakeCommands, principal: Principal, requests?: 
 const result = (value: unknown) => JSON.parse((value as { content: { text: string }[] }).content[0]!.text);
 const operator: Principal = { name: "alice", role: "operator" };
 const supervisor: Principal = { name: "supervisor-identity", role: "supervisor", principalId: "supervisor-id", hostId: "host-a", session: "session-a" };
+
+test("cooperative command list advertises and enforces its page size without changing legacy", async () => {
+  const store = new FakeCommands();
+  for (let i = 0; i < 6; i++) await store.submit({ hostId: "host", target: "session", text: "test", actor: "alice", idempotencyKey: String(i) });
+  const auth = new CentralAuth([{ tokenHash: createHash("sha256").update("token").digest("hex"), principal: operator }]);
+  const app = createCooperativeCentralApp({ auth, commands: store, claims: {} as CooperativeClaims, lifecycle: {} as CooperativeLifecycle, inspection: { async inspectBounded() { return null; } }, identities: { async matches() { return true; } } });
+  const rpc = async (method: string, params: object = {}) => (await app.request("/mcp", { method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).json();
+  const tools = await rpc("tools/list");
+  const limit = tools.result.tools.find((tool: { name: string }) => tool.name === "command_list").inputSchema.properties.limit;
+  expect(limit.maximum).toBe(4);
+  expect(limit.default).toBe(4);
+  const call = (args: object) => rpc("tools/call", { name: "command_list", arguments: args });
+  const first = result((await call({})).result);
+  expect(first.commands).toHaveLength(4);
+  expect(store.listCalls.at(-1)?.pagination).toEqual({ limit: 4 });
+  expect(result((await call({ cursor: first.nextCursor, limit: 4 })).result).commands).toHaveLength(2);
+  const callsBeforeInvalid = store.listCalls.length;
+  expect((await call({ limit: 5 })).result.isError).toBe(true);
+  expect(store.listCalls).toHaveLength(callsBeforeInvalid);
+  const legacy = await connect(store, operator);
+  try {
+    const legacyLimit = (await legacy.client.listTools()).tools.find((tool) => tool.name === "command_list")!.inputSchema.properties!.limit as { maximum: number; default?: number };
+    expect(legacyLimit.maximum).toBe(1000);
+    expect(legacyLimit.default).toBeUndefined();
+    expect((await legacy.client.callTool({ name: "command_list", arguments: { limit: 1000 } })).isError).not.toBe(true);
+    await legacy.client.callTool({ name: "command_list", arguments: {} });
+    expect(store.listCalls.at(-1)?.pagination).toEqual({});
+  } finally { await legacy.client.close(); await legacy.server.close(); }
+});
+
+test("cooperative operator read budget counts double-encoded UTF-8 and leaves mutations and legacy unchanged", async () => {
+  const store = new FakeCommands();
+  const row = (await store.submit({ hostId: "host", target: "session", text: "small", actor: "alice", idempotencyKey: "initial" })).command;
+  const auth = new CentralAuth([{ tokenHash: createHash("sha256").update("token").digest("hex"), principal: operator }]);
+  const app = createCooperativeCentralApp({ auth, commands: store, claims: {} as CooperativeClaims, lifecycle: {} as CooperativeLifecycle, inspection: { async inspectBounded() { return null; } }, identities: { async matches() { return true; } } });
+  const id = "\u0000".repeat(256);
+  const call = async (name: string, args: object) => {
+    const response = await app.request("/mcp", { method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
+    const text = await response.text();
+    return { text, body: JSON.parse(text) };
+  };
+  const budget = 2 * 1024 * 1024;
+  for (const name of ["command_get", "command_list"]) {
+    const args = name === "command_get" ? { id: row.id } : {};
+    row.text = ('\u0000"\\é').repeat(75000);
+    const fits = await call(name, args);
+    expect(fits.body.result.isError).not.toBe(true);
+    expect(Buffer.byteLength(fits.text)).toBeLessThanOrEqual(budget);
+    expect(result(fits.body.result)[name === "command_get" ? "command" : "commands"]).toBeDefined();
+    row.text = ('\u0000"\\é').repeat(200000);
+    const oversized = await call(name, args);
+    expect(oversized.body.result.isError).toBe(true);
+    expect(oversized.body.result.content[0].text).toBe("response exceeds read budget");
+    expect(Buffer.byteLength(oversized.text)).toBeLessThanOrEqual(budget);
+  }
+  const legacy = await connect(store, operator);
+  try {
+    expect((await legacy.client.callTool({ name: "command_get", arguments: { id: row.id } })).isError).not.toBe(true);
+  } finally { await legacy.client.close(); await legacy.server.close(); }
+  const replay = await call("command_submit", { hostId: "host", target: "session", text: "new", idempotencyKey: "initial" });
+  expect(replay.body.result.isError).not.toBe(true);
+  expect(result(replay.body.result).created).toBe(false);
+  const submitted = await call("command_submit", { hostId: "host", target: "session", text: "new", idempotencyKey: "new" });
+  expect(submitted.body.result.isError).not.toBe(true);
+  expect(result(submitted.body.result).created).toBe(true);
+});
 
 test("operator submits and reads commands without impersonation or supervisor actions", async () => {
   const store = new FakeCommands();
