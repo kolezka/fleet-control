@@ -1,6 +1,7 @@
 import type { SQL } from "bun";
 import { CommandError } from "../commands.ts";
 import type { Principal } from "./auth.ts";
+import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
 export type ReconciliationDisposition = "unknown" | "completed" | "failed" | "not-executed";
 export type Reconciliation = { commandId: string; requestId: string; actor: string; disposition: ReconciliationDisposition; evidence: string; expectedSequence: string | null; sequence: string; supersedesSequence: string | null; at: string };
@@ -10,7 +11,7 @@ const validSequence = (value: unknown): value is string | null => value === null
 
 // Assertions are independent evidence, not authoritative lifecycle or execution state.
 export class CooperativeReconciliation {
-  constructor(private db: SQL, private now: () => Date = () => new Date()) {}
+  constructor(private db: SQL, private now: () => Date = () => new Date(), private runner?: CooperativeTransactionRunner) {}
 
   async initialize(): Promise<void> {
     await this.db`CREATE TABLE IF NOT EXISTS central_cooperative_reconciliations (
@@ -32,7 +33,7 @@ export class CooperativeReconciliation {
   async reconcile(principal: Principal, commandId: string, requestId: string, disposition: ReconciliationDisposition, evidence: string, expectedSequence: string | null, expectedAssertionSequence: string | null): Promise<Reconciliation> {
     if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
     if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || evidence.includes("\0") || !validSequence(expectedSequence) || !validSequence(expectedAssertionSequence)) throw new CommandError("invalid", "invalid reconciliation request");
-    return this.db.begin(async (tx) => {
+    return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [existing] = await tx<Reconciliation[]>`SELECT command_id AS "commandId", request_id AS "requestId", actor, disposition, evidence, expected_sequence AS "expectedSequence", sequence::text AS sequence, supersedes_sequence::text AS "supersedesSequence", at FROM central_cooperative_reconciliations WHERE request_id = ${requestId}`;
       if (existing) {

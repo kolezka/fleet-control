@@ -7,6 +7,7 @@ import { CentralCommands } from "./commands.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
+import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
 const pgTest = url ? test : test.skip;
@@ -45,6 +46,7 @@ pgTest("injected runner encloses each cooperative operation in one transaction",
     const claims = new CooperativeClaims(db, incarnations, undefined, runner);
     const lifecycle = new CooperativeLifecycle(db, incarnations, undefined, runner);
     const inspection = new CooperativeInspection(db, runner);
+    const reconciliation = new CooperativeReconciliation(db, undefined, runner);
     const once = async <T>(action: () => Promise<T>) => { const before = calls; const result = await action(); expect(calls).toBe(before + 1); return result; };
     await once(() => identities.enroll(identity));
     expect(await once(() => identities.matches(identity))).toBe(true);
@@ -60,6 +62,25 @@ pgTest("injected runner encloses each cooperative operation in one transaction",
     await once(() => lifecycle.report(identity, credential, command.id, "report", "accepted", "accepted"));
     const result = await once(() => inspection.inspect(command.id));
     expect(result?.events[0]?.status).toBe("accepted");
+    for (const table of ["central_command_event_lock", "central_cooperative_claims", "central_cooperative_lifecycle_events", "central_cooperative_reconciliations"]) {
+      await db`CREATE TABLE ${db(shadowSchema)}.${db(table)} AS SELECT * FROM ${db(schema)}.${db(table)}`;
+    }
+    await db`INSERT INTO ${db(shadowSchema)}.central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('assertion', ${command.id}, 'operator', 'failed', 'shadow', 1, 'shadow')`;
+    const operator = { role: "operator" as const, name: "operator" };
+    const [event] = await db<{ seq: string }[]>`SELECT seq::text AS seq FROM ${db(schema)}.central_cooperative_lifecycle_events WHERE command_id = ${command.id} ORDER BY seq DESC LIMIT 1`;
+    const writeAssertion = (requestId: string) => reconciliation.reconcile(operator, command.id, requestId, "unknown", "evidence", event!.seq, null);
+    abort = true;
+    const beforeAbort = calls;
+    await expect(writeAssertion("assertion")).rejects.toThrow("rollback requested");
+    expect(calls).toBe(beforeAbort + 1);
+    abort = false;
+    expect(await db`SELECT request_id FROM ${db(schema)}.central_cooperative_reconciliations`).toHaveLength(0);
+    const assertion = await once(() => writeAssertion("assertion"));
+    expect(assertion).toMatchObject({ sequence: "1", supersedesSequence: null, evidence: "evidence" });
+    expect(await once(() => writeAssertion("assertion"))).toEqual(assertion);
+    await expect(once(() => reconciliation.reconcile(operator, command.id, "assertion", "failed", "evidence", event!.seq, null))).rejects.toThrow(/different intent/);
+    await expect(once(() => writeAssertion("stale"))).rejects.toThrow(/stale assertion/);
+    expect(await db`SELECT request_id, evidence FROM ${db(shadowSchema)}.central_cooperative_reconciliations`).toEqual([{ request_id: "assertion", evidence: "shadow" }]);
     await once(() => identities.retire(identity));
     expect(await once(() => identities.matches(identity))).toBe(false);
     const [shadow] = await db`SELECT retired FROM ${db(shadowSchema)}.central_supervisor_identities_v2 WHERE principal_id = ${identity.principalId}`;
