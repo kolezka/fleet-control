@@ -18,7 +18,7 @@ const auth = new CentralAuth([
   { tokenHash: hash("host"), principal: { name: "host", role: "host", hostId: "host" } },
 ]);
 
-function fixture(submitError?: Error) {
+function fixture(submitError?: Error, requests?: unknown) {
   let active = true;
   let fail = false;
   const calls: unknown[] = [];
@@ -33,11 +33,18 @@ function fixture(submitError?: Error) {
   };
   const claims = { async claim(identity: unknown, credential: { incarnationId: string; token: string }) { check(identity, credential); return null; } } as unknown as CooperativeClaims;
   const lifecycle = { async report(identity: unknown, credential: { incarnationId: string; token: string }) { check(identity, credential); return { status: "accepted" }; } } as unknown as CooperativeLifecycle;
-  const app = createCooperativeCentralApp({ auth, commands, claims, lifecycle, inspection: { async inspectBounded() { return null; } }, identities: { async matches(identity) { if (fail) throw new Error(token); return active && JSON.stringify(identity) === JSON.stringify({ principalId: "id", name: "supervisor", hostId: "host", session: "session" }); } } });
+  const app = createCooperativeCentralApp({ auth, commands, claims, lifecycle, requests: requests as never, inspection: { async inspectBounded() { return null; } }, identities: { async matches(identity) { if (fail) throw new Error(token); return active && JSON.stringify(identity) === JSON.stringify({ principalId: "id", name: "supervisor", hostId: "host", session: "session" }); } } });
   return { app, calls, setActive(value: boolean) { active = value; }, setFail(value: boolean) { fail = value; } };
 }
 const headers = (who: string, credential?: string) => ({ authorization: `Bearer ${who}`, "content-type": "application/json", accept: "application/json, text/event-stream", ...(credential ? { "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": credential } : {}) });
 const rpc = (method: string, params: unknown = {}) => JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+
+test("cooperative app rejects any supplied request store", () => {
+  expect(() => fixture(undefined, undefined)).not.toThrow();
+  for (const value of [{}, null, false]) {
+    expect(() => fixture(undefined, value)).toThrow("cooperative request store is unsupported");
+  }
+});
 
 test("roles isolate MCP tools and fail closed for registry errors", async () => {
   const f = fixture();
@@ -48,7 +55,7 @@ test("roles isolate MCP tools and fail closed for registry errors", async () => 
   expect(supervisor.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["cooperative_claim", "cooperative_report"]);
   const operator = await (await call("operator")).json();
   expect(operator.result.tools.map((tool: { name: string }) => tool.name)).toContain("command_submit");
-  expect(operator.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("cooperative_claim");
+  expect(operator.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["command_get", "command_list", "command_submit"]);
   f.setActive(false);
   expect((await call("supervisor", token)).status).toBe(401);
   f.setFail(true);

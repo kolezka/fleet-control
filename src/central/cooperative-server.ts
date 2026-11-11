@@ -11,7 +11,6 @@ import type { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeInspectionRoute } from "./cooperative-inspection-route.ts";
 import { createCooperativeAssertionsRoute } from "./cooperative-assertions-route.ts";
 import type { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
-import type { CentralRequests } from "./requests.ts";
 
 const MAX_BODY = 32 * 1024;
 // Allow 65536 UTF-16 code units escaped as six JSON bytes each, plus envelope.
@@ -49,9 +48,10 @@ export function createCooperativeCentralApp(deps: {
   lifecycle: CooperativeLifecycle;
   inspection: Pick<CooperativeInspection, "inspectBounded">;
   reconciliation?: Pick<CooperativeReconciliation, "listBounded">;
-  requests?: CentralRequests;
+  requests?: never;
   allowedOrigins?: readonly string[];
 }) {
+  if (deps.requests !== undefined) throw new Error("cooperative request store is unsupported");
   const commands: CentralMcpCommands = {
     submit: (...args) => deps.commands.submitBounded(...args),
     get: (...args) => deps.commands.getBounded(...args),
@@ -116,7 +116,7 @@ export function createCooperativeCentralApp(deps: {
       request = new Request(request.url, { method: request.method, headers: request.headers, body });
     }
     const server = principal.role === "operator"
-      ? buildCentralMcpServer({ commands, requests: deps.requests }, principal, { commandListLimit: 4 })
+      ? buildCentralMcpServer({ commands }, principal, { commandListLimit: 4 })
       : buildCooperativeMcpServer({ claims: deps.claims, lifecycle: deps.lifecycle }, principal, credential!);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try { await server.connect(transport); return await transport.handleRequest(request); }
