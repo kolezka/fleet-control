@@ -51,26 +51,100 @@ test("handler exceptions return a generic 500 without leaking details", async ()
   }
 });
 
-test("stop force closes a stalled request without waiting for its handler", async () => {
+test("stop drains an active request and is idempotent", async () => {
   let enter!: () => void;
   let release!: () => void;
   const entered = new Promise<void>((resolve) => { enter = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
+  const listener = createCooperativeListener({ handler: async () => { enter(); await gate; return new Response("done"); }, shutdownTimeoutMs: 500 });
+  const url = `http://127.0.0.1:${listener.port}/`;
+  const request = fetch(url);
+  try {
+    await entered;
+    let settled = false;
+    const stop = listener.stop();
+    void stop.then(() => { settled = true; });
+    expect(listener.stop()).toBe(stop);
+    await Bun.sleep(30);
+    expect(settled).toBe(false);
+    await expect(fetch(url)).rejects.toThrow();
+    release();
+    expect(await (await request).text()).toBe("done");
+    await stop;
+    expect(listener.stop()).toBe(stop);
+  } finally { release(); await listener.stop(); }
+});
+
+test("stop waits for an accepted handler after the client disconnects", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const listener = createCooperativeListener({ handler: async () => { enter(); await gate; return new Response("done"); }, shutdownTimeoutMs: 500 });
+  const controller = new AbortController();
+  const request = fetch(`http://127.0.0.1:${listener.port}/`, { signal: controller.signal }).catch(() => undefined);
+  try {
+    await entered;
+    controller.abort();
+    await request;
+    let settled = false;
+    const stop = listener.stop();
+    void stop.then(() => { settled = true; });
+    await Bun.sleep(50);
+    expect(settled).toBe(false);
+    release();
+    await stop;
+  } finally { release(); await listener.stop(); }
+});
+
+test("shutdown deadline bounds disconnected handler work", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  let finish!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  const listener = createCooperativeListener({ handler: async () => { enter(); await gate; finish(); return new Response("done"); }, shutdownTimeoutMs: 60 });
+  const controller = new AbortController();
+  const request = fetch(`http://127.0.0.1:${listener.port}/`, { signal: controller.signal }).catch(() => undefined);
+  try {
+    await entered;
+    controller.abort();
+    await request;
+    const stop = listener.stop();
+    expect(await Promise.race([stop.then(() => "stopped"), Bun.sleep(20).then(() => "waiting")])).toBe("waiting");
+    expect(await Promise.race([stop.then(() => "stopped"), Bun.sleep(1000).then(() => "timeout")])).toBe("stopped");
+    release();
+    await finished;
+  } finally { release(); await listener.stop(); }
+});
+
+test("shutdown times out without claiming to cancel an upstream effect", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
   let finished = false;
-  const listener = createCooperativeListener({ handler: async () => { enter(); await gate; finished = true; return new Response("done"); } });
+  const listener = createCooperativeListener({ handler: async () => { calls++; enter(); await gate; finished = true; return new Response("done"); }, shutdownTimeoutMs: 50 });
   const url = `http://127.0.0.1:${listener.port}/`;
   const request = fetch(url).then(() => "response", () => "closed");
   try {
     await entered;
+    let settled = false;
     const stop = listener.stop();
+    void stop.then(() => { settled = true; });
     expect(listener.stop()).toBe(stop);
-    const outcome = await Promise.race([stop.then(() => "stopped"), Bun.sleep(2000).then(() => "timeout")]);
-    expect(outcome).toBe("stopped");
+    await Bun.sleep(15);
+    expect(settled).toBe(false);
+    expect(await Promise.race([stop.then(() => "stopped"), Bun.sleep(2000).then(() => "timeout")])).toBe("stopped");
     expect(finished).toBe(false);
     expect(await request).toBe("closed");
     await expect(fetch(url)).rejects.toThrow();
-  } finally {
+    expect(calls).toBe(1);
     release();
-    await listener.stop();
-  }
+    await Bun.sleep(20);
+    expect(finished).toBe(true);
+    expect(calls).toBe(1);
+  } finally { release(); await listener.stop(); }
 });
