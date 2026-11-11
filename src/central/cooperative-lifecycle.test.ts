@@ -52,6 +52,15 @@ pgTest("claim lifecycle is atomic, owned, idempotent and leaves commands frozen"
     expect(await db`SELECT request_id FROM central_cooperative_lifecycle_events WHERE command_id = ${second.id}`).toHaveLength(0);
     await lifecycle.report(principal, credential, second.id, "reject", "rejected", "no");
     await expect(lifecycle.report(principal, credential, second.id, "after-reject", "completed", "")).rejects.toThrow(/cannot become/);
+    const unicode = (await commands.submit({ idempotencyKey: "unicode", hostId: "host", target: "session", actor: "operator", text: "unicode" })).command;
+    await claims.claim(principal, credential, "claim-unicode");
+    for (const detail of ["\ud800", "\udc00"]) {
+      await expect(lifecycle.report(principal, credential, unicode.id, "unicode-invalid", "accepted", detail)).rejects.toThrow(/invalid lifecycle request/);
+      await expect(lifecycle.report(principal, credential, unicode.id, detail, "accepted", "ok")).rejects.toThrow(/invalid lifecycle request/);
+    }
+    expect(await db`SELECT request_id FROM central_cooperative_lifecycle_events WHERE command_id = ${unicode.id}`).toHaveLength(0);
+    const validUnicode = await lifecycle.report(principal, credential, unicode.id, "unicode-valid", "accepted", "emoji 😀");
+    expect(await lifecycle.report(principal, credential, unicode.id, "unicode-valid", "accepted", "emoji 😀")).toEqual(validUnicode);
     const replacement = await incarnations.activate(principal);
     await expect(report("accept", "accepted")).rejects.toThrow(/denied/);
     await expect(lifecycle.report(principal, replacement, command.id, "new", "failed", "")).rejects.toThrow(/denied/);
