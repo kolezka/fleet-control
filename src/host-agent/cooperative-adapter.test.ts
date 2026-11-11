@@ -118,7 +118,7 @@ describe("isolated cooperative adapter", () => {
     }
   });
 
-  test("committed requests with lost or unusable responses remain unknown until an exact manual retry", async () => {
+  test("manual exact retry can recover a transient response failure without automatic retry", async () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "cooperative_claim", arguments: { requestId: "request-1" } } });
     for (const failure of ["drop", "non-success", "invalid", "oversized", "secret"]) {
       const committed = new Map<string, string>();
@@ -132,6 +132,7 @@ describe("isolated cooperative adapter", () => {
         const requestId = JSON.parse(payload).params.arguments.requestId as string;
         if (committed.has(requestId)) expect(committed.get(requestId)).toBe(payload);
         else committed.set(requestId, payload);
+        // The fixture models a transient transport response, not a secret persisted in a command.
         if (calls > 1) return Response.json({ jsonrpc: "2.0", id: 7, result: { committed: true } });
         if (failure === "drop") throw new Error(supervisorToken);
         if (failure === "non-success") return new Response(supervisorToken, { status: 500 });
