@@ -19,6 +19,20 @@ test("bounded assertion reads reject non-string cursors before querying", async 
   }
 });
 
+test("reconciliation rejects malformed Unicode before opening a transaction", async () => {
+  const store = new CooperativeReconciliation({} as SQL, undefined, async () => { throw new Error("unexpected transaction"); });
+  const operator = { role: "operator" as const, name: "operator" };
+  for (const invalid of ["bad\ud800", "bad\udc00"]) {
+    await expect(store.reconcile(operator, "command", "request", "unknown", invalid, null, null)).rejects.toThrow("invalid reconciliation request");
+    await expect(store.reconcile(operator, "command", invalid, "unknown", "evidence", null, null)).rejects.toThrow("invalid reconciliation request");
+    await expect(store.reconcile(operator, invalid, "request", "unknown", "evidence", null, null)).rejects.toThrow("invalid reconciliation request");
+    await expect(store.reconcile({ role: "operator", name: invalid }, "command", "request", "unknown", "evidence", null, null)).rejects.toThrow("access denied");
+    await expect(store.list(operator, invalid)).rejects.toThrow("invalid command ID");
+    await expect(store.listBounded(operator, invalid, { limit: 1 })).rejects.toThrow("invalid parameters");
+  }
+  await expect(store.reconcile({ role: "operator", name: "operator 🛰️" }, "command 🛰️", "request 🛰️", "unknown", "evidence 🛰️", null, null)).rejects.toThrow("unexpected transaction");
+});
+
 pgTest("independent assertions conflict on stale versions and preserve divergent evidence", async () => {
   const admin = new SQL(url!);
   const schema = `reconciliation_test_${crypto.randomUUID().replaceAll("-", "")}`;
