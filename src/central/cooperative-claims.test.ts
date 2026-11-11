@@ -60,6 +60,11 @@ pgTest("claims serialize, persist empty requests, fence legacy mutations and rep
     expect(otherLocation.schema).toBe(isolated.schema);
     await identities.enroll(principal);
     const credential = await incarnations.activate(principal);
+    for (const requestId of ["bad\ud800", "bad\udc00"]) {
+      await expect(claims.claim(principal, credential, requestId)).rejects.toThrow("invalid claim request ID");
+    }
+    expect(await db`SELECT request_id FROM central_cooperative_claims`).toHaveLength(0);
+    expect(await claims.claim(principal, credential, "valid-😀")).toBeNull();
     expect(await claims.claim(principal, credential, "empty")).toBeNull();
     await expect(claims.claim(principal, credential, "empty", () => false)).rejects.toThrow("unsafe claim response");
     const submit = (i: string, target = "session") => commands.submit({ idempotencyKey: `${hostId}-${i}`, hostId, target, actor: "operator", text: i });
