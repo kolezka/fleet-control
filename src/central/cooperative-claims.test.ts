@@ -140,6 +140,49 @@ pgTest("claims serialize, persist empty requests, fence legacy mutations and rep
   }
 });
 
+pgTest("safeResponse mutations cannot alter new claims or exact replays", async () => {
+  const isolated = await isolatedDatabase();
+  const { db, other } = isolated;
+  const hostId = `claim-mutation-${crypto.randomUUID()}`;
+  const principal = { role: "supervisor" as const, principalId: hostId, name: hostId, hostId, session: "session" };
+  const commands = new CentralCommands(db, () => new Date("2025-01-01T00:00:00.000Z"));
+  const identities = new SupervisorIdentityRegistry(db);
+  const incarnations = new SupervisorIncarnations(db);
+  const claims = new CooperativeClaims(db, incarnations, () => new Date("2025-01-02T00:00:00.000Z"));
+  try {
+    await commands.initialize(); await new CentralAttempts(db).initialize(); await identities.initialize(); await incarnations.initialize(); await claims.initialize();
+    await identities.enroll(principal);
+    const credential = await incarnations.activate(principal);
+    const { command } = await commands.submit({ idempotencyKey: hostId, hostId, target: "session", actor: "operator", text: "original work" });
+    const expected: CentralCommand = { ...command, status: "claimed", updatedAt: "2025-01-02T00:00:00.000Z" };
+    const seen: (CentralCommand | null)[] = [];
+    const mutate = (candidate: CentralCommand | null) => {
+      seen.push(candidate ? { ...candidate } : null);
+      if (candidate) Object.assign(candidate, { id: "mutated-id", text: "mutated text", status: "completed", updatedAt: "mutated time" });
+      return true;
+    };
+    expect(await claims.claim(principal, credential, "request", mutate)).toEqual(expected);
+    expect(seen).toEqual([expected, expected]);
+    const durableCommand = await other`SELECT * FROM central_commands WHERE id = ${command.id}`;
+    const durableClaim = await other`SELECT * FROM central_cooperative_claims WHERE incarnation_id = ${credential.incarnationId} AND request_id = ${"request"}`;
+    const durableEvents = await other<{ status: string; command_id: string; actor: string; detail: string; at: string }[]>`SELECT * FROM central_command_events WHERE command_id = ${command.id} ORDER BY seq`;
+    expect(durableCommand).toHaveLength(1);
+    expect(durableCommand[0]).toEqual({ id: command.id, idempotency_key: command.idempotencyKey, host_id: command.hostId, target: command.target, actor: command.actor, text: command.text, status: "claimed", created_at: command.createdAt, updated_at: expected.updatedAt });
+    expect(durableClaim).toHaveLength(1);
+    expect(durableClaim[0]).toMatchObject({ incarnation_id: credential.incarnationId, request_id: "request", command_id: command.id, created_at: expected.updatedAt });
+    expect(durableEvents.map((event) => event.status)).toEqual(["queued", "claimed"]);
+    expect(durableEvents[1]).toMatchObject({ command_id: command.id, actor: principal.name, detail: `cooperative claim ${credential.incarnationId}`, at: expected.updatedAt });
+    seen.length = 0;
+    expect(await claims.claim(principal, credential, "request", mutate)).toEqual(expected);
+    expect(seen).toEqual([expected]);
+    expect(await other`SELECT * FROM central_commands WHERE id = ${command.id}`).toEqual(durableCommand);
+    expect(await other`SELECT * FROM central_cooperative_claims WHERE incarnation_id = ${credential.incarnationId} AND request_id = ${"request"}`).toEqual(durableClaim);
+    expect(await other`SELECT * FROM central_command_events WHERE command_id = ${command.id} ORDER BY seq`).toEqual(durableEvents);
+  } finally {
+    await isolated.close();
+  }
+});
+
 pgTest("claimed commands remain fenced under a hostile caller search path", async () => {
   const isolated = await isolatedDatabase();
   const { db, schema } = isolated;
