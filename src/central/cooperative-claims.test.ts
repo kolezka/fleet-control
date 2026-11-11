@@ -71,6 +71,17 @@ pgTest("claims serialize, persist empty requests, fence legacy mutations and rep
     expect(await identities.matches(replacementIdentity)).toBe(true);
     await identities.enroll(principal);
     const credential = await incarnations.activate(principal);
+    const badInput = { idempotencyKey: `unicode-${crypto.randomUUID()}`, hostId, target: "session", actor: "operator", text: "bad\ud800" };
+    for (const field of ["idempotencyKey", "hostId", "target", "actor", "text"] as const) {
+      const input = { ...badInput, text: "work", [field]: `bad\ud800` };
+      for (const submit of [commands.submit.bind(commands), commands.submitBounded.bind(commands)]) {
+        await expect(submit(input)).rejects.toThrow("invalid command encoding");
+      }
+    }
+    expect(await db`SELECT id FROM central_commands`).toHaveLength(0);
+    const validInput = { ...badInput, target: "other", text: "work 😀" };
+    expect((await commands.submitBounded(validInput)).created).toBe(true);
+    expect((await commands.submitBounded(validInput)).created).toBe(false);
     for (const requestId of ["bad\ud800", "bad\udc00"]) {
       await expect(claims.claim(principal, credential, requestId)).rejects.toThrow("invalid claim request ID");
     }
