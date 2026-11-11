@@ -44,7 +44,7 @@ export function createCooperativeCentralApp(deps: {
   commands: CentralMcpCommands;
   claims: CooperativeClaims;
   lifecycle: CooperativeLifecycle;
-  inspection: Pick<CooperativeInspection, "inspect">;
+  inspection: Pick<CooperativeInspection, "inspectBounded">;
   reconciliation?: Pick<CooperativeReconciliation, "listBounded">;
   requests?: CentralRequests;
   allowedOrigins?: readonly string[];

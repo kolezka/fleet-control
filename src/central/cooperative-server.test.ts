@@ -34,7 +34,7 @@ function fixture(submitError?: Error) {
   };
   const claims = { async claim(identity: unknown, credential: { incarnationId: string; token: string }) { check(identity, credential); return null; } } as unknown as CooperativeClaims;
   const lifecycle = { async report(identity: unknown, credential: { incarnationId: string; token: string }) { check(identity, credential); return { status: "accepted" }; } } as unknown as CooperativeLifecycle;
-  const app = createCooperativeCentralApp({ auth, commands, claims, lifecycle, inspection: { async inspect() { return null; } }, identities: { async matches(identity) { if (fail) throw new Error(token); return active && JSON.stringify(identity) === JSON.stringify({ principalId: "id", name: "supervisor", hostId: "host", session: "session" }); } } });
+  const app = createCooperativeCentralApp({ auth, commands, claims, lifecycle, inspection: { async inspectBounded() { return null; } }, identities: { async matches(identity) { if (fail) throw new Error(token); return active && JSON.stringify(identity) === JSON.stringify({ principalId: "id", name: "supervisor", hostId: "host", session: "session" }); } } });
   return { app, calls, setActive(value: boolean) { active = value; }, setFail(value: boolean) { fail = value; } };
 }
 const headers = (who: string, credential?: string) => ({ authorization: `Bearer ${who}`, "content-type": "application/json", accept: "application/json, text/event-stream", ...(credential ? { "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": credential } : {}) });

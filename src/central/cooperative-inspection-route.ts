@@ -5,7 +5,7 @@ import type { CooperativeInspection } from "./cooperative-inspection.ts";
 // Mount after the server's authentication and origin middleware.
 export function createCooperativeInspectionRoute(deps: {
   auth: CentralAuth;
-  inspection: Pick<CooperativeInspection, "inspect">;
+  inspection: Pick<CooperativeInspection, "inspectBounded">;
 }) {
   const app = new Hono();
   app.get("/api/commands/:id/cooperative", async (c) => {
@@ -20,13 +20,16 @@ export function createCooperativeInspectionRoute(deps: {
     const cursor = cursors[0];
     if (!id || id.length > 256 || id.trim() !== id || /[\x00-\x1f\x7f]/.test(id) ||
         limits.length > 1 || cursors.length > 1 ||
-        (limit !== undefined && (!/^[1-9][0-9]*$/.test(limit) || Number(limit) > 1000)) ||
+        (limit !== undefined && !/^[1-4]$/.test(limit)) ||
         (cursor !== undefined && (!/^(0|[1-9][0-9]{0,18})$/.test(cursor) || BigInt(cursor) > 9223372036854775807n))) {
       return c.json({ error: "invalid inspection parameters" }, 400);
     }
     try {
-      const result = await deps.inspection.inspect(id, { ...(limit !== undefined ? { limit: Number(limit) } : {}), ...(cursor !== undefined ? { cursor } : {}) });
-      return result ? c.json(result) : c.json({ error: "not found" }, 404);
+      const result = await deps.inspection.inspectBounded(id, { limit: limit === undefined ? 4 : Number(limit), ...(cursor !== undefined ? { cursor } : {}) });
+      if (!result) return c.json({ error: "not found" }, 404);
+      const body = JSON.stringify(result);
+      if (Buffer.byteLength(body, "utf8") > 2 * 1024 * 1024) throw new Error("inspection response too large");
+      return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
     } catch {
       return c.json({ error: "request failed" }, 500);
     }

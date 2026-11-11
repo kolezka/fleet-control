@@ -43,4 +43,49 @@ export class CooperativeInspection {
     };
     return this.runner ? this.runner(query) : query(this.db);
   }
+
+  // HTTP-only bounded page. The existing inspect contract remains unchanged.
+  async inspectBounded(commandId: string, options: { limit: number; cursor?: string }): Promise<CooperativeInspectionResult | null> {
+    if (typeof commandId !== "string" || !commandId || commandId.length > 256 || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
+    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 4) throw new CommandError("invalid", "invalid limit");
+    const cursor = options.cursor ?? "0";
+    if (typeof cursor !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(cursor) || BigInt(cursor) > 9223372036854775807n) throw new CommandError("invalid", "invalid cursor");
+    type Row = CentralCommand & { oversized: boolean; incarnationId: string | null; claimRequestId: string | null; claimCreatedAt: string | null; seq: string | null; eventRequestId: string | null; eventStatus: CooperativeStatus | null; eventDetail: string | null; eventAt: string | null };
+    const query = async (db: SQL | TransactionSQL) => {
+      // Check all fields and the lookahead in the same statement that reads them.
+      const rows = await db<Row[]>`SELECT size.oversized,
+        CASE WHEN NOT size.oversized THEN c.id END AS id,
+        CASE WHEN NOT size.oversized THEN c.idempotency_key END AS "idempotencyKey",
+        CASE WHEN NOT size.oversized THEN c.host_id END AS "hostId",
+        CASE WHEN NOT size.oversized THEN c.target END AS target,
+        CASE WHEN NOT size.oversized THEN c.actor END AS actor,
+        CASE WHEN NOT size.oversized THEN c.text END AS text,
+        CASE WHEN NOT size.oversized THEN c.status END AS status,
+        CASE WHEN NOT size.oversized THEN c.created_at END AS "createdAt",
+        CASE WHEN NOT size.oversized THEN c.updated_at END AS "updatedAt",
+        CASE WHEN NOT size.oversized THEN claim.incarnation_id END AS "incarnationId",
+        CASE WHEN NOT size.oversized THEN claim.request_id END AS "claimRequestId",
+        CASE WHEN NOT size.oversized THEN claim.created_at END AS "claimCreatedAt",
+        CASE WHEN NOT size.oversized THEN event.seq::text END AS seq,
+        CASE WHEN NOT size.oversized THEN event.request_id END AS "eventRequestId",
+        CASE WHEN NOT size.oversized THEN event.status END AS "eventStatus",
+        CASE WHEN NOT size.oversized THEN event.detail END AS "eventDetail",
+        CASE WHEN NOT size.oversized THEN event.at END AS "eventAt"
+        FROM central_commands c LEFT JOIN central_cooperative_claims claim ON claim.command_id = c.id
+        LEFT JOIN LATERAL (SELECT seq, request_id, status, detail, at FROM central_cooperative_lifecycle_events
+          WHERE command_id = c.id AND seq > ${cursor}::bigint ORDER BY seq LIMIT ${options.limit + 1}) event ON true
+        CROSS JOIN LATERAL (SELECT (octet_length(c.id) + octet_length(c.idempotency_key) + octet_length(c.host_id) + octet_length(c.target) + octet_length(c.actor) + octet_length(c.text) + octet_length(c.status) + octet_length(c.created_at) + octet_length(c.updated_at) + COALESCE(octet_length(claim.incarnation_id), 0) + COALESCE(octet_length(claim.request_id), 0) + COALESCE(octet_length(claim.created_at), 0) + COALESCE(octet_length(event.seq::text), 0) + COALESCE(octet_length(event.request_id), 0) + COALESCE(octet_length(event.status), 0) + COALESCE(octet_length(event.detail), 0) + COALESCE(octet_length(event.at), 0) > 270336) AS oversized) size
+        WHERE c.id = ${commandId} ORDER BY event.seq`;
+      const first = rows[0];
+      if (!first) return null;
+      if (rows.some((row) => row.oversized)) throw new Error("inspection page too large");
+      const command: CentralCommand = { id: first.id, idempotencyKey: first.idempotencyKey, hostId: first.hostId, target: first.target, actor: first.actor, text: first.text, status: first.status, createdAt: first.createdAt, updatedAt: first.updatedAt };
+      const claim = first.incarnationId === null ? null : { incarnationId: first.incarnationId, requestId: first.claimRequestId!, createdAt: first.claimCreatedAt! };
+      const events = rows.filter((row) => row.seq !== null).map((row) => ({ seq: row.seq!, requestId: row.eventRequestId!, status: row.eventStatus!, detail: row.eventDetail!, at: row.eventAt! }));
+      const hasMore = events.length > options.limit;
+      if (hasMore) events.pop();
+      return { command, claim, events, nextCursor: hasMore ? events[events.length - 1]!.seq : null };
+    };
+    return this.runner ? this.runner(query) : query(this.db);
+  }
 }
