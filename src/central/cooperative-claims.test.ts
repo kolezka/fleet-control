@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralCommands } from "./commands.ts";
+import { CentralCommands, type CentralCommand } from "./commands.ts";
 import { CentralAttempts } from "./attempts.ts";
 import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
@@ -102,7 +102,26 @@ pgTest("claims serialize, persist empty requests, fence legacy mutations and rep
     expect(await claims.claim(principal, credential, "same")).toEqual(first);
     await expect(claims.claim(principal, credential, "rejected", () => false)).rejects.toThrow("unsafe claim response");
     expect(await db`SELECT 1 FROM central_cooperative_claims WHERE request_id = ${"rejected"}`).toHaveLength(0);
-    expect((await commands.get(first.id === one.id ? two.id : one.id)).status).toBe("queued");
+    const remainingId = first.id === one.id ? two.id : one.id;
+    expect((await commands.get(remainingId)).status).toBe("queued");
+    for (const failure of ["false", "throw"] as const) {
+      const candidates: (CentralCommand | null)[] = [];
+      const before = await other`SELECT * FROM central_commands WHERE id = ${remainingId}`;
+      const requestId = `post-update-${failure}`;
+      await expect(claims.claim(principal, credential, requestId, (candidate) => {
+        candidates.push(candidate);
+        if (candidates.length === 1) return true;
+        if (failure === "throw") throw new Error("private guard detail");
+        return false;
+      })).rejects.toThrow("unsafe claim response");
+      expect(candidates).toHaveLength(2);
+      expect(candidates[0]?.id).toBe(remainingId);
+      expect(candidates[0]?.status).toBe("claimed");
+      expect(candidates[1]).toEqual(candidates[0]);
+      expect(await other`SELECT * FROM central_commands WHERE id = ${remainingId}`).toEqual(before);
+      expect(await other`SELECT 1 FROM central_cooperative_claims WHERE request_id = ${requestId}`).toHaveLength(0);
+      expect((await other<{ status: string }[]>`SELECT status FROM central_command_events WHERE command_id = ${remainingId} ORDER BY seq`).map((event) => event.status)).toEqual(["queued"]);
+    }
     const second = (await claims.claim(principal, credential, "next"))!;
     expect(second.id).not.toBe(first.id);
     expect(await claims.claim(principal, credential, "end")).toBeNull();
