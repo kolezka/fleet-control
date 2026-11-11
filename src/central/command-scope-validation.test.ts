@@ -2,13 +2,14 @@ import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { CommandError } from "../commands.ts";
 import { CentralCommands } from "./commands.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 // Store-level scope rules must match list scope: nonempty after trim, at most 256 characters.
 integration("submit validates hostId and target at the store boundary", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const run = crypto.randomUUID();
   const store = new CentralCommands(db);
   const hostIds: string[] = [];

@@ -5,8 +5,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CentralCommands } from "./commands.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
 import type { Principal } from "./auth.ts";
+import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
-const url = process.env.CENTRAL_TEST_DATABASE_URL;
+const url = centralTestDatabaseUrl(process.env);
 const integration = url ? test : test.skip;
 
 // Store cursors are capped at 8192 characters (decodeCursor in commands.ts). MCP must accept every cursor the
@@ -26,7 +27,7 @@ async function connect(commands: CentralCommands, principal: Principal) {
 }
 
 integration("MCP accepts store-generated cursors for maximum-length unicode scopes and keeps a finite bound", async () => {
-  const db = new SQL(url!);
+  const db = withValidatedTestDatabaseUrl(process.env, url!, (currentUrl) => new SQL(currentUrl));
   const store = new CentralCommands(db, () => new Date("2025-01-01T00:00:00.000Z"));
   const run = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   // Worst case for JSON/UTF-8 size per UTF-16 unit: BMP CJK is 3 bytes per unit (astral emoji is 2 per unit).
