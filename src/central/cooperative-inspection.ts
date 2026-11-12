@@ -18,7 +18,7 @@ export class CooperativeInspection {
   constructor(private db: SQL, private runner?: CooperativeTransactionRunner) {}
 
   async inspect(commandId: string, options: { limit?: number; cursor?: string } = {}): Promise<CooperativeInspectionResult | null> {
-    if (typeof commandId !== "string" || !commandId || commandId.length > 256 || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
+    if (typeof commandId !== "string" || !commandId || commandId.length > 256 || !commandId.isWellFormed() || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
     const limit = options.limit ?? 100;
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new CommandError("invalid", "invalid limit");
     const cursor = options.cursor ?? "0";
@@ -46,7 +46,7 @@ export class CooperativeInspection {
 
   // HTTP-only bounded page. The existing inspect contract remains unchanged.
   async inspectBounded(commandId: string, options: { limit: number; cursor?: string }): Promise<CooperativeInspectionResult | null> {
-    if (typeof commandId !== "string" || !commandId || commandId.length > 256 || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
+    if (typeof commandId !== "string" || !commandId || commandId.length > 256 || !commandId.isWellFormed() || commandId.trim() !== commandId || /[\x00-\x1f\x7f]/.test(commandId)) throw new CommandError("invalid", "invalid command ID");
     const limit = options.limit;
     if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new CommandError("invalid", "invalid limit");
     const cursor = options.cursor ?? "0";
