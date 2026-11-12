@@ -32,7 +32,7 @@ function cancel(body: ReadableStream<Uint8Array> | null, track: (promise: Promis
   try { track(body.cancel()); } catch { /* Cancellation is best effort. */ }
 }
 
-async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number, signal: AbortSignal, track: (promise: Promise<unknown>) => void): Promise<Uint8Array> {
+async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number, signal: AbortSignal, track: (promise: Promise<unknown>) => void, checkDeadline: () => void): Promise<Uint8Array> {
   if (!body) return new Uint8Array();
   const reader = body.getReader();
   const stop = () => { try { track(reader.cancel()); } catch { /* Best effort. */ } };
@@ -43,6 +43,8 @@ async function readLimited(body: ReadableStream<Uint8Array> | null, limit: numbe
     if (signal.aborted) throw new Error("aborted");
     while (true) {
       const { done, value } = await reader.read();
+      // Ready chunks resolve as microtasks, so the timer alone may never run.
+      checkDeadline();
       if (signal.aborted) throw new Error("aborted");
       if (done) break;
       length += value.byteLength;
@@ -129,6 +131,8 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
         pending++;
         void promise.then(() => { if (--pending === 0) active--; }, () => { if (--pending === 0) active--; });
       };
+      const deadline = performance.now() + timeout;
+      const checkDeadline = () => { if (performance.now() >= deadline && !controller.signal.aborted) abort(false); };
       const controller = new AbortController();
       let forwarded = false;
       let finish!: (response: Response) => void;
@@ -145,7 +149,7 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
       const work = (async (): Promise<Response> => {
         try {
           let bytes: Uint8Array;
-          try { bytes = await readLimited(request.body, requestLimit, controller.signal, track); }
+          try { bytes = await readLimited(request.body, requestLimit, controller.signal, track, checkDeadline); }
           catch (cause) { if (controller.signal.aborted) throw cause; return error(cause instanceof RangeError ? 413 : 400, cause instanceof RangeError ? "body too large" : "invalid request body"); }
           let raw: string;
           try { raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return error(400, "invalid JSON"); }
@@ -156,18 +160,20 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
           const requestId = (input as Record<string, unknown>).id;
           if (hasId && !((typeof requestId === "string" && requestId.length <= 256) || (typeof requestId === "number" && Number.isSafeInteger(requestId)))) return error(400, "invalid MCP request");
           if (containsEncodedSecret(raw) || secrets.some((secret) => raw.includes(secret) || JSON.stringify(input).includes(secret))) return error(400, "invalid MCP request");
+          checkDeadline();
           if (controller.signal.aborted) throw new Error("aborted");
           forwarded = true;
           const upstream = await centralFetch(endpoint, { method: "POST", redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${supervisorToken}`, "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": incarnationToken, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: raw });
+          checkDeadline();
           if (controller.signal.aborted) { cancel(upstream.body, track); throw new Error("aborted"); }
           if (!upstream.ok) { cancel(upstream.body, track); return unknown(502); }
           if (upstream.status === 202 || upstream.status === 204) {
             if (hasId) { cancel(upstream.body, track); return unknown(502); }
-            const acknowledgement = await readLimited(upstream.body, responseLimit, controller.signal, track);
+            const acknowledgement = await readLimited(upstream.body, responseLimit, controller.signal, track, checkDeadline);
             return acknowledgement.length === 0 ? new Response(null, { status: upstream.status }) : unknown(502);
           }
           if (!hasId || !/^application\/json(?:\s*;|$)/i.test(upstream.headers.get("content-type") ?? "")) { cancel(upstream.body, track); return unknown(502); }
-          const text = new TextDecoder("utf-8", { fatal: true }).decode(await readLimited(upstream.body, responseLimit, controller.signal, track));
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(await readLimited(upstream.body, responseLimit, controller.signal, track, checkDeadline));
           const parsed: unknown = JSON.parse(text);
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return unknown(502);
           const response = parsed as Record<string, unknown>;
@@ -194,7 +200,11 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
       })();
       // A slot remains occupied while an uncooperative operation is still pending.
       void work.then(() => { if (--pending === 0) active--; }, () => { if (--pending === 0) active--; });
-      try { return await Promise.race([work, interrupted]); }
+      try {
+        const result = await Promise.race([work, interrupted]);
+        if (performance.now() >= deadline && !controller.signal.aborted) { abort(false); return await interrupted; }
+        return result;
+      }
       finally { clearTimeout(timer); request.signal.removeEventListener("abort", onAbort); }
     } catch { return error(502, "adapter request failed"); }
   };
