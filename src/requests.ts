@@ -223,19 +223,21 @@ export class Requests {
     })();
   }
 
-  // Is there a valid human approval for exactly this run, phase and revision? Silence is never approval.
+  // The result reflects recorded responses, not proof of human authority.
   gate(runId: string, phase: string, revision: number): { approved: boolean; reason: string; requestId: string | null } {
-    const run = this.run(runId);
-    if (run.phase !== phase || run.revision !== revision) {
-      return { approved: false, reason: `run is at ${run.phase} r${run.revision}, not ${phase} r${revision}`, requestId: null };
-    }
-    const reqs = this.list({ runId }).filter((r) => r.kind === "approval" && r.phase === phase && r.revision === revision);
-    const declined = reqs.find((r) => r.response === "decline");
-    if (declined) return { approved: false, reason: `declined by ${declined.resolvedBy}`, requestId: declined.id };
-    const approved = reqs.find((r) => (r.status === "resolved" || r.status === "acknowledged") && r.response === "approve");
-    if (approved) return { approved: true, reason: `approved by ${approved.resolvedBy}`, requestId: approved.id };
-    const open = reqs.find((r) => r.status === "open");
-    return { approved: false, reason: open ? "approval requested, no answer yet" : "no approval request for this revision", requestId: open?.id ?? null };
+    return this.db.transaction(() => {
+      const run = this.run(runId);
+      if (run.phase !== phase || run.revision !== revision) {
+        return { approved: false, reason: `run is at ${run.phase} r${run.revision}, not ${phase} r${revision}`, requestId: null };
+      }
+      const reqs = this.list({ runId }).filter((r) => r.kind === "approval" && r.phase === phase && r.revision === revision);
+      const declined = reqs.find((r) => r.response === "decline");
+      if (declined) return { approved: false, reason: `declined by ${declined.resolvedBy}`, requestId: declined.id };
+      const approved = reqs.find((r) => (r.status === "resolved" || r.status === "acknowledged") && r.response === "approve");
+      if (approved) return { approved: true, reason: `approved by ${approved.resolvedBy}`, requestId: approved.id };
+      const open = reqs.find((r) => r.status === "open");
+      return { approved: false, reason: open ? "approval requested, no answer yet" : "no approval request for this revision", requestId: open?.id ?? null };
+    })();
   }
 
   run(id: string): Run {
