@@ -49,7 +49,10 @@ export class Auth {
     if (header) return this.check(header.match(/^Bearer\s+(\S+)$/i)?.[1]);
     const cookie = req.headers.get("cookie") ?? "";
     const value = cookie.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-    return this.check(value ? decodeURIComponent(value) : null);
+    let token: string | null = null;
+    try { token = value ? decodeURIComponent(value) : null; }
+    catch (error) { if (error instanceof URIError) return null; throw error; }
+    return this.check(token);
   }
 }
 
