@@ -39,8 +39,14 @@ const defaults: Dependencies = {
   serve: (options) => Bun.serve(options),
 };
 
-export async function startCentral(env: Record<string, string | undefined> = process.env, deps: Dependencies = defaults) {
+// How long stop() lets accepted requests finish and reply before force-closing connections.
+// Same value as cooperative-main.ts; defined here so this entry point does not import that module graph.
+export const CENTRAL_SHUTDOWN_GRACE_MS = 10_000;
+
+export async function startCentral(env: Record<string, string | undefined> = process.env, deps: Dependencies = defaults, options: { shutdownGraceMs?: number } = {}) {
   const config = centralConfig(env);
+  const shutdownGraceMs = options.shutdownGraceMs ?? CENTRAL_SHUTDOWN_GRACE_MS;
+  if (!Number.isSafeInteger(shutdownGraceMs) || shutdownGraceMs < 1 || shutdownGraceMs > 2_147_483_647) throw new Error("invalid shutdown grace");
   let auth: CentralAuth;
   let credentials: Credential[];
   try {
@@ -77,11 +83,21 @@ export async function startCentral(env: Record<string, string | undefined> = pro
     });
     const pool = db;
     let stopping: Promise<void> | undefined;
+    // Stop accepting, let accepted requests reply until the grace deadline, then force-close.
+    // Open host WebSockets keep server.stop(false) waiting, so they are closed at the deadline.
+    // SQL work is always awaited (unbounded) before the pool closes under it.
     return { server, stop() {
       return stopping ??= (async () => {
-        await server.stop(true);
-        await Promise.allSettled([...pending]);
-        await pool.close();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), shutdownGraceMs); });
+        try {
+          const drained = await Promise.race([Promise.allSettled([server.stop(false), ...pending]).then(() => true), deadline]);
+          if (!drained) await server.stop(true);
+        } finally {
+          clearTimeout(timer);
+          await Promise.allSettled([...pending]);
+          await pool.close();
+        }
       })();
     } };
   } catch {
@@ -90,8 +106,18 @@ export async function startCentral(env: Record<string, string | undefined> = pro
   }
 }
 
+// SIGINT or SIGTERM starts a graceful stop. Both listeners are removed once stopping begins,
+// so a second signal gets the default action and kills the process immediately.
 if (import.meta.main) {
-  startCentral().catch(() => {
+  startCentral().then((running) => {
+    const onSignal = () => {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      running.stop().catch(() => { console.error("central shutdown failed; in-flight outcomes may be unknown"); process.exitCode = 1; });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }, () => {
     console.error("central startup failed; check local configuration");
     process.exitCode = 1;
   });

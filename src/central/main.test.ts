@@ -152,11 +152,12 @@ describe("local central startup", () => {
       return baseSql(strings, ...values);
     }, { close: async () => { closed = true; } }) as unknown as SQL;
     let port = 0;
+    // Short grace: an open host socket holds a graceful stop until the deadline force-closes it.
     const running = await startCentral(env, { ...f.deps, createSql: () => sql, serve: (options) => {
       const server = Bun.serve({ ...options, port: 0 });
       port = server.port!;
       return server;
-    } });
+    } }, { shutdownGraceMs: 100 });
     const BunSocket = WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => WebSocket;
     const socket = new BunSocket(`ws://127.0.0.1:${port}/api/host/socket`, { headers: { authorization: `Bearer ${hostToken}` } });
     let stop: Promise<void> | undefined;
