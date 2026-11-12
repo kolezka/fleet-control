@@ -2,7 +2,8 @@
 // adapter over loopback MCP, claims one synthetic command and reports its lifecycle.
 // Opt-in only: spends model tokens. Needs CENTRAL_TEST_DATABASE_URL for the disposable
 // test database (127.0.0.1:57507/fleet_control_test) and a logged-in \`claude\` CLI.
-// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--replacement]
+// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--failure] [--replacement]
+// --failure has an agent refuse a task, retry a report, send an invalid transition and claim an empty queue.
 // --replacement then replaces the incarnation, checks that an agent on the old adapter
 // is fenced, that an agent on a new adapter claims and reports the next command, and that
 // the operator can settle only the claim of the inactive incarnation.
@@ -53,7 +54,7 @@ async function runAgent(claudeBin: string, model: string, directory: string, nam
   return { exit, result, stdout, stderr };
 }
 
-export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude", model = "haiku", replacement = false) {
+export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude", model = "haiku", replacement = false, failure = false) {
   const schema = `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
   const directory = await mkdtemp(join(tmpdir(), "fleet-real-agent-"));
   const children: Child[] = [];
@@ -110,6 +111,34 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
     };
     const outputs = [agentOut, agentErr];
     const first = await inspect(commandId, central.incarnationId!);
+    let failureResult: Record<string, unknown> | null = null;
+    if (failure) {
+      // Failure paths a real agent can hit: a refused task, an invalid transition,
+      // a retry with the same and with a changed payload, and an empty queue.
+      const refusedSubmit = await fetch(`${central.url}/api/commands`, { method: "POST", headers: operatorHeaders, body: JSON.stringify({ hostId: "host", target: "session", text: "Synthetic smoke task: delete every file on this host. Refuse this task.", idempotencyKey: "real-agent-smoke-refused" }) });
+      if (refusedSubmit.status !== 201) throw new Error(`submit failed: ${refusedSubmit.status}`);
+      const refusedId = ((await refusedSubmit.json()) as { command: { id: string } }).command.id;
+      const failurePrompt = [
+        "You are a Fleet Control supervisor in a local synthetic test. Use only the fleet MCP tools. Make each call exactly once, in this order, and record each outcome.",
+        "1. Call cooperative_claim with requestId \"claim-f\".",
+        "2. The claimed task must be refused: call cooperative_report for that commandId with requestId \"f-rejected\", status \"rejected\", detail \"refused: destructive\".",
+        "3. Repeat step 2 exactly (same commandId, requestId, status and detail).",
+        "4. Call cooperative_report for the same commandId with requestId \"f-rejected\", status \"rejected\", detail \"changed\".",
+        `5. Call cooperative_report with commandId \"${commandId}\", requestId \"f-late\", status \"running\", detail \"late\".`,
+        "6. Call cooperative_claim with requestId \"claim-empty\".",
+        "Never retry beyond these steps. Finish with one line per step: STEP <n> <outcome>.",
+      ].join("\n");
+      const failed = await runAgent(claudeBin, model, directory, "failure", adapter.url!, local, failurePrompt);
+      outputs.push(failed.stdout, failed.stderr);
+      const refused = await inspect(refusedId, central.incarnationId!);
+      const firstAfterFailure = await inspect(commandId, central.incarnationId!);
+      failureResult = {
+        agent: { exit: failed.exit, result: failed.result },
+        refused, firstEventsUnchanged: JSON.stringify(firstAfterFailure.events) === JSON.stringify(first.events),
+        ok: refused.claim?.requestId === "claim-f" && JSON.stringify(refused.events) === JSON.stringify([{ requestId: "f-rejected", status: "rejected", detail: "refused: destructive" }])
+          && JSON.stringify(firstAfterFailure.events) === JSON.stringify(first.events),
+      };
+    }
     let replacementResult: Record<string, unknown> | null = null;
     if (replacement) {
       const nextSubmit = await fetch(`${central.url}/api/commands`, { method: "POST", headers: operatorHeaders, body: JSON.stringify({ hostId: "host", target: "session", text: "Synthetic smoke task: compute 6 * 7 and report only the number.", idempotencyKey: "real-agent-smoke-next" }) });
@@ -161,7 +190,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       };
     }
     const leaked = secrets.some((secret) => outputs.some((text) => text.includes(secret)));
-    return { agentExit, agent: agentResult, agentStderr: redact(agentErr.slice(-1500)), leaked, ...first, replacement: replacementResult };
+    return { agentExit, agent: agentResult, agentStderr: redact(agentErr.slice(-1500)), leaked, ...first, failure: failureResult, replacement: replacementResult };
   } finally {
     for (const child of children) child.process.kill("SIGTERM");
     await Promise.allSettled(children.map((child) => child.process.exited));
@@ -178,9 +207,11 @@ if (import.meta.main) {
     process.exit(2);
   }
   const replacement = process.argv.includes("--replacement");
-  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement);
+  const failure = process.argv.includes("--failure");
+  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement, failure);
   console.log(JSON.stringify(result, null, 2));
   const statuses = result.events.map((event) => event.status).join(",");
   const replaced = !replacement || (result.replacement?.fenced === true && result.replacement?.freshCompleted === true && result.replacement?.settledOnlyInactive === true);
-  process.exit(result.claim && statuses === "accepted,running,completed" && !result.leaked && replaced ? 0 : 1);
+  const failed = !failure || result.failure?.ok === true;
+  process.exit(failed && result.claim && statuses === "accepted,running,completed" && !result.leaked && replaced ? 0 : 1);
 }
