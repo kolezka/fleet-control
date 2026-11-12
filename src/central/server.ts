@@ -22,7 +22,7 @@ async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_BODY) { void reader.cancel(); throw new RangeError("body too large"); }
+      if (size > MAX_BODY) { void reader.cancel().catch(() => {}); throw new RangeError("body too large"); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -85,6 +85,8 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcp
     if (request.method === "POST") {
       let body: Uint8Array<ArrayBuffer>;
       try { body = await boundedBody(request); } catch { return c.json({ error: "body too large" }, 413); }
+      try { new TextDecoder("utf-8", { fatal: true }).decode(body); }
+      catch { return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400); }
       request = new Request(request.url, { method: request.method, headers: request.headers, body });
     }
     const identities = typeof deps.identities.lockActive === "function" ? { lockActive: deps.identities.lockActive.bind(deps.identities) } : undefined;
