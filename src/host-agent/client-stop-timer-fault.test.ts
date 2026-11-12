@@ -42,3 +42,15 @@ test("a timer that clearTimer failed to cancel cannot steal a restarted client's
   expect(sockets).toHaveLength(3);
 });
 
+test("a timer callback that runs inside setTimer does not leave a dead handle blocking later retries", () => {
+  const sockets: FakeSocket[] = [];
+  let handles = 0;
+  const client = new HostAgentClient({ url: "wss://example.com", hostId: "h", token: "secret",
+    socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
+    execute: async (item) => ({ id: item.attemptId, status: "delivered" }),
+    setTimer: (callback) => { callback(); return ++handles; }, clearTimer: () => {} });
+  client.start(); sockets[0]!.emit("close");
+  expect(sockets).toHaveLength(2);
+  sockets[1]!.emit("close");
+  expect(sockets).toHaveLength(3);
+});
