@@ -42,6 +42,7 @@ export class HostAgentClient {
   private socket: HostSocket | undefined;
   private connection: object | undefined;
   private timer: unknown;
+  private retry: object | undefined;
   private running = false;
   private reconnects = 0;
   private pending = 0;
@@ -72,6 +73,7 @@ export class HostAgentClient {
     // Detach before clearTimer: it may restart the client and schedule a timer that must survive.
     const timer = this.timer;
     this.timer = undefined;
+    this.retry = undefined;
     if (timer !== undefined) this.options.clearTimer(timer);
     const socket = this.socket;
     this.socket = undefined;
@@ -194,6 +196,15 @@ export class HostAgentClient {
   private schedule(): void {
     if (!this.running || this.timer !== undefined) return;
     const delay = delays[Math.min(this.reconnects++, delays.length - 1)]!;
-    this.timer = this.options.setTimer(() => { this.timer = undefined; this.connect(); }, delay);
+    // A token, not the handle, identifies this retry: a timer that clearTimer failed to
+    // cancel must not clear or reconnect for a later start.
+    const retry = {};
+    this.retry = retry;
+    this.timer = this.options.setTimer(() => {
+      if (this.retry !== retry) return;
+      this.retry = undefined;
+      this.timer = undefined;
+      this.connect();
+    }, delay);
   }
 }
