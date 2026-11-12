@@ -153,7 +153,7 @@ function registerRequestTools(server: McpServer, requests: CentralRequests, prin
     description: "Withdraw an open request on your run.", inputSchema: { requestId: z.string().min(1), reason: z.string().min(1).max(500) },
   }, async (args) => attempt(async () => { return { request: displayRequest(await mutation(() => requests.withdraw({ ...args, actor: owner }, requestGuard))) }; }));
   server.registerTool("request_gate", {
-    description: "Check human approval for your run's exact phase and revision.",
+    description: "Check the approval gate based on recorded responses for your run's exact phase and revision. The result is not proof of a human decision and is not authorization to execute.",
     inputSchema: { runId: z.string().min(1), phase: z.string().min(1), revision: z.number().int().min(1) }, annotations: { readOnlyHint: true },
   }, async ({ runId, phase, revision }) => attempt(async () => mutation(() => requests.gateScoped(runId, phase, revision, owner, requestGuard))));
 }

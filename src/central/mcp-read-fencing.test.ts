@@ -24,6 +24,20 @@ async function connect(deps: Parameters<typeof buildCentralMcpServer>[0], who: P
   return { client, server };
 }
 
+test("request_gate discovery distinguishes recorded responses from authority", async () => {
+  const commands = {} as CentralMcpCommands;
+  const requests = {} as CentralRequests;
+  const { client, server } = await connect({ commands, requests });
+  try {
+    const { tools } = await client.listTools();
+    const gate = tools.find((tool) => tool.name === "request_gate");
+    expect(gate).toBeDefined();
+    expect(gate!.description).toContain("recorded responses");
+    expect(gate!.description).toContain("not proof of a human decision");
+    expect(gate!.description).toContain("not authorization to execute");
+  } finally { await client.close(); await server.close(); }
+});
+
 for (const [tool, args, method] of calls) {
   test(tool + " fences reads with the captured identity and transaction", async () => {
     const tx = {} as never;
