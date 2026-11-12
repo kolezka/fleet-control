@@ -156,6 +156,7 @@ export class CentralRequests {
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
       if (status === "acknowledged" && r.status === "acknowledged") return r;
       if (r.status !== (status === "acknowledged" ? "resolved" : "open")) throw new RequestError("conflict", `${r.id} is ${r.status}; cannot become ${status}`);
+      if (!validEncoding(input.actor)) throw new RequestError("invalid", "invalid request encoding");
       const detail = status === "withdrawn" ? nonEmpty(reason!, "reason") : `read answer "${r.response}"`;
       await tx`UPDATE central_requests SET status = ${status} WHERE id = ${r.id}`;
       await this.event(tx, r.id, r.runId, status, input.actor, detail, this.now().toISOString());
