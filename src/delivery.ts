@@ -64,8 +64,8 @@ export class Deliverer {
       let result: SendResult;
       try {
         result = await this.send(c.target, file);
-      } catch (e) {
-        result = { exitCode: -1, stdout: "", stderr: `could not run fleet send: ${(e as Error).message}` };
+      } catch {
+        return this.commands.transition(id, "delivery_unknown", "service", "fleet send failed with an exception");
       }
       const { status, detail } = classify(result);
       return this.commands.transition(id, status, "service", detail);
