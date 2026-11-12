@@ -149,7 +149,9 @@ export class HostAgentClient {
       if (!current()) return;
       if (!dispatch || this.pending >= maxPending) {
         this.socket = undefined;
-        socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch");
+        // A throwing close must not skip the reconnect; the old socket is already ignored by current().
+        try { socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch"); }
+        catch (error) { this.reportError(error); }
         this.schedule();
         return;
       }
