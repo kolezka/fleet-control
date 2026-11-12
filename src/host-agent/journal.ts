@@ -25,7 +25,7 @@ export class DeliveryJournal {
 
   start(id: string, fingerprint: string): { authorized: boolean; attempt: DeliveryAttempt } {
     this.requireNoTransaction();
-    if (typeof id !== "string" || !id.trim() || typeof fingerprint !== "string" || !fingerprint.trim()) {
+    if (typeof id !== "string" || !id.isWellFormed() || !id.trim() || typeof fingerprint !== "string" || !fingerprint.isWellFormed() || !fingerprint.trim()) {
       throw new JournalError("invalid", "attempt id and intent fingerprint are required");
     }
     return this.db.transaction(() => {
@@ -37,17 +37,20 @@ export class DeliveryJournal {
   }
 
   findIntent(id: string, fingerprint: string): DeliveryAttempt | null {
+    if (typeof fingerprint !== "string" || !fingerprint.isWellFormed()) throw new JournalError("invalid", "invalid intent fingerprint");
     const attempt = this.get(id);
     if (attempt && attempt.fingerprint !== fingerprint) throw new JournalError("conflict", `attempt ${id} has a different intent`);
     return attempt;
   }
 
   get(id: string): DeliveryAttempt | null {
+    if (typeof id !== "string" || !id.isWellFormed()) throw new JournalError("invalid", "invalid attempt id");
     return this.db.query<DeliveryAttempt, [string]>("SELECT id, fingerprint, status FROM host_delivery_attempts WHERE id = ?").get(id);
   }
 
   finish(id: string, status: "delivered" | "unknown"): DeliveryAttempt {
     this.requireNoTransaction();
+    if (typeof id !== "string" || !id.isWellFormed()) throw new JournalError("invalid", "invalid attempt id");
     if (status !== "delivered" && status !== "unknown") throw new JournalError("invalid", "invalid outcome");
     return this.db.transaction(() => {
       const changed = this.db.query("UPDATE host_delivery_attempts SET status = ? WHERE id = ? AND status = 'started'").run(status, id).changes;
