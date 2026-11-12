@@ -20,6 +20,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "ghostty-web": "0.4.0",
+    "hono": "^4.13.18",
     "zod": "4.6.7"
   }
 }

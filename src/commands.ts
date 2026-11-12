@@ -5,8 +5,9 @@ import type { Database } from "bun:sqlite";
 export type CommandStatus =
   | "queued" // stored on the host; not yet shown to the recipient
   | "delivering" // a delivery attempt is in progress; after a crash this becomes delivery_unknown
-  | "delivered" // fleet send confirmed the text appeared in the recipient pane
+  | "delivered" // sender reported delivery; the bundled sender checks only a first-line prefix
   | "delivery_unknown" // an attempt may or may not have reached the pane; never retried automatically
+  | "claimed" // cooperatively reserved, not accepted
   | "accepted"
   | "rejected"
   | "running"
@@ -38,6 +39,7 @@ const allowed: Record<CommandStatus, CommandStatus[]> = {
   delivering: ["delivered", "queued", "delivery_unknown"],
   delivered: ["accepted", "rejected"],
   delivery_unknown: ["accepted", "rejected"],
+  claimed: [],
   accepted: ["running", "completed", "failed"],
   running: ["completed", "failed"],
   rejected: [],
@@ -81,18 +83,22 @@ export class Commands {
   }
 
   submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): { command: Command; created: boolean } {
-    const text = input.text.trim();
+    const { idempotencyKey, target, actor, text: rawText } = input;
+    if (![idempotencyKey, actor, rawText].every((value) => value.isWellFormed())) {
+      throw new CommandError("invalid", "command fields must contain valid Unicode");
+    }
+    const text = rawText.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
     if (text.length > MAX_TEXT) throw new CommandError("invalid", `instruction text is longer than ${MAX_TEXT} characters`);
-    if (!sessionName.test(input.target)) throw new CommandError("invalid", `invalid target session: ${input.target}`);
-    if (!input.idempotencyKey.trim() || !input.actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
+    if (!sessionName.test(target)) throw new CommandError("invalid", `invalid target session: ${target}`);
+    if (!idempotencyKey.trim() || !actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
 
     return this.db.transaction(() => {
-      const existing = this.byKey(input.idempotencyKey);
+      const existing = this.byKey(idempotencyKey);
       if (existing) {
         // Same key, same intent: return the original. Same key, different intent: refuse.
-        if (existing.target !== input.target || existing.text !== text || existing.actor !== input.actor) {
-          throw new CommandError("conflict", `idempotency key ${input.idempotencyKey} was used for a different command (${existing.id})`);
+        if (existing.target !== target || existing.text !== text || existing.actor !== actor) {
+          throw new CommandError("conflict", `idempotency key ${idempotencyKey} was used for a different command (${existing.id})`);
         }
         return { command: existing, created: false };
       }
@@ -101,8 +107,8 @@ export class Commands {
       this.db
         .query(`INSERT INTO commands (id, idempotency_key, target, actor, text, status, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`)
-        .run(id, input.idempotencyKey, input.target, input.actor, text, at, at);
-      this.event(id, "queued", input.actor, "stored on host", at);
+        .run(id, idempotencyKey, target, actor, text, at, at);
+      this.event(id, "queued", actor, "stored on host", at);
       return { command: this.get(id), created: true };
     })();
   }
@@ -112,6 +118,9 @@ export class Commands {
       const c = this.get(id);
       if (!allowed[c.status].includes(to)) {
         throw new CommandError("conflict", `${id} is ${c.status}; cannot become ${to}`);
+      }
+      if (!actor.isWellFormed() || !detail.isWellFormed()) {
+        throw new CommandError("invalid", "command event fields must contain valid Unicode");
       }
       const at = this.now().toISOString();
       this.db.query("UPDATE commands SET status = ?, updated_at = ? WHERE id = ?").run(to, at, id);
@@ -134,7 +143,7 @@ export class Commands {
 
   events(id?: string, afterSeq = 0): CommandEvent[] {
     const cols = "seq, command_id AS commandId, status, actor, detail, at";
-    return id
+    return id !== undefined
       ? this.db.query<CommandEvent, [string, number]>(`SELECT ${cols} FROM command_events WHERE command_id = ? AND seq > ? ORDER BY seq`).all(id, afterSeq)
       : this.db.query<CommandEvent, [number]>(`SELECT ${cols} FROM command_events WHERE seq > ? ORDER BY seq`).all(afterSeq);
   }

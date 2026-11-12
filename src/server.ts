@@ -180,15 +180,16 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!auth) return Response.redirect("/", 303);
           if (!sameOrigin(req)) return forbidden();
           const form = await req.formData().catch(() => null);
-          const token = form?.get("token");
-          const who = typeof token === "string" ? auth.check(token.trim()) : null;
+          const value = form?.get("token");
+          const token = typeof value === "string" ? value.trim() : "";
+          const who = auth.check(token);
           if (!who) return Response.redirect("/login?failed=1", 303);
           const secure = opts.tls ? "; Secure" : "";
           return new Response(null, {
             status: 303,
             headers: {
               location: "/",
-              "set-cookie": `${COOKIE}=${encodeURIComponent(token as string)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+              "set-cookie": `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
             },
           });
         },
@@ -223,8 +224,10 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!control) return noControl();
           if (!originAllowed(req)) return forbidden();
           try {
-            const body = (await req.json()) as Record<string, unknown>;
-            const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string) : "");
+            const body: unknown = await req.json();
+            if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            const fields = body as Record<string, unknown>;
+            const str = (k: string) => (typeof fields[k] === "string" ? (fields[k] as string) : "");
             const { command, created } = control.commands.submit({
               idempotencyKey: str("idempotencyKey"),
               target: str("target"),
@@ -261,7 +264,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!control?.requests) return noControl();
           if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
           try {
-            const b = (await req.json()) as Record<string, unknown>;
+            const body: unknown = await req.json();
+            if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            const b = body as Record<string, unknown>;
             const request = control.requests.resolve({
               requestId: req.params.id,
               response: typeof b.response === "string" ? b.response : "",

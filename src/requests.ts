@@ -42,6 +42,24 @@ const nonEmpty = (v: string, name: string) => {
   return v.trim();
 };
 
+function serializeEvidence(value: string[] | undefined): string {
+  const json = JSON.stringify(value ?? []);
+  const decoded: unknown = json === undefined ? undefined : JSON.parse(json);
+  if (!Array.isArray(decoded) || !decoded.every((entry) => typeof entry === "string" && entry.isWellFormed())) {
+    throw new RequestError("invalid", "invalid request evidence");
+  }
+  return json!;
+}
+
+function serializeAllowedResponses(value: string[]): string {
+  const json = JSON.stringify(value);
+  const decoded: unknown = json === undefined ? undefined : JSON.parse(json);
+  if (!Array.isArray(decoded) || !decoded.every((entry) => typeof entry === "string" && entry.isWellFormed())) {
+    throw new RequestError("invalid", "invalid allowed responses");
+  }
+  return json!;
+}
+
 export class Requests {
   constructor(private db: Database, private now: () => Date = () => new Date()) {
     db.run(`CREATE TABLE IF NOT EXISTS runs (
@@ -93,29 +111,38 @@ export class Requests {
         if (existing.orchestrator !== orchestrator) throw new RequestError("forbidden", `run ${runId} belongs to orchestrator ${existing.orchestrator}`);
         return existing;
       }
+      if (!orchestrator.isWellFormed()) throw new RequestError("invalid", "invalid orchestrator encoding");
+      const phase = input.phase;
+      if (!phase.isWellFormed()) throw new RequestError("invalid", "invalid phase encoding");
       const at = this.now().toISOString();
       this.db.query("INSERT INTO runs (id, orchestrator, phase, revision, phase_status, updated_at) VALUES (?, ?, ?, 1, 'planned', ?)")
-        .run(runId, orchestrator, nonEmpty(input.phase, "phase"), at);
-      this.event(null, runId, "run_registered", orchestrator, `phase ${input.phase} revision 1`, at);
+        .run(runId, orchestrator, nonEmpty(phase, "phase"), at);
+      this.event(null, runId, "run_registered", orchestrator, `phase ${phase} revision 1`, at);
       return this.run(runId);
     })();
   }
 
   // The single writer path for phase state. expectedRevision guards against two writers racing.
   updatePhase(input: { runId: string; actor: string; expectedRevision: number; phase?: string; phaseStatus: string; newRevision: boolean }): { run: Run; staled: string[] } {
+    const actor = input.actor;
     return this.db.transaction(() => {
       const run = this.run(input.runId);
-      if (input.actor !== run.orchestrator) throw new RequestError("forbidden", `${input.actor} is not the orchestrator of ${run.id}`);
+      if (actor !== run.orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${run.id}`);
       if (input.expectedRevision !== run.revision) {
         throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
       }
-      const phase = input.phase?.trim() || run.phase;
+      const requestedPhase = input.phase;
+      const phaseStatus = input.phaseStatus;
+      if ((requestedPhase != null && !requestedPhase.isWellFormed()) || !phaseStatus.isWellFormed()) {
+        throw new RequestError("invalid", "invalid phase encoding");
+      }
+      const phase = requestedPhase?.trim() || run.phase;
       const changesWork = input.newRevision || phase !== run.phase;
       const revision = changesWork ? run.revision + 1 : run.revision;
       const at = this.now().toISOString();
       this.db.query("UPDATE runs SET phase = ?, revision = ?, phase_status = ?, updated_at = ? WHERE id = ?")
-        .run(phase, revision, nonEmpty(input.phaseStatus, "phaseStatus"), at, run.id);
-      this.event(null, run.id, "phase_updated", input.actor, `${phase} r${revision} ${input.phaseStatus}`, at);
+        .run(phase, revision, nonEmpty(phaseStatus, "phaseStatus"), at, run.id);
+      this.event(null, run.id, "phase_updated", actor, `${phase} r${revision} ${phaseStatus}`, at);
       const staled: string[] = [];
       if (changesWork) {
         for (const r of this.list({ runId: run.id, status: "open" })) {
@@ -134,18 +161,27 @@ export class Requests {
   }): SupervisorRequest {
     return this.db.transaction(() => {
       const run = this.run(input.runId);
-      if (input.origin !== run.orchestrator) throw new RequestError("forbidden", `${input.origin} is not the orchestrator of ${run.id}`);
+      const origin = input.origin;
+      if (origin !== run.orchestrator) throw new RequestError("forbidden", `${origin} is not the orchestrator of ${run.id}`);
       if (input.expectedRevision !== run.revision) {
         throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
       }
-      const allowed = input.allowedResponses?.length ? input.allowedResponses : input.kind === "approval" ? ["approve", "decline"] : ["answer"];
+      const kind = input.kind;
+      const allowed = input.allowedResponses?.length ? input.allowedResponses : kind === "approval" ? ["approve", "decline"] : ["answer"];
+      const question = input.question;
+      if (!question.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
+      const normalizedQuestion = nonEmpty(question, "question");
+      const proposedAction = input.proposedAction;
+      if (proposedAction != null && !proposedAction.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
+      const scope = input.scope;
+      if (scope != null && !scope.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
       const id = `req-${crypto.randomUUID()}`;
       const at = this.now().toISOString();
       this.db.query(`INSERT INTO requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence,
           allowed_responses, blocking, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`)
-        .run(id, run.id, run.phase, run.revision, input.kind, nonEmpty(input.question, "question"), input.proposedAction ?? "",
-          input.scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, input.origin, at);
-      this.event(id, run.id, "opened", input.origin, `${input.kind} for ${run.phase} r${run.revision}`, at);
+        .run(id, run.id, run.phase, run.revision, kind, normalizedQuestion, proposedAction ?? "",
+          scope ?? "", serializeEvidence(input.evidence), serializeAllowedResponses(allowed), input.blocking === false ? 0 : 1, origin, at);
+      this.event(id, run.id, "opened", origin, `${kind} for ${run.phase} r${run.revision}`, at);
       return this.get(id);
     })();
   }
@@ -156,20 +192,25 @@ export class Requests {
       const r = this.get(input.requestId);
       const actor = nonEmpty(input.actor, "actor");
       if (r.status === "resolved" || r.status === "acknowledged") {
-        if (r.response === input.response && r.resolvedBy === actor) return r; // the same answer retried
+        if (r.response === input.response && r.resolvedBy === actor && r.revision === input.expectedRevision && (r.resolutionNote ?? "") === (input.note ?? "")) return r;
         throw new RequestError("conflict", `${r.id} was already answered "${r.response}" by ${r.resolvedBy} at ${r.resolvedAt}`);
       }
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; it cannot be answered`);
       if (input.expectedRevision !== r.revision) {
         throw new RequestError("conflict", `${r.id} is for revision ${r.revision}, the answer named revision ${input.expectedRevision}`);
       }
-      if (!r.allowedResponses.includes(input.response)) {
+      const response = input.response;
+      if (!r.allowedResponses.includes(response)) {
         throw new RequestError("invalid", `response must be one of ${r.allowedResponses.join(", ")}`);
       }
       const at = this.now().toISOString();
+      const note = input.note;
+      if (!actor.isWellFormed() || (note != null && !note.isWellFormed())) {
+        throw new RequestError("invalid", "invalid resolution metadata encoding");
+      }
       this.db.query("UPDATE requests SET status = 'resolved', response = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?")
-        .run(input.response, actor, input.note ?? "", at, r.id);
-      this.event(r.id, r.runId, "resolved", actor, `${input.response}${input.note ? `: ${input.note}` : ""}`, at);
+        .run(response, actor, note ?? "", at, r.id);
+      this.event(r.id, r.runId, "resolved", actor, `${response}${note ? `: ${note}` : ""}`, at);
       return this.get(r.id);
     })();
   }
@@ -179,11 +220,12 @@ export class Requests {
     return this.db.transaction(() => {
       const r = this.get(input.requestId);
       const run = this.run(r.runId);
-      if (input.actor !== run.orchestrator) throw new RequestError("forbidden", `${input.actor} is not the orchestrator of ${run.id}`);
+      const actor = input.actor;
+      if (actor !== run.orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${run.id}`);
       if (r.status === "acknowledged") return r;
       if (r.status !== "resolved") throw new RequestError("conflict", `${r.id} is ${r.status}; only a resolved request can be acknowledged`);
       this.setStatus(r.id, "acknowledged");
-      this.event(r.id, r.runId, "acknowledged", input.actor, `read answer "${r.response}"`, this.now().toISOString());
+      this.event(r.id, r.runId, "acknowledged", actor, `read answer "${r.response}"`, this.now().toISOString());
       return this.get(r.id);
     })();
   }
@@ -191,27 +233,32 @@ export class Requests {
   withdraw(input: { requestId: string; actor: string; reason: string }): SupervisorRequest {
     return this.db.transaction(() => {
       const r = this.get(input.requestId);
-      if (input.actor !== this.run(r.runId).orchestrator) throw new RequestError("forbidden", `${input.actor} is not the orchestrator of ${r.runId}`);
+      const actor = input.actor;
+      if (actor !== this.run(r.runId).orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${r.runId}`);
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; only an open request can be withdrawn`);
+      const reason = input.reason;
+      if (!reason.isWellFormed()) throw new RequestError("invalid", "invalid reason encoding");
       this.setStatus(r.id, "withdrawn");
-      this.event(r.id, r.runId, "withdrawn", input.actor, nonEmpty(input.reason, "reason"), this.now().toISOString());
+      this.event(r.id, r.runId, "withdrawn", actor, nonEmpty(reason, "reason"), this.now().toISOString());
       return this.get(r.id);
     })();
   }
 
-  // Is there a valid human approval for exactly this run, phase and revision? Silence is never approval.
+  // The result reflects recorded responses, not proof of human authority.
   gate(runId: string, phase: string, revision: number): { approved: boolean; reason: string; requestId: string | null } {
-    const run = this.run(runId);
-    if (run.phase !== phase || run.revision !== revision) {
-      return { approved: false, reason: `run is at ${run.phase} r${run.revision}, not ${phase} r${revision}`, requestId: null };
-    }
-    const reqs = this.list({ runId }).filter((r) => r.kind === "approval" && r.phase === phase && r.revision === revision);
-    const declined = reqs.find((r) => r.response === "decline");
-    if (declined) return { approved: false, reason: `declined by ${declined.resolvedBy}`, requestId: declined.id };
-    const approved = reqs.find((r) => (r.status === "resolved" || r.status === "acknowledged") && r.response === "approve");
-    if (approved) return { approved: true, reason: `approved by ${approved.resolvedBy}`, requestId: approved.id };
-    const open = reqs.find((r) => r.status === "open");
-    return { approved: false, reason: open ? "approval requested, no answer yet" : "no approval request for this revision", requestId: open?.id ?? null };
+    return this.db.transaction(() => {
+      const run = this.run(runId);
+      if (run.phase !== phase || run.revision !== revision) {
+        return { approved: false, reason: `run is at ${run.phase} r${run.revision}, not ${phase} r${revision}`, requestId: null };
+      }
+      const reqs = this.list({ runId }).filter((r) => r.kind === "approval" && r.phase === phase && r.revision === revision);
+      const declined = reqs.find((r) => r.response === "decline");
+      if (declined) return { approved: false, reason: `declined by ${declined.resolvedBy}`, requestId: declined.id };
+      const approved = reqs.find((r) => (r.status === "resolved" || r.status === "acknowledged") && r.response === "approve");
+      if (approved) return { approved: true, reason: `approved by ${approved.resolvedBy}`, requestId: approved.id };
+      const open = reqs.find((r) => r.status === "open");
+      return { approved: false, reason: open ? "approval requested, no answer yet" : "no approval request for this revision", requestId: open?.id ?? null };
+    })();
   }
 
   run(id: string): Run {
@@ -225,15 +272,18 @@ export class Requests {
   }
 
   get(id: string): SupervisorRequest {
+    if (!id.isWellFormed()) throw new RequestError("invalid", "invalid requestId encoding");
     const r = this.db.query<Row, [string]>(`${reqSelect} WHERE id = ?`).get(id);
     if (!r) throw new RequestError("not_found", `no request ${id}`);
     return decode(r);
   }
 
   list(filter: { runId?: string; status?: RequestStatus } = {}): SupervisorRequest[] {
+    const runId = filter.runId;
+    if (runId != null && !runId.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
     return this.db.query<Row, [string | null, string | null]>(
       `${reqSelect} WHERE (?1 IS NULL OR run_id = ?1) AND (?2 IS NULL OR status = ?2) ORDER BY created_at, id`,
-    ).all(filter.runId ?? null, filter.status ?? null).map(decode);
+    ).all(runId ?? null, filter.status ?? null).map(decode);
   }
 
   events(afterSeq = 0) {
@@ -243,6 +293,7 @@ export class Requests {
   }
 
   private findRun(id: string): Run | null {
+    if (!id.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
     return this.db.query<Run, [string]>(`${runSelect} WHERE id = ?`).get(id) ?? null;
   }
 

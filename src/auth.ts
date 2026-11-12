@@ -13,12 +13,15 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest();
 // stored on the host, so the file leaks no usable secret.
 export function parseTokens(text: string): Map<string, Buffer> {
   const out = new Map<string, Buffer>();
+  const hashes = new Set<string>();
   for (const [i, raw] of text.split("\n").entries()) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
     const m = line.match(/^(\S+)\s+([0-9a-f]{64})$/);
     if (!m || !NAME.test(m[1]!)) throw new AuthConfigError(`tokens file line ${i + 1}: expected "<name> <sha256 hex>"`);
     if (out.has(m[1]!)) throw new AuthConfigError(`tokens file line ${i + 1}: duplicate principal ${m[1]}`);
+    if (hashes.has(m[2]!)) throw new AuthConfigError(`tokens file line ${i + 1}: duplicate token hash`);
+    hashes.add(m[2]!);
     out.set(m[1]!, Buffer.from(m[2]!, "hex"));
   }
   if (out.size === 0) throw new AuthConfigError("tokens file has no principals");
@@ -28,7 +31,19 @@ export function parseTokens(text: string): Map<string, Buffer> {
 export const COOKIE = "fc_session";
 
 export class Auth {
-  constructor(private readonly hashes: Map<string, Buffer>) {}
+  private readonly hashes: Map<string, Buffer>;
+
+  constructor(hashes: Map<string, Buffer>) {
+    const seen = new Set<string>();
+    this.hashes = new Map();
+    for (const [name, hash] of hashes) {
+      if (!Buffer.isBuffer(hash) || hash.length !== 32) throw new AuthConfigError("invalid token hash");
+      const key = hash.toString("hex");
+      if (seen.has(key)) throw new AuthConfigError("duplicate token hash");
+      seen.add(key);
+      this.hashes.set(name, Buffer.from(hash));
+    }
+  }
 
   static async fromFile(path: string): Promise<Auth> {
     return new Auth(parseTokens(await Bun.file(path).text()));
@@ -49,7 +64,10 @@ export class Auth {
     if (header) return this.check(header.match(/^Bearer\s+(\S+)$/i)?.[1]);
     const cookie = req.headers.get("cookie") ?? "";
     const value = cookie.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-    return this.check(value ? decodeURIComponent(value) : null);
+    let token: string | null = null;
+    try { token = value ? decodeURIComponent(value) : null; }
+    catch (error) { if (error instanceof URIError) return null; throw error; }
+    return this.check(token);
   }
 }
 

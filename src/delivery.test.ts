@@ -14,13 +14,13 @@ afterAll(async () => { await fleet?.cleanup(); });
 const submit = (c: Commands, key: string, target: string, text = "check the build") =>
   c.submit({ idempotencyKey: key, target, actor: "test", text }).command.id;
 
-test("classify: only exit 0 with 'delivered' is delivered; refusals before paste stay queued", () => {
-  expect(classify({ exitCode: 0, stdout: "s: delivered", stderr: "" }).status).toBe("delivered");
-  expect(classify({ exitCode: 0, stdout: "", stderr: "" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 6, stdout: "", stderr: "s: message file x is empty or blank, not sent" }).status).toBe("queued");
-  expect(classify({ exitCode: 5, stdout: "", stderr: "s: pasted but first line not found in pane" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 2, stdout: "", stderr: "no session s" }).status).toBe("queued");
-  expect(classify({ exitCode: 3, stdout: "", stderr: "s: a dialog opened during the paste, Enter not pressed." }).status).toBe("delivery_unknown");
+test("classify: exact target confirmation is delivered; unconfirmed results are unknown", () => {
+  expect(classify({ exitCode: 0, stdout: "s: delivered", stderr: "" }, "s").status).toBe("delivered");
+  expect(classify({ exitCode: 0, stdout: "", stderr: "" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 6, stdout: "", stderr: "s: message file x is empty or blank, not sent" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 5, stdout: "", stderr: "s: pasted but first line not found in pane" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 2, stdout: "", stderr: "no session s" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 3, stdout: "", stderr: "s: a dialog opened during the paste, Enter not pressed." }, "s").status).toBe("delivery_unknown");
 });
 
 test("real fleet send puts the command id in the pane and records delivered", async () => {
@@ -37,21 +37,21 @@ test("real fleet send puts the command id in the pane and records delivered", as
   expect(commands.events(id)).toHaveLength(3);
 });
 
-test("real fleet send to a missing session leaves the command queued with the CLI message", async () => {
+test("real fleet send to a missing session leaves the command unknown", async () => {
   const commands = new Commands(new Database(":memory:"));
   const deliverer = new Deliverer(commands, fleetSender(fleetBin, fleet.confPath));
   const id = submit(commands, "deliver-2", "no-such-session");
   const after = await deliverer.deliver(id);
-  expect(after.status).toBe("queued");
-  expect(commands.events(id).at(-1)?.detail).toMatch(/no session no-such-session/);
+  expect(after.status).toBe("delivery_unknown");
+  expect(commands.events(id).at(-1)?.detail).toBe("fleet send result unknown");
 });
 
-test("real fleet send refuses dialog-like text; the command stays queued", async () => {
+test("real fleet send refuses dialog-like text; the command is unknown", async () => {
   const commands = new Commands(new Database(":memory:"));
   const deliverer = new Deliverer(commands, fleetSender(fleetBin, fleet.confPath));
   const id = submit(commands, "deliver-3", fleet.session, "Do you want to proceed?");
-  expect((await deliverer.deliver(id)).status).toBe("queued");
-  expect(commands.events(id).at(-1)?.detail).toMatch(/not sent/);
+  expect((await deliverer.deliver(id)).status).toBe("delivery_unknown");
+  expect(commands.events(id).at(-1)?.detail).toBe("fleet send result unknown");
 });
 
 test("deliveries are serialized", async () => {

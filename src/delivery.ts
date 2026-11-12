@@ -8,22 +8,66 @@ import type { Command, Commands } from "./commands.ts";
 export type SendResult = { exitCode: number; stdout: string; stderr: string };
 export type Sender = (session: string, file: string) => Promise<SendResult>;
 
-export function fleetSender(fleetBin: string, confPath: string): Sender {
+type DeliveryIO = {
+  mkdtemp: (prefix: string) => Promise<string>;
+  write: (file: string, contents: string) => Promise<unknown>;
+  rm: (dir: string) => Promise<void>;
+};
+
+const defaultIO: DeliveryIO = {
+  mkdtemp,
+  write: (file, contents) => Bun.write(file, contents),
+  rm: (dir) => rm(dir, { recursive: true, force: true }),
+};
+
+const OUTPUT_LIMIT = 64 * 1024;
+
+async function captureOutput(stream: ReadableStream<Uint8Array>): Promise<string | null> {
+  const reader = stream.getReader();
+  const bytes = new Uint8Array(OUTPUT_LIMIT);
+  let length = 0;
+  let overflow = false;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const retained = Math.min(value.byteLength, OUTPUT_LIMIT - length);
+    bytes.set(value.subarray(0, retained), length);
+    length += retained;
+    if (retained < value.byteLength) overflow = true;
+  }
+  if (overflow) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length));
+  } catch {
+    return null;
+  }
+}
+
+type SpawnSender = (command: string[], options: { env: NodeJS.ProcessEnv; stdout: "pipe"; stderr: "pipe" }) => { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array>; exited: Promise<number> };
+
+export function fleetSender(fleetBin: string, confPath: string, spawn: SpawnSender = (command, options) => Bun.spawn(command, options)): Sender {
   return async (session, file) => {
-    const p = Bun.spawn([fleetBin, "send", session, file], {
+    const p = spawn([fleetBin, "send", session, file], {
       env: { ...process.env, FLEET_CONF: confPath },
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout, stderr, exitCode] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-    return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+    const [stdout, stderr, exitCode] = await Promise.allSettled([captureOutput(p.stdout), captureOutput(p.stderr), p.exited]);
+    // Never expose a valid-looking success prefix when either stream is incomplete or invalid.
+    if (stdout.status !== "fulfilled" || stderr.status !== "fulfilled" || exitCode.status !== "fulfilled" || stdout.value === null || stderr.value === null) {
+      return { exitCode: -1, stdout: "", stderr: "" };
+    }
+    return { exitCode: exitCode.value, stdout: stdout.value, stderr: stderr.value.trim() };
   };
 }
 
-// The first line carries the command id, so fleet send's "first line appeared" check is specific to it.
+// The bundled sender probes only the first 40 characters, not the full command ID.
 export function messageFor(c: Command): string {
+  // Backslashes are doubled so literal escape text cannot collide with escaped controls.
+  // Actors without backslashes or listed controls are unchanged; other Unicode is not sanitized.
+  const actor = c.actor.replace(/[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (character) => character === "\\" ? "\\\\" : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return [
-    `Fleet Control command ${c.id} from ${c.actor}:`,
+    `Fleet Control command ${c.id} from ${actor}:`,
     "",
     c.text,
     "",
@@ -32,21 +76,19 @@ export function messageFor(c: Command): string {
   ].join("\n");
 }
 
-// Exit 0 means delivered. "not sent" or "no session" on stderr means fleet send stopped before pasting, so a retry is safe.
-// Anything else may have left text in the pane, so it is recorded as unknown and never retried by itself.
-export function classify(r: SendResult): { status: "delivered" | "queued" | "delivery_unknown"; detail: string } {
-  if (r.exitCode === 0 && /delivered/.test(r.stdout)) return { status: "delivered", detail: r.stdout };
-  const detail = `fleet send exit ${r.exitCode}: ${r.stderr || r.stdout || "no output"}`;
-  if (r.exitCode !== 0 && /not sent|^no session /m.test(r.stderr)) return { status: "queued", detail };
-  return { status: "delivery_unknown", detail };
+// Sender output cannot prove no effect. Unconfirmed results are unknown and never retried automatically.
+export function classify(r: SendResult, target: string): { status: "delivered" | "delivery_unknown"; detail: string } {
+  const expected = `${target}: delivered`;
+  if (r.exitCode === 0 && (r.stdout === expected || r.stdout === `${expected}\n` || r.stdout === `${expected}\r\n`)) return { status: "delivered", detail: r.stdout };
+  return { status: "delivery_unknown", detail: "fleet send result unknown" };
 }
 
 export class Deliverer {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private commands: Commands, private send: Sender) {}
+  constructor(private commands: Commands, private send: Sender, private io: DeliveryIO = defaultIO) {}
 
-  // One delivery at a time per service, so two pastes never interleave in one pane.
+  // This queue serializes only this instance, not other processes or senders.
   deliver(id: string): Promise<Command> {
     const run = this.chain.then(() => this.deliverNow(id));
     this.chain = run.catch(() => {});
@@ -57,20 +99,37 @@ export class Deliverer {
     const c = this.commands.get(id);
     if (c.status !== "queued") return c;
     this.commands.transition(id, "delivering", "service", `fleet send to ${c.target}`);
-    const dir = await mkdtemp(join(tmpdir(), "fleet-control-msg-"));
+    let dir: string;
+    try {
+      dir = await this.io.mkdtemp(join(tmpdir(), "fleet-control-msg-"));
+    } catch {
+      return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+    }
     try {
       const file = join(dir, `${c.id}.txt`);
-      await Bun.write(file, messageFor(c));
+      try {
+        await this.io.write(file, messageFor(c));
+      } catch {
+        return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+      }
       let result: SendResult;
       try {
         result = await this.send(c.target, file);
-      } catch (e) {
-        result = { exitCode: -1, stdout: "", stderr: `could not run fleet send: ${(e as Error).message}` };
+      } catch {
+        return this.commands.transition(id, "delivery_unknown", "service", "fleet send failed with an exception");
       }
-      const { status, detail } = classify(result);
+      const { status, detail } = classify(result, c.target);
       return this.commands.transition(id, status, "service", detail);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      try {
+        await this.io.rm(dir);
+      } catch {
+        try {
+          console.warn("Delivery cleanup failed");
+        } catch {
+          // A broken logger must not replace the delivery outcome.
+        }
+      }
     }
   }
 }

@@ -56,6 +56,20 @@ test("delivery does not imply acceptance and completion needs acceptance first",
   expect(c.events(id).map((e) => e.status)).toEqual(["queued", "delivering", "delivered", "accepted", "completed"]);
 });
 
+test("claimed is readable but legacy transitions cannot enter or leave it", () => {
+  const db = new Database(":memory:");
+  const commands = new Commands(db);
+  const id = commands.submit(input).command.id;
+  expect(() => commands.transition(id, "claimed", "service", "reserve")).toThrow(/cannot become claimed/);
+  db.query("UPDATE commands SET status = 'claimed' WHERE id = ?").run(id);
+  expect(commands.get(id).status).toBe("claimed");
+  expect(commands.list("claimed").map((command) => command.id)).toEqual([id]);
+  for (const status of ["queued", "delivering", "delivered", "delivery_unknown", "claimed", "accepted", "rejected", "running", "completed", "failed"] as const) {
+    expect(() => commands.transition(id, status, "service", "legacy transition")).toThrow(/cannot become/);
+  }
+  expect(commands.events(id).map((event) => event.status)).toEqual(["queued"]);
+});
+
 test("a delivery interrupted by a restart becomes delivery_unknown, not queued", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fleet-control-cmd-"));
   dirs.push(dir);

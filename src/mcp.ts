@@ -23,8 +23,8 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
   server.registerTool("command_submit", {
     description:
       "Queue an instruction for one fleet session and try to deliver it with fleet send. " +
-      "The result says queued, delivered or delivery_unknown. Delivered only means the text reached the pane; " +
-      "it is not acceptance or execution. Reuse the same idempotencyKey when retrying.",
+      "The result says queued, delivered or delivery_unknown. Delivered is a sender report, not proof the full message reached the pane, " +
+      "nor acceptance or execution. Reuse the same idempotencyKey when retrying.",
     inputSchema: {
       target: z.string().regex(/^[A-Za-z0-9._-]+$/).describe("Recipient session, e.g. the supervisor"),
       text: z.string().min(1).max(MAX_TEXT),
@@ -40,7 +40,7 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
   });
 
   server.registerTool("command_deliver", {
-    description: "Retry delivery of a queued command (fleet send refused it before pasting). Does nothing for any other status; delivery_unknown is never retried automatically.",
+    description: "Attempt delivery of a queued command. Other statuses are unchanged; investigate delivery_unknown rather than retrying it.",
     inputSchema: { id: z.string() },
   }, async ({ id }) => {
     try { const c = await deliverer.deliver(id); return json({ command: c, events: commands.events(id) }); } catch (e) { return failure(e); }
@@ -150,7 +150,7 @@ function registerRequestTools(server: McpServer, requests: Requests, as: As) {
   }, async (a) => attempt(() => ({ runs: requests.runs(), requests: requests.list(a) })));
 
   server.registerTool("request_gate", {
-    description: "Is there a human approval for exactly this run, phase and revision? No answer, a decline or another revision all mean no.",
+    description: "Report the recorded approval response for this run, phase and revision. This is not proof of human approval and does not authorize execution.",
     inputSchema: { runId: z.string(), phase: z.string(), revision: z.number().int().min(1) },
     annotations: { readOnlyHint: true },
   }, async ({ runId, phase, revision }) => attempt(() => requests.gate(runId, phase, revision)));
