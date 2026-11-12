@@ -105,6 +105,7 @@ export class CentralCommands {
   }
 
   async transition(id: string, to: CommandStatus, actor: string, detail: string): Promise<CentralCommand> {
+    if (typeof id !== "string" || !id.isWellFormed() || id.includes("\0")) throw new CommandError("invalid", "invalid command ID");
     return this.db.begin(async (tx) => {
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} FOR UPDATE`;
