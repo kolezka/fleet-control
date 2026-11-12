@@ -108,6 +108,7 @@ export class CooperativeReconciliation {
       if ((latest?.seq ?? null) !== expectedSequence) throw new CommandError("conflict", "stale lifecycle sequence");
       const [latestAssertion] = await tx<{ sequence: string }[]>`SELECT sequence::text AS sequence FROM central_cooperative_reconciliations WHERE command_id = ${commandId} ORDER BY sequence DESC LIMIT 1`;
       if ((latestAssertion?.sequence ?? null) !== expectedAssertionSequence) throw new CommandError("conflict", "stale assertion sequence");
+      if (expectedAssertionSequence === "9".repeat(1000)) throw new CommandError("conflict", "assertion sequence exhausted");
       const sequence = (BigInt(expectedAssertionSequence ?? "0") + 1n).toString();
       const at = this.now().toISOString();
       await tx`INSERT INTO central_cooperative_reconciliations (command_id, request_id, actor, disposition, evidence, expected_sequence, sequence, supersedes_sequence, at) VALUES (${commandId}, ${requestId}, ${actor}, ${disposition}, ${evidence}, ${expectedSequence}, ${sequence}::numeric, ${expectedAssertionSequence}::numeric, ${at})`;
