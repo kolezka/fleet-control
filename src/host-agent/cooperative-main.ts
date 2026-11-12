@@ -30,7 +30,12 @@ function exactObject<K extends string>(value: unknown, keys: K[]): value is Reco
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key) && typeof (value as Record<string, unknown>)[key] === "string");
 }
 
-export async function startCooperativeAdapter(env: Record<string, string | undefined> = process.env) {
+// Shutdown must outlast the adapter deadline, or force close resets a forwarded
+// request before the adapter can answer "outcome unknown".
+const defaultRequestTimeoutMs = 30_000;
+const shutdownMarginMs = 2_000;
+
+export async function startCooperativeAdapter(env: Record<string, string | undefined> = process.env, requestTimeoutMs = defaultRequestTimeoutMs) {
   try {
     const path = env.COOPERATIVE_ADAPTER_CONFIG_FILE;
     if (!path) throw new Error("invalid configuration");
@@ -48,8 +53,9 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
       incarnationToken: incarnation.token,
       centralFetch: (input, init) => fetch(input, init),
       allowLoopbackHttpForTests: true,
+      requestTimeoutMs,
     });
-    const listener = createCooperativeListener({ handler, port: 0 });
+    const listener = createCooperativeListener({ handler, port: 0, shutdownTimeoutMs: requestTimeoutMs + shutdownMarginMs });
     return { url: `http://127.0.0.1:${listener.port}`, stop: listener.stop };
   } catch {
     throw new Error("cooperative adapter startup failed");
