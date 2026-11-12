@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -25,6 +26,27 @@ async function readPrivateJson(path: string): Promise<unknown> {
   }
 }
 
+// A CA is public, so no owner or mode rule, but it must be a small regular file and not a symlink.
+async function readPublicPem(path: string): Promise<string> {
+  const limit = 64 * 1024;
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > limit) throw new Error("invalid configuration");
+    const bytes = new Uint8Array(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error("invalid configuration");
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+  } finally {
+    await file.close();
+  }
+}
+
 function exactObject<K extends string>(value: unknown, keys: K[]): value is Record<K, string> {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key) && typeof (value as Record<string, unknown>)[key] === "string");
@@ -40,9 +62,18 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
     const path = env.COOPERATIVE_ADAPTER_CONFIG_FILE;
     if (!path) throw new Error("invalid configuration");
     const config = await readPrivateJson(path);
-    if (!exactObject(config, ["centralUrl", "localToken", "supervisorToken", "incarnationFile"])) throw new Error("invalid configuration");
+    const base = ["centralUrl", "localToken", "supervisorToken", "incarnationFile"] as const;
+    if (!exactObject(config, [...base]) && !exactObject(config, [...base, "centralCaFile"])) throw new Error("invalid configuration");
     const central = new URL(config.centralUrl);
     if (!(["127.0.0.1", "[::1]"].includes(central.hostname))) throw new Error("invalid configuration");
+    // Optional PEM CA for a self-signed loopback central. Public, so no mode rule; https only.
+    const caFile = (config as { centralCaFile?: string }).centralCaFile;
+    let ca: string | undefined;
+    if (caFile !== undefined) {
+      if (!isAbsolute(caFile) || central.protocol !== "https:") throw new Error("invalid configuration");
+      ca = await readPublicPem(caFile);
+      new X509Certificate(ca);
+    }
     const incarnation = await readPrivateJson(config.incarnationFile);
     if (!exactObject(incarnation, ["incarnationId", "token"])) throw new Error("invalid configuration");
     const handler = createCooperativeAdapter({
@@ -51,7 +82,7 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
       supervisorToken: config.supervisorToken,
       incarnationId: incarnation.incarnationId,
       incarnationToken: incarnation.token,
-      centralFetch: (input, init) => fetch(input, init),
+      centralFetch: (input, init) => fetch(input, ca ? { ...init, tls: { ca } } as RequestInit : init),
       allowLoopbackHttpForTests: true,
       requestTimeoutMs,
     });
