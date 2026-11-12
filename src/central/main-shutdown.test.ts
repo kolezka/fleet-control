@@ -44,7 +44,8 @@ async function startInProcess(delayMs: number, options?: { shutdownGraceMs?: num
     createSql: () => createLegacyFakeSql(record, delayMs),
     serve: (serveOptions) => { const server = Bun.serve({ ...serveOptions, port: 0 }); port = server.port!; return server; },
   }, options);
-  return { running, port, log, begun: within(begun.promise, 5_000, "transaction begin") };
+  // Lazy so a test that never waits does not leave a timer that rejects later and fails another test.
+  return { running, port, log, begun: () => within(begun.promise, 5_000, "transaction begin") };
 }
 
 function expectCommitBeforeClose(log: string[]) {
@@ -58,7 +59,7 @@ test("stop() lets an in-flight command commit and reply 201 before the pool clos
   let stop: Promise<void> | undefined;
   try {
     const status = postCommand(port);
-    await begun;
+    await begun();
     stop = running.stop();
     expect(await within(status, 5_000, "client response")).toBe(201);
     await within(stop, 5_000, "stop");
@@ -73,7 +74,7 @@ test("stop() force-closes after the grace deadline but still waits for SQL work 
   let stop: Promise<void> | undefined;
   try {
     const status = postCommand(port);
-    await begun;
+    await begun();
     stop = running.stop();
     await within(stop, 5_000, "stop");
     // The client loses its connection: the committed outcome is unknown to it.
