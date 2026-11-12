@@ -95,6 +95,28 @@ describe("agent sockets", () => {
     expect(receipts).toEqual([]);
   });
 
+  test.each([true, false])("ignores stale validation resolving %s after the same socket reconnects", async (valid) => {
+    let resolve!: (value: boolean) => void;
+    let calls = 0;
+    const { sockets, socket, receipts } = setup(() => {
+      calls++;
+      return calls === 1 ? new Promise<boolean>((done) => { resolve = done; }) : true;
+    });
+    const pending = sockets.message("host-a", socket, JSON.stringify(receipt));
+    expect(calls).toBe(1);
+    sockets.disconnect("host-a", socket);
+    expect(sockets.connect("host-a", socket)).toBe(true);
+    resolve(valid);
+    await pending;
+    expect(receipts).toEqual([]);
+    expect(socket.closed).toEqual([]);
+    expect(sockets.dispatch(dispatch)).toBe(true);
+    await sockets.message("host-a", socket, JSON.stringify(receipt));
+    expect(calls).toBe(2);
+    expect(receipts).toEqual([receipt]);
+    expect(socket.closed).toEqual([]);
+  });
+
   test("presence and inventory belong only to the accepted live socket", async () => {
     const { sockets, socket } = setup();
     expect(sockets.listHosts()).toEqual([{ hostId: "host-a", sessions: null }]);

@@ -14,7 +14,7 @@ The central backend is a local prototype, **not production ready**. This page de
 
 ## Unintegrated dispatch snapshot
 
-`AgentSockets.dispatch` now captures each field once and validates the same values it serializes in a canonical object containing exactly `version`, `type`, `hostId`, `commandId`, `attemptId`, `target` and `text`. Extra properties and caller-provided `toJSON` are not serialized, changing behavior for direct callers that relied on them. A registration token fences disconnect and reconnect ABA during dispatch, including reuse of the same socket object. This fence applies only to dispatch, not receipt handling or the adapter. Dispatch remains unintegrated; a successful send is not a receipt or proof of real delivery.
+`AgentSockets.dispatch` now captures each field once and validates the same values it serializes in a canonical object containing exactly `version`, `type`, `hostId`, `commandId`, `attemptId`, `target` and `text`. Extra properties and caller-provided `toJSON` are not serialized, changing behavior for direct callers that relied on them. A registration token fences disconnect and reconnect ABA during dispatch, including reuse of the same socket object. Receipt handling also checks the registration after `validateAttempt` resolves, whether it resolves successfully or false; a fake test covers this fence, not a real WebSocket. Rejections and errors still propagate, and the stale adapter catch/close and callback ABA issues remain. Dispatch remains unintegrated; a successful send is not a receipt or proof of real delivery.
 
 ## Standalone cooperative HTTP prototype
 

@@ -118,8 +118,9 @@ export class AgentSockets {
     const message = parseMessage(raw);
     if (!message || message.hostId !== hostId) return this.reject(socket, 1008, "invalid message");
     if (message.type === "receipt") {
+      const registration = this.registrations.get(hostId);
       const valid = await this.dependencies.validateAttempt(hostId, message.commandId, message.attemptId);
-      if (this.connections.get(hostId) !== socket || this.closing.has(socket)) return;
+      if (this.registrations.get(hostId) !== registration || this.connections.get(hostId) !== socket || this.closing.has(socket)) return;
       if (!valid) return this.reject(socket, 1008, "invalid attempt");
       await this.dependencies.onReceipt(message);
     } else {
