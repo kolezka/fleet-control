@@ -55,6 +55,10 @@ A local real-agent smoke attempt initialized MCP and discovered both cooperative
 
 `transitionScoped` and optional request-store mutation guards provide transaction-bound hooks, but the server and MCP handlers do not wire them to incarnation validation. `transitionScoped` now passes a snapshot of its scope as the guard’s second argument; guards must use that argument and lock slot, identity and incarnation in `lockForClaim` order before the event lock. Existing one-argument guards still type-check but must be adapted if they relied on a mutable scope closure; the API cannot enforce this contract. Existing supervisor routes therefore do not gain incarnation fencing from these methods. Old deployed readers may not understand `claimed`; old writers and delivery workers may bypass the cooperative locking contract. Any eventual cutover must account for all readers and writers and needs a reviewed, tested compatibility and recovery design. There is no safe production migration procedure here; do not enable the prototype or remove its fence as a production cutover.
 
+## Local command Unicode compatibility
+
+Local command submission rejects malformed UTF-16 in the idempotency key, actor and text before lookup or insertion, and snapshots each input field once. Older SQLite writes may already have replaced malformed characters with U+FFFD. An invalid retry is rejected even if its normalized form exists; rejection does not prove the original was not committed and must not trigger submission under a new key. Existing rows are not repaired.
+
 ## Local recipient response race
 
 The local SQLite command state machine rejects recipient acceptance and rejection while a send is still `delivering`. A response can arrive after the text is visible but before the sender returns, so the response may fail and require a retry. This is reproduced with an in-memory database and a gated fake sender, not with live fleet. Simply allowing those transitions would let the later delivery result conflict with or overwrite the response; a fix must preserve both facts and cover restart recovery. Recipient authority is also not enforced in the local service.

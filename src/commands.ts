@@ -83,18 +83,22 @@ export class Commands {
   }
 
   submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): { command: Command; created: boolean } {
-    const text = input.text.trim();
+    const { idempotencyKey, target, actor, text: rawText } = input;
+    if (![idempotencyKey, actor, rawText].every((value) => value.isWellFormed())) {
+      throw new CommandError("invalid", "command fields must contain valid Unicode");
+    }
+    const text = rawText.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
     if (text.length > MAX_TEXT) throw new CommandError("invalid", `instruction text is longer than ${MAX_TEXT} characters`);
-    if (!sessionName.test(input.target)) throw new CommandError("invalid", `invalid target session: ${input.target}`);
-    if (!input.idempotencyKey.trim() || !input.actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
+    if (!sessionName.test(target)) throw new CommandError("invalid", `invalid target session: ${target}`);
+    if (!idempotencyKey.trim() || !actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
 
     return this.db.transaction(() => {
-      const existing = this.byKey(input.idempotencyKey);
+      const existing = this.byKey(idempotencyKey);
       if (existing) {
         // Same key, same intent: return the original. Same key, different intent: refuse.
-        if (existing.target !== input.target || existing.text !== text || existing.actor !== input.actor) {
-          throw new CommandError("conflict", `idempotency key ${input.idempotencyKey} was used for a different command (${existing.id})`);
+        if (existing.target !== target || existing.text !== text || existing.actor !== actor) {
+          throw new CommandError("conflict", `idempotency key ${idempotencyKey} was used for a different command (${existing.id})`);
         }
         return { command: existing, created: false };
       }
@@ -103,8 +107,8 @@ export class Commands {
       this.db
         .query(`INSERT INTO commands (id, idempotency_key, target, actor, text, status, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`)
-        .run(id, input.idempotencyKey, input.target, input.actor, text, at, at);
-      this.event(id, "queued", input.actor, "stored on host", at);
+        .run(id, idempotencyKey, target, actor, text, at, at);
+      this.event(id, "queued", actor, "stored on host", at);
       return { command: this.get(id), created: true };
     })();
   }
