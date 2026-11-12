@@ -150,12 +150,19 @@ export class Requests {
       }
       const kind = input.kind;
       const allowed = input.allowedResponses?.length ? input.allowedResponses : kind === "approval" ? ["approve", "decline"] : ["answer"];
+      const question = input.question;
+      if (!question.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
+      const normalizedQuestion = nonEmpty(question, "question");
+      const proposedAction = input.proposedAction;
+      if (proposedAction != null && !proposedAction.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
+      const scope = input.scope;
+      if (scope != null && !scope.isWellFormed()) throw new RequestError("invalid", "invalid request text encoding");
       const id = `req-${crypto.randomUUID()}`;
       const at = this.now().toISOString();
       this.db.query(`INSERT INTO requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence,
           allowed_responses, blocking, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`)
-        .run(id, run.id, run.phase, run.revision, kind, nonEmpty(input.question, "question"), input.proposedAction ?? "",
-          input.scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, origin, at);
+        .run(id, run.id, run.phase, run.revision, kind, normalizedQuestion, proposedAction ?? "",
+          scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, origin, at);
       this.event(id, run.id, "opened", origin, `${kind} for ${run.phase} r${run.revision}`, at);
       return this.get(id);
     })();
