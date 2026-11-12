@@ -180,15 +180,16 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!auth) return Response.redirect("/", 303);
           if (!sameOrigin(req)) return forbidden();
           const form = await req.formData().catch(() => null);
-          const token = form?.get("token");
-          const who = typeof token === "string" ? auth.check(token.trim()) : null;
+          const value = form?.get("token");
+          const token = typeof value === "string" ? value.trim() : "";
+          const who = auth.check(token);
           if (!who) return Response.redirect("/login?failed=1", 303);
           const secure = opts.tls ? "; Secure" : "";
           return new Response(null, {
             status: 303,
             headers: {
               location: "/",
-              "set-cookie": `${COOKIE}=${encodeURIComponent(token as string)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+              "set-cookie": `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
             },
           });
         },
