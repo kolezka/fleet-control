@@ -25,7 +25,8 @@ export class CooperativeReconciliation {
     await this.db`CREATE OR REPLACE FUNCTION central_block_reconciliation_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RAISE EXCEPTION 'reconciliation is immutable'; END $$`;
     await this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const [lock] = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!lock) throw new Error("central command event lock row missing");
       await tx`DROP TRIGGER IF EXISTS central_block_reconciliation_mutation ON central_cooperative_reconciliations`;
       await tx`CREATE TRIGGER central_block_reconciliation_mutation BEFORE UPDATE OR DELETE ON central_cooperative_reconciliations FOR EACH ROW EXECUTE FUNCTION central_block_reconciliation_mutation()`;
     });
@@ -96,7 +97,8 @@ export class CooperativeReconciliation {
     if (!validId(actor)) throw new Error("access denied");
     if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validLifecycleSequence(expectedSequence) || !validSequence(expectedAssertionSequence, 1000)) throw new CommandError("invalid", "invalid reconciliation request");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const [lock] = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!lock) throw new Error("central command event lock row missing");
       const [existing] = await tx<Reconciliation[]>`SELECT command_id AS "commandId", request_id AS "requestId", actor, disposition, evidence, expected_sequence AS "expectedSequence", sequence::text AS sequence, supersedes_sequence::text AS "supersedesSequence", at FROM central_cooperative_reconciliations WHERE request_id = ${requestId}`;
       if (existing) {
         if (existing.commandId !== commandId || existing.actor !== actor || existing.disposition !== disposition || existing.evidence !== evidence || existing.expectedSequence !== expectedSequence || existing.supersedesSequence !== expectedAssertionSequence) throw new CommandError("conflict", "reconciliation request ID was used for a different intent");

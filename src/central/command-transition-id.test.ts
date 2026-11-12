@@ -12,7 +12,7 @@ function fixture() {
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const sql = parts.join("?");
     queries.push({ sql, values });
-    if (sql.includes("FROM central_command_event_lock")) return [];
+    if (sql.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (sql.includes("FROM central_commands WHERE")) return values[0] === command.id ? [command] : [];
     if (sql.includes("UPDATE central_commands") || sql.includes("INSERT INTO central_command_events")) return [];
     throw new Error(`Unexpected SQL: ${sql}`);

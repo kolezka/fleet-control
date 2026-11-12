@@ -20,7 +20,8 @@ export class CentralAttempts {
   // Call after command recovery, only when all previous delivery workers are stopped.
   async reconcileAfterRestart(): Promise<string[]> {
     return this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const rows = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!rows[0]) throw new Error("central command event lock row missing");
       const recovered = await tx<{ id: string; commandId: string; commandStatus: string }[]>`UPDATE central_delivery_attempts AS attempt
         SET status = 'unknown', detail = 'service restarted during delivery', recovery_unknown = TRUE
         FROM central_commands AS command
@@ -38,7 +39,8 @@ export class CentralAttempts {
   async begin(commandId: string, hostId: string): Promise<CentralAttempt> {
     if (!hostId.trim()) throw new CommandError("invalid", "hostId is required");
     return this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const rows = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!rows[0]) throw new Error("central command event lock row missing");
       const [command] = await tx<{ hostId: string; status: string }[]>`SELECT host_id AS "hostId", status FROM central_commands WHERE id = ${commandId} FOR UPDATE`;
       if (!command) throw new CommandError("not_found", `no command ${commandId}`);
       if (command.hostId !== hostId) throw new CommandError("conflict", "host does not match command");
@@ -59,7 +61,8 @@ export class CentralAttempts {
     if (result !== "delivered" && result !== "unknown") throw new CommandError("invalid", "invalid delivery result");
     if (typeof detail !== "string") throw new CommandError("invalid", "delivery detail must be a string");
     return this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const rows = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!rows[0]) throw new Error("central command event lock row missing");
       const [command] = await tx<{ hostId: string; status: string }[]>`SELECT host_id AS "hostId", status FROM central_commands WHERE id = ${commandId} FOR UPDATE`;
       if (!command) throw new CommandError("not_found", `no command ${commandId}`);
       if (!hostId || command.hostId !== hostId) throw new CommandError("conflict", "host does not match command");

@@ -12,7 +12,7 @@ function fixture(options: { owned?: boolean; guard?: boolean; status?: string } 
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?");
     calls.push({ query, values });
-    if (query.includes("FROM central_command_event_lock")) { order.push("lock"); return []; }
+    if (query.includes("FROM central_command_event_lock")) { order.push("lock"); return [{ id: 1 }]; }
     if (query.includes("FROM central_commands WHERE")) {
       order.push("ownership");
       return options.owned === false ? [] : [{ ...row, status: options.status ?? row.status }];

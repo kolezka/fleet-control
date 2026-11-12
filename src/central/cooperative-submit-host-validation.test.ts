@@ -16,7 +16,8 @@ function fixture() {
   const reachedRunner = new Error("runner reached");
   const tx = async (strings: TemplateStringsArray) => {
     const query = strings.join("?");
-    if (query.includes("FROM central_command_event_lock") || query.includes("FROM central_commands WHERE idempotency_key")) return [];
+    if (query.includes("FROM central_command_event_lock")) return [{ id: 1 }];
+    if (query.includes("FROM central_commands WHERE idempotency_key")) return [];
     throw reachedRunner;
   };
   const commands = new CentralCommands({} as SQL, undefined, async (operation) => {

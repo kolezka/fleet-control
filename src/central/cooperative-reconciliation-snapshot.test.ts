@@ -69,6 +69,7 @@ test("reconcile writes the validated actor after a delayed runner", async () => 
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const sql = parts.join("?");
     calls.push({ sql, values });
+    if (sql.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (sql.includes("FROM central_cooperative_claims")) return [{ command_id: "command" }];
     return [];
   }) as unknown as TransactionSQL;
@@ -87,6 +88,7 @@ test("reconcile writes the validated actor after a delayed runner", async () => 
 test("reconcile compares replay against the validated actor after a delayed runner", async () => {
   const existing = { ...row("1"), requestId: "request" };
   const tx = (async (parts: TemplateStringsArray) => {
+    if (parts.join("?").includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (parts.join("?").includes("WHERE request_id")) return [existing];
     return [];
   }) as unknown as TransactionSQL;

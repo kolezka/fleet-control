@@ -14,6 +14,7 @@ test("scoped transition keeps the scope authorized before an asynchronous guard"
   const other = { id: "command", hostId: "host-b", target: "session-b", status: "queued" };
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const sql = parts.join("?");
+    if (sql.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (sql.includes("FROM central_commands WHERE")) {
       selectedScope = values.slice(1);
       return values[0] === other.id && values[1] === other.hostId && values[2] === other.target ? [other] : [];
@@ -49,6 +50,7 @@ test("scoped transition guards and queries the original scope when begin is dela
   let guardedScope: typeof scope | undefined;
   let selectedScope: unknown[] | undefined;
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
+    if (parts.join("?").includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (parts.join("?").includes("FROM central_commands WHERE")) selectedScope = values.slice(1);
     return [];
   }) as unknown as TransactionSQL;

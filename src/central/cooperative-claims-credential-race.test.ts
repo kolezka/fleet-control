@@ -28,7 +28,7 @@ for (const path of ["insert", "replay"] as const) {
     } as unknown as SupervisorIncarnations;
     const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
       const query = parts.join("?");
-      if (query.includes("FROM central_command_event_lock")) return [];
+      if (query.includes("FROM central_command_event_lock")) return [{ id: 1 }];
       if (query.includes("FROM central_cooperative_claims WHERE incarnation_id")) {
         lookupId = values[0] as string;
         if (path === "insert") return [];

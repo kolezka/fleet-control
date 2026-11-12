@@ -32,7 +32,8 @@ export class CooperativeClaims {
         created_at TEXT NOT NULL, PRIMARY KEY (incarnation_id, request_id)
       )`;
       await tx.unsafe(`CREATE OR REPLACE FUNCTION ${quotedSchema}.central_block_cooperative_claim_mutation() RETURNS trigger LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`);
-      await tx`SELECT id FROM ${tx(schema)}.central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM ${tx(schema)}.central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!lock.length) throw new Error("central command event lock row missing");
       await tx`DROP TRIGGER IF EXISTS central_block_cooperative_claim_mutation ON ${tx(schema)}.central_commands`;
       await tx`CREATE TRIGGER central_block_cooperative_claim_mutation BEFORE UPDATE OR DELETE ON ${tx(schema)}.central_commands FOR EACH ROW EXECUTE FUNCTION ${tx(schema)}.central_block_cooperative_claim_mutation()`;
     });
@@ -53,7 +54,8 @@ export class CooperativeClaims {
     credential = credential && { incarnationId: credential.incarnationId, token: credential.token };
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       if (!await this.incarnations.lockForClaim(tx, identity, credential)) throw new Error("access denied");
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!lock.length) throw new Error("central command event lock row missing");
       const [existing] = await tx<{ commandId: string | null }[]>`SELECT command_id AS "commandId" FROM central_cooperative_claims WHERE incarnation_id = ${credential.incarnationId} AND request_id = ${claimRequestId}`;
       if (existing) {
         if (existing.commandId === null) {

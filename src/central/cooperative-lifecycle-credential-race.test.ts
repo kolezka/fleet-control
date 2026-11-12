@@ -23,6 +23,7 @@ test("lifecycle report uses the authenticated incarnation after the lock awaits"
   } as unknown as SupervisorIncarnations;
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?");
+    if (query.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (query.includes("FROM central_cooperative_claims")) {
       claimId = values[1] as string;
       return [{ command_id: values[0] }];

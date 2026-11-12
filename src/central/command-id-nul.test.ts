@@ -16,6 +16,7 @@ function fixture(useRunner: boolean) {
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const sql = parts.join("?");
     queries.push({ sql, values });
+    if (sql.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (sql.includes("FROM central_commands WHERE")) return sql.includes("json_build_object") ? [{ command }] : [command];
     return [];
   }) as unknown as TransactionSQL;

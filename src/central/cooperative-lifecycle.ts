@@ -33,7 +33,8 @@ export class CooperativeLifecycle {
     credential = credential && { incarnationId: credential.incarnationId, token: credential.token };
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       if (!await this.incarnations.lockForClaim(tx, identity, credential)) throw new Error("access denied");
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!lock.length) throw new Error("central command event lock row missing");
       const [claim] = await tx`SELECT command_id FROM central_cooperative_claims WHERE command_id = ${commandId} AND incarnation_id = ${credential.incarnationId}`;
       if (!claim) throw new Error("access denied");
       const [existing] = await tx<CooperativeEvent[]>`SELECT command_id AS "commandId", request_id AS "requestId", status, detail, at FROM central_cooperative_lifecycle_events WHERE incarnation_id = ${credential.incarnationId} AND request_id = ${requestId}`;

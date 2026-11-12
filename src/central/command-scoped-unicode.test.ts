@@ -14,6 +14,7 @@ function fixture() {
   const tx = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const sql = parts.join("?");
     queries.push({ sql, values });
+    if (sql.includes("FROM central_command_event_lock")) return [{ id: 1 }];
     if (sql.includes("FROM central_commands WHERE")) {
       return values.slice(0, 3).every((value) => typeof value === "string" && roundtrip(value) === replacement) ? [row] : [];
     }

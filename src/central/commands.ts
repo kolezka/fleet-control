@@ -75,7 +75,8 @@ export class CentralCommands {
     if (!input.idempotencyKey.trim() || !input.actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       // Serialize event writers until commit so a cursor never skips an earlier uncommitted sequence.
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (lock.length !== 1) throw new Error("central command event lock row missing");
       let existing: CentralCommand | undefined;
       if (bounded) {
         const [row] = await tx<{ command: CentralCommand | null }[]>`SELECT CASE WHEN
@@ -107,7 +108,8 @@ export class CentralCommands {
   async transition(id: string, to: CommandStatus, actor: string, detail: string): Promise<CentralCommand> {
     if (typeof id !== "string" || !id.isWellFormed() || id.includes("\0")) throw new CommandError("invalid", "invalid command ID");
     return this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (lock.length !== 1) throw new Error("central command event lock row missing");
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} FOR UPDATE`;
       if (!current) throw new CommandError("not_found", `no command ${id}`);
       if (!allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
@@ -125,7 +127,8 @@ export class CentralCommands {
     if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")) || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (lock.length !== 1) throw new Error("central command event lock row missing");
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session} FOR UPDATE`;
       if (!current) throw new Error("access denied");
       if (!["accepted", "rejected", "running", "completed", "failed"].includes(to) || !allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
@@ -140,7 +143,8 @@ export class CentralCommands {
   // Only run once all previous delivery workers are known to be stopped.
   async reconcileAfterRestart(): Promise<string[]> {
     return this.db.begin(async (tx) => {
-      await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      const lock = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
+      if (lock.length !== 1) throw new Error("central command event lock row missing");
       const at = this.now().toISOString();
       const stuck = await tx<{ id: string }[]>`UPDATE central_commands SET status = 'delivery_unknown', updated_at = ${at} WHERE status = 'delivering' RETURNING id`;
       for (const { id } of stuck) {

@@ -12,7 +12,7 @@ function fixture(latest: string, existing?: Reconciliation) {
   const inserts: unknown[][] = [];
   const tx = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
-    if (query.includes("central_command_event_lock")) return [];
+    if (query.includes("central_command_event_lock")) return [{ id: 1 }];
     if (query.includes("WHERE request_id =")) return existing ? [existing] : [];
     if (query.includes("FROM central_cooperative_claims")) return [{ command_id: "command" }];
     if (query.includes("FROM central_cooperative_lifecycle_events")) return [];
