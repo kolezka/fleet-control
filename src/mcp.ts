@@ -150,7 +150,7 @@ function registerRequestTools(server: McpServer, requests: Requests, as: As) {
   }, async (a) => attempt(() => ({ runs: requests.runs(), requests: requests.list(a) })));
 
   server.registerTool("request_gate", {
-    description: "Is there a human approval for exactly this run, phase and revision? No answer, a decline or another revision all mean no.",
+    description: "Report the recorded approval response for this run, phase and revision. This is not proof of human approval and does not authorize execution.",
     inputSchema: { runId: z.string(), phase: z.string(), revision: z.number().int().min(1) },
     annotations: { readOnlyHint: true },
   }, async ({ runId, phase, revision }) => attempt(() => requests.gate(runId, phase, revision)));
