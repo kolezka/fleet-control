@@ -72,7 +72,7 @@ export function createCooperativeCentralApp(deps: {
       } catch { return c.json({ error: "unauthorized" }, 401); }
     }
     const origin = c.req.header("origin");
-    if (origin && !deps.allowedOrigins?.includes(origin)) return c.json({ error: "unsafe origin" }, 403);
+    if (origin !== undefined && !deps.allowedOrigins?.includes(origin)) return c.json({ error: "unsafe origin" }, 403);
     await next();
   });
   app.route("/", createCooperativeInspectionRoute({ auth: deps.auth, inspection: deps.inspection }));

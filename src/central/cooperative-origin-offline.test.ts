@@ -13,7 +13,7 @@ const allowedOrigin = "https://allowed.example";
 const deniedOrigin = "https://denied.example";
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-function fixture() {
+function fixture(allowedOrigins: readonly string[] | undefined) {
   const calls: string[] = [];
   const auth = new CentralAuth([
     { tokenHash: hash("operator-token"), principal: operator },
@@ -33,18 +33,26 @@ function fixture() {
     claims: { async claim(_principal: unknown, _credential: unknown, requestId: string) { calls.push("claim:" + requestId); return null; } } as unknown as CooperativeClaims,
     lifecycle: { async report() { calls.push("report"); throw new Error("unexpected report"); } } as unknown as CooperativeLifecycle,
     inspection: { async inspectBounded() { calls.push("inspect"); return null; } },
-    allowedOrigins: [allowedOrigin],
+    allowedOrigins,
   });
   return { app, calls };
 }
 
-for (const [label, origin, allowed] of [
-  ["allowed", allowedOrigin, true],
-  ["denied", deniedOrigin, false],
-  ["absent", undefined, true],
+for (const [label, origin, allowed, allowlist] of [
+  ["allowed", allowedOrigin, true, [allowedOrigin]],
+  ["denied", deniedOrigin, false, [allowedOrigin]],
+  ["absent", undefined, true, [allowedOrigin]],
+  ["empty and not allowed", "", false, [allowedOrigin]],
+  ["empty and explicitly allowed", "", true, [""]],
+  ["empty with empty allowlist", "", false, []],
+  ["empty with undefined allowlist", "", false, undefined],
+  ["nonempty with undefined allowlist", allowedOrigin, false, undefined],
+  ["absent with undefined allowlist", undefined, true, undefined],
+  ["nonempty with empty allowlist", allowedOrigin, false, []],
+  ["absent with empty allowlist", undefined, true, []],
 ] as const) {
   test(`operator command POST with ${label} Origin`, async () => {
-    const { app, calls } = fixture();
+    const { app, calls } = fixture(allowlist);
     const response = await app.request("/api/commands", {
       method: "POST",
       headers: { authorization: "Bearer operator-token", "content-type": "application/json", ...(origin === undefined ? {} : { origin }) },
@@ -57,7 +65,7 @@ for (const [label, origin, allowed] of [
   });
 
   test(`supervisor MCP POST with ${label} Origin`, async () => {
-    const { app, calls } = fixture();
+    const { app, calls } = fixture(allowlist);
     const response = await app.request("/mcp", {
       method: "POST",
       headers: { authorization: "Bearer supervisor-token", "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": incarnationToken, "content-type": "application/json", accept: "application/json, text/event-stream", ...(origin === undefined ? {} : { origin }) },

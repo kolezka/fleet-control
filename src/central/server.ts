@@ -43,7 +43,7 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcp
       } catch { return c.json({ error: "unauthorized" }, 401); }
     }
     const origin = c.req.header("origin");
-    if (origin && !deps.allowedOrigins?.includes(origin)) return c.json({ error: "unsafe origin" }, 403);
+    if (origin !== undefined && !deps.allowedOrigins?.includes(origin)) return c.json({ error: "unsafe origin" }, 403);
     c.set("principal", principal);
     await next();
   });
