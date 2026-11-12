@@ -15,7 +15,12 @@ const integration = url ? test : test.skip;
 const STORE_CURSOR_LIMIT = 8192;
 
 const parse = (response: unknown) => JSON.parse((response as { content: { text: string }[] }).content[0]!.text);
-const pad = (seed: string, unit: string, length: number) => (seed + unit.repeat(length)).slice(0, length);
+// Never split a surrogate pair: submit rejects malformed UTF-16.
+const pad = (seed: string, unit: string, length: number) => {
+  let value = seed;
+  while (value.length + unit.length <= length) value += unit;
+  return value + "a".repeat(length - value.length);
+};
 
 async function connect(commands: CentralCommands, principal: Extract<Principal, { role: "supervisor" }>) {
   // This fake checks the identity tuple but does not acquire or prove a database lock.

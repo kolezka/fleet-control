@@ -2,11 +2,16 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { Requests } from "./requests.ts";
 
-function setup(allowedResponses = ["approve"]) {
+function setup(historicalAllowedResponses?: string[]) {
   const db = new Database(":memory:", { strict: true });
   const requests = new Requests(db);
   requests.registerRun({ runId: "run", orchestrator: "supervisor", phase: "phase" });
-  const request = requests.create({ runId: "run", origin: "supervisor", expectedRevision: 1, kind: "approval", question: "?", allowedResponses });
+  let request = requests.create({ runId: "run", origin: "supervisor", expectedRevision: 1, kind: "approval", question: "?", allowedResponses: ["approve"] });
+  // create now rejects malformed responses, so write the historical row directly.
+  if (historicalAllowedResponses) {
+    db.run("UPDATE requests SET allowed_responses = ? WHERE id = ?", [JSON.stringify(historicalAllowedResponses), request.id]);
+    request = requests.get(request.id)!;
+  }
   return { db, requests, request };
 }
 
