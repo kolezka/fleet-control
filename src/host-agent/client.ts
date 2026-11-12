@@ -143,51 +143,62 @@ export class HostAgentClient {
     }
     this.socket = socket;
     const current = () => this.running && this.socket === socket && this.connection === connection;
-    socket.addEventListener("open", () => {
-      if (!current()) return;
-      this.reconnects = 0;
-      const generation = ++this.inventoryGeneration;
-      void Promise.resolve().then(async () => {
-        if (!current() || this.inventoryGeneration !== generation) return;
-        const inventory = this.options.inventory;
-        if (!inventory || !current() || this.inventoryGeneration !== generation) return;
-        const sessions = await Reflect.apply(inventory, this.options, []);
-        if (current() && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
-      }).catch((error) => this.reportError(error));
-    });
-    socket.addEventListener("close", () => {
-      if (!current()) return;
-      this.socket = undefined;
-      this.inventoryGeneration++;
-      this.schedule();
-    });
-    socket.addEventListener("error", (event) => { if (current()) this.reportError(event); });
-    socket.addEventListener("message", (event) => {
-      if (!current()) return;
-      const dispatch = parseDispatch(event.data, this.options.hostId);
-      if (!current()) return;
-      if (!dispatch || this.pending >= maxPending) {
-        this.socket = undefined;
-        // A throwing close must not skip the reconnect; the old socket is already ignored by current().
-        try { socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch"); }
-        catch (error) { this.reportError(error); }
-        // close or the error observer may have stopped or restarted the client; a newer attempt owns retries then.
-        if (this.connection === connection) this.schedule();
-        return;
-      }
-      this.pending++;
-      this.queue = this.queue.then(async () => {
-        try {
-          if (!current()) return;
-          const outcome = await this.options.execute(Object.freeze(dispatch));
-          if (outcome.id !== dispatch.attemptId || !["started", "delivered", "unknown"].includes(outcome.status)) throw new Error("invalid journal outcome");
-          if (!current()) return;
-          const receipt: AgentReceipt = { version: 1, type: "receipt", hostId: dispatch.hostId, commandId: dispatch.commandId, attemptId: dispatch.attemptId, status: outcome.status === "delivered" ? "delivered" : "unknown" };
-          if (current()) this.sendReceipt(receipt, socket, current);
-        } catch (error) { this.reportError(error); }
-        finally { this.pending--; }
+    try {
+      socket.addEventListener("open", () => {
+        if (!current()) return;
+        this.reconnects = 0;
+        const generation = ++this.inventoryGeneration;
+        void Promise.resolve().then(async () => {
+          if (!current() || this.inventoryGeneration !== generation) return;
+          const inventory = this.options.inventory;
+          if (!inventory || !current() || this.inventoryGeneration !== generation) return;
+          const sessions = await Reflect.apply(inventory, this.options, []);
+          if (current() && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
+        }).catch((error) => this.reportError(error));
       });
-    });
+      socket.addEventListener("close", () => {
+        if (!current()) return;
+        this.socket = undefined;
+        this.inventoryGeneration++;
+        this.schedule();
+      });
+      socket.addEventListener("error", (event) => { if (current()) this.reportError(event); });
+      socket.addEventListener("message", (event) => {
+        if (!current()) return;
+        const dispatch = parseDispatch(event.data, this.options.hostId);
+        if (!current()) return;
+        if (!dispatch || this.pending >= maxPending) {
+          this.socket = undefined;
+          // A throwing close must not skip the reconnect; the old socket is already ignored by current().
+          try { socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch"); }
+          catch (error) { this.reportError(error); }
+          // close or the error observer may have stopped or restarted the client; a newer attempt owns retries then.
+          if (this.connection === connection) this.schedule();
+          return;
+        }
+        this.pending++;
+        this.queue = this.queue.then(async () => {
+          try {
+            if (!current()) return;
+            const outcome = await this.options.execute(Object.freeze(dispatch));
+            if (outcome.id !== dispatch.attemptId || !["started", "delivered", "unknown"].includes(outcome.status)) throw new Error("invalid journal outcome");
+            if (!current()) return;
+            const receipt: AgentReceipt = { version: 1, type: "receipt", hostId: dispatch.hostId, commandId: dispatch.commandId, attemptId: dispatch.attemptId, status: outcome.status === "delivered" ? "delivered" : "unknown" };
+            if (current()) this.sendReceipt(receipt, socket, current);
+          } catch (error) { this.reportError(error); }
+          finally { this.pending--; }
+        });
+      });
+    } catch (error) {
+      // Without every listener the socket cannot be supervised: drop it and retry.
+      if (this.socket === socket) this.socket = undefined;
+      this.reportError(error);
+      // The observer may have restarted the client onto this same object; only close it if nobody owns it.
+      if (this.socket !== socket) {
+        try { socket.close(1011, "listener registration failed"); } catch (closeError) { this.reportError(closeError); }
+      }
+      if (owns()) this.schedule();
+    }
   }
 
   // The observer is caller code. If it throws, log a fixed message instead of the raw errors
