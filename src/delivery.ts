@@ -48,8 +48,7 @@ export function messageFor(c: Command): string {
 export function classify(r: SendResult, target: string): { status: "delivered" | "delivery_unknown"; detail: string } {
   const expected = `${target}: delivered`;
   if (r.exitCode === 0 && (r.stdout === expected || r.stdout === `${expected}\n` || r.stdout === `${expected}\r\n`)) return { status: "delivered", detail: r.stdout };
-  const detail = `fleet send exit ${r.exitCode}: ${r.stderr || r.stdout || "no output"}`;
-  return { status: "delivery_unknown", detail };
+  return { status: "delivery_unknown", detail: "fleet send result unknown" };
 }
 
 export class Deliverer {

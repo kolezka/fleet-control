@@ -37,13 +37,13 @@ test("real fleet send puts the command id in the pane and records delivered", as
   expect(commands.events(id)).toHaveLength(3);
 });
 
-test("real fleet send to a missing session leaves the command unknown with the CLI message", async () => {
+test("real fleet send to a missing session leaves the command unknown", async () => {
   const commands = new Commands(new Database(":memory:"));
   const deliverer = new Deliverer(commands, fleetSender(fleetBin, fleet.confPath));
   const id = submit(commands, "deliver-2", "no-such-session");
   const after = await deliverer.deliver(id);
   expect(after.status).toBe("delivery_unknown");
-  expect(commands.events(id).at(-1)?.detail).toMatch(/no session no-such-session/);
+  expect(commands.events(id).at(-1)?.detail).toBe("fleet send result unknown");
 });
 
 test("real fleet send refuses dialog-like text; the command is unknown", async () => {
@@ -51,7 +51,7 @@ test("real fleet send refuses dialog-like text; the command is unknown", async (
   const deliverer = new Deliverer(commands, fleetSender(fleetBin, fleet.confPath));
   const id = submit(commands, "deliver-3", fleet.session, "Do you want to proceed?");
   expect((await deliverer.deliver(id)).status).toBe("delivery_unknown");
-  expect(commands.events(id).at(-1)?.detail).toMatch(/not sent/);
+  expect(commands.events(id).at(-1)?.detail).toBe("fleet send result unknown");
 });
 
 test("deliveries are serialized", async () => {

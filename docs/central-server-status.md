@@ -57,7 +57,7 @@ A local real-agent smoke attempt initialized MCP and discovered both cooperative
 
 ## Delivery confirmation compatibility
 
-`classify` now requires the expected target as its second argument. Exit code 0 counts as delivered only when raw stdout is exactly `<target>: delivered`, optionally followed by one LF or CRLF. `fleetSender` no longer trims stdout. Custom senders and direct callers that relied on substring matches, extra whitespace, or the old one-argument API must change. Previously recorded outcomes are not reclassified. A sender can spoof even an exact response; this check does not authenticate the sender or prove execution. Unconfirmed results remain unknown and are not automatically retried.
+`classify` now requires the expected target as its second argument. Exit code 0 counts as delivered only when raw stdout is exactly `<target>: delivered`, optionally followed by one LF or CRLF. `fleetSender` no longer trims stdout. Custom senders and direct callers that relied on substring matches, extra whitespace, or the old one-argument API must change. Previously recorded outcomes are not reclassified. A sender can spoof even an exact response; this check does not authenticate the sender or prove execution. Unconfirmed results remain unknown and are not automatically retried. Their new event detail is a fixed generic message rather than raw sender output, so prior CLI diagnostics are no longer available there; existing events are unchanged. `fleetSender` still returns and buffers raw stdout and stderr without a size or time bound, and the success confirmation itself can include the target.
 
 ## Limits and safety
 
