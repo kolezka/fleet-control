@@ -186,9 +186,10 @@ export class Requests {
         throw new RequestError("invalid", `response must be one of ${r.allowedResponses.join(", ")}`);
       }
       const at = this.now().toISOString();
+      const note = input.note;
       this.db.query("UPDATE requests SET status = 'resolved', response = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?")
-        .run(response, actor, input.note ?? "", at, r.id);
-      this.event(r.id, r.runId, "resolved", actor, `${response}${input.note ? `: ${input.note}` : ""}`, at);
+        .run(response, actor, note ?? "", at, r.id);
+      this.event(r.id, r.runId, "resolved", actor, `${response}${note ? `: ${note}` : ""}`, at);
       return this.get(r.id);
     })();
   }
