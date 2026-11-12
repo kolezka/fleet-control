@@ -176,6 +176,18 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
           if (response.jsonrpc !== "2.0" || !Object.hasOwn(response, "id") || response.id !== requestId || hasResult === hasError) return unknown(502);
           if (hasError && (!response.error || typeof response.error !== "object" || Array.isArray(response.error) || !Number.isInteger((response.error as Record<string, unknown>).code) || typeof (response.error as Record<string, unknown>).message !== "string")) return unknown(502);
           const normalized = JSON.stringify(parsed);
+          // Inspect one JSON layer in MCP text blocks, retaining duplicate keys.
+          // The response byte cap bounds parsing and token scanning. Non-JSON text
+          // and JSON encoded inside a string token are not recursively decoded.
+          const result = response.result;
+          const content = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>).content : undefined;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (!block || typeof block !== "object" || block.type !== "text" || typeof block.text !== "string") continue;
+              try { JSON.parse(block.text); } catch { continue; }
+              if (containsEncodedSecret(block.text)) return unknown(502);
+            }
+          }
           if (containsSecret(parsed) || secrets.some((secret) => text.includes(secret) || normalized.includes(secret))) return unknown(502);
           return new Response(normalized, { status: upstream.status, headers: { "content-type": "application/json" } });
         } catch { return forwarded ? unknown(502) : error(502, "adapter request failed"); }
