@@ -63,14 +63,16 @@ export class CentralRequests {
   async registerRun(input: { runId: string; orchestrator: string; phase: string }, guard?: RequestMutationGuard): Promise<Run> {
     input = { runId: input.runId, orchestrator: input.orchestrator, phase: input.phase };
     const id = nonEmpty(input.runId, "runId"), actor = nonEmpty(input.orchestrator, "orchestrator");
-    if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
+    if (!validEncoding(id) || !validEncoding(actor)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const existing = await tx<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs WHERE id = ${id} FOR UPDATE`;
       if (existing[0]) {
         if (existing[0].orchestrator !== actor) throw new RequestError("forbidden", guard ? "access denied" : `run ${id} belongs to orchestrator ${existing[0].orchestrator}`);
         return existing[0];
       }
-      const phase = nonEmpty(input.phase, "phase"), at = this.now().toISOString();
+      const phase = nonEmpty(input.phase, "phase");
+      if (!validEncoding(phase)) throw new RequestError("invalid", "invalid request encoding");
+      const at = this.now().toISOString();
       await tx`INSERT INTO central_runs VALUES (${id}, ${actor}, ${phase}, 1, 'planned', ${at})`;
       await this.event(tx, null, id, "run_registered", actor, `phase ${phase} revision 1`, at);
       return this.getRun(tx, id);
