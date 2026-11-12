@@ -28,6 +28,7 @@ export class SupervisorIncarnations {
   }
 
   async activate(identity: SupervisorIdentity): Promise<IncarnationCredential> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
     const token = randomBytes(32).toString("base64url");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
@@ -55,6 +56,8 @@ export class SupervisorIncarnations {
   // locks first can commit before revocation; one that locks after revocation fails.
   // This fences later database claims, not work already claimed or external effects.
   async lockForClaim(tx: TransactionSQL, identity: SupervisorIdentity, credential: IncarnationCredential): Promise<boolean> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
+    credential = credential && { incarnationId: credential.incarnationId, token: credential.token };
     if (!validIdentity(identity) || !credential || typeof credential.incarnationId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(credential.incarnationId)
       || typeof credential.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(credential.token)) return false;
     const [slot] = await tx`SELECT host_id FROM central_supervisor_slots_v2

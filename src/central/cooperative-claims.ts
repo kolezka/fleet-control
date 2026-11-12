@@ -50,6 +50,7 @@ export class CooperativeClaims {
     if (typeof claimRequestId !== "string" || claimRequestId.length < 1 || claimRequestId.length > 256 || claimRequestId.trim() !== claimRequestId || !claimRequestId.isWellFormed() || /[\x00-\x1f\x7f]/.test(claimRequestId)) throw new CommandError("invalid", "invalid claim request ID");
     const identity = supervisorIdentity(principal);
     if (![identity.principalId, identity.name, identity.hostId, identity.session].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value))) throw new Error("access denied");
+    credential = credential && { incarnationId: credential.incarnationId, token: credential.token };
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       if (!await this.incarnations.lockForClaim(tx, identity, credential)) throw new Error("access denied");
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;

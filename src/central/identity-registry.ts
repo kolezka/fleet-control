@@ -23,6 +23,7 @@ export class SupervisorIdentityRegistry {
   }
 
   async enroll(identity: SupervisorIdentity): Promise<void> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
     await (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`INSERT INTO central_supervisor_identities_v2 (principal_id, name, host_id, session)
@@ -36,6 +37,7 @@ export class SupervisorIdentityRegistry {
   }
 
   async matches(identity: SupervisorIdentity): Promise<boolean> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) return false;
     const query = async (db: SQL | import("bun").TransactionSQL) => {
       const rows = await db`SELECT principal_id FROM central_supervisor_identities_v2
@@ -47,6 +49,7 @@ export class SupervisorIdentityRegistry {
   }
 
   async retire(identity: SupervisorIdentity): Promise<void> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
     const query = async (db: SQL | import("bun").TransactionSQL) => {
       const rows = await db`UPDATE central_supervisor_identities_v2 SET retired = TRUE
