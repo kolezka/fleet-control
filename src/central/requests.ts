@@ -13,6 +13,20 @@ const validArrayEncoding = (values: string[]) => {
   for (let i = 0; i < values.length; i++) if (!validEncoding(values[i])) return false;
   return true;
 };
+const invalidArray = Object.freeze(Object.setPrototypeOf([undefined], null)) as unknown as string[];
+const snapshotArray = (values: string[]) => {
+  const snapshot: string[] = [];
+  Object.setPrototypeOf(snapshot, null);
+  const length = values.length;
+  for (let i = 0; i < length; i++) {
+    const value = values[i];
+    // Unlike slice, getters after an invalid entry are not invoked.
+    if (!validEncoding(value)) return invalidArray;
+    snapshot[i] = value;
+  }
+  return snapshot;
+};
+const snapshotOptionalArray = (values: string[] | undefined): string[] | undefined => values == null ? values : Array.isArray(values) ? snapshotArray(values) : invalidArray as string[];
 const nonEmpty = (value: string, name: string) => {
   if (typeof value !== "string" || !value.trim()) throw new RequestError("invalid", `${name} is required`);
   return value.trim();
@@ -109,17 +123,17 @@ export class CentralRequests {
   }
 
   async create(input: CreateInput, guard?: RequestMutationGuard): Promise<SupervisorRequest> {
-    input = { runId: input.runId, origin: input.origin, expectedRevision: input.expectedRevision, kind: input.kind, question: input.question, proposedAction: input.proposedAction, scope: input.scope, evidence: input.evidence?.slice(), allowedResponses: input.allowedResponses?.slice(), blocking: input.blocking };
+    input = { runId: input.runId, origin: input.origin, expectedRevision: input.expectedRevision, kind: input.kind, question: input.question, proposedAction: input.proposedAction, scope: input.scope, evidence: snapshotOptionalArray(input.evidence), allowedResponses: snapshotOptionalArray(input.allowedResponses), blocking: input.blocking };
     if (!validEncoding(input.runId)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, input.runId, true);
       if (input.origin !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.origin} is not the orchestrator of ${run.id}`);
       if (input.expectedRevision !== run.revision) throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
       if (!["approval", "clarification", "scope_change", "blocker"].includes(input.kind)) throw new RequestError("invalid", "invalid request kind");
-      if (!validEncoding(input.origin) || !validEncoding(input.question) || (input.proposedAction != null && !validEncoding(input.proposedAction)) || (input.scope != null && !validEncoding(input.scope)) || (input.evidence && !validArrayEncoding(input.evidence)) || (input.allowedResponses && !validArrayEncoding(input.allowedResponses))) throw new RequestError("invalid", "invalid request encoding");
-      const allowed = input.allowedResponses?.length ? input.allowedResponses : input.kind === "approval" ? ["approve", "decline"] : ["answer"];
+      if (!validEncoding(input.origin) || !validEncoding(input.question) || (input.proposedAction != null && !validEncoding(input.proposedAction)) || (input.scope != null && !validEncoding(input.scope)) || (input.evidence != null && !validArrayEncoding(input.evidence)) || (input.allowedResponses != null && !validArrayEncoding(input.allowedResponses))) throw new RequestError("invalid", "invalid request encoding");
+      const allowed = input.allowedResponses?.length ? input.allowedResponses : snapshotArray(input.kind === "approval" ? ["approve", "decline"] : ["answer"]);
       const id = `req-${crypto.randomUUID()}`, at = this.now().toISOString(), question = nonEmpty(input.question, "question");
-      await tx`INSERT INTO central_requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence, allowed_responses, blocking, origin, status, created_at) VALUES (${id}, ${run.id}, ${run.phase}, ${run.revision}, ${input.kind}, ${question}, ${input.proposedAction ?? ""}, ${input.scope ?? ""}, ${JSON.stringify(input.evidence ?? [])}, ${JSON.stringify(allowed)}, ${input.blocking !== false}, ${input.origin}, 'open', ${at})`;
+      await tx`INSERT INTO central_requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence, allowed_responses, blocking, origin, status, created_at) VALUES (${id}, ${run.id}, ${run.phase}, ${run.revision}, ${input.kind}, ${question}, ${input.proposedAction ?? ""}, ${input.scope ?? ""}, ${JSON.stringify(input.evidence ?? snapshotArray([]))}, ${JSON.stringify(allowed)}, ${input.blocking !== false}, ${input.origin}, 'open', ${at})`;
       await this.event(tx, id, run.id, "opened", input.origin, `${input.kind} for ${run.phase} r${run.revision}`, at);
       return this.getRequest(tx, id);
     }, guard);
