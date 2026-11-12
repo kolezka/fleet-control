@@ -22,7 +22,7 @@ These results do not establish production readiness. The sections below record e
 
 The legacy host service authenticates principal names but does not assign operator or supervisor roles. Its MCP request tools and same-origin HTTP answer endpoint do not enforce that a human operator, rather than the originating supervisor, resolves an approval. The host gate reports matching stored responses; it is not proof of human authority. Command response and report tools also lack a recipient-identity check. Treat these as unresolved authorization gaps, not as guarantees of the central cooperative prototype. Do not use these legacy paths as a security boundary for autonomous execution.
 
-The legacy deliverer marks a command `delivering` before preparing its temporary message file. If directory creation or file writing fails, it can remain `delivering` even though the sender was not invoked. Restart recovery may mark it unknown. This is a static code finding, not a tested recovery procedure; do not automatically requeue it.
+The legacy deliverer marks a command `delivering` before preparing its temporary message file. A reported directory creation or file writing failure now records `delivery_unknown` without invoking the sender or requeueing; offline injected-I/O tests cover this path. A failed status transition or interrupted process can still leave `delivering`. Cleanup failure can mask the recorded result and leave the message file behind. These tests do not prove default filesystem failure handling or recovery after a crash.
 
 ## Correction: send-keys blocker vs the pinned fix (2026-11-11)
 

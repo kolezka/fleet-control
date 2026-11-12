@@ -8,6 +8,18 @@ import type { Command, Commands } from "./commands.ts";
 export type SendResult = { exitCode: number; stdout: string; stderr: string };
 export type Sender = (session: string, file: string) => Promise<SendResult>;
 
+type DeliveryIO = {
+  mkdtemp: (prefix: string) => Promise<string>;
+  write: (file: string, contents: string) => Promise<unknown>;
+  rm: (dir: string) => Promise<void>;
+};
+
+const defaultIO: DeliveryIO = {
+  mkdtemp,
+  write: (file, contents) => Bun.write(file, contents),
+  rm: (dir) => rm(dir, { recursive: true, force: true }),
+};
+
 export function fleetSender(fleetBin: string, confPath: string): Sender {
   return async (session, file) => {
     const p = Bun.spawn([fleetBin, "send", session, file], {
@@ -44,7 +56,7 @@ export function classify(r: SendResult): { status: "delivered" | "queued" | "del
 export class Deliverer {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private commands: Commands, private send: Sender) {}
+  constructor(private commands: Commands, private send: Sender, private io: DeliveryIO = defaultIO) {}
 
   // One delivery at a time per service, so two pastes never interleave in one pane.
   deliver(id: string): Promise<Command> {
@@ -57,10 +69,19 @@ export class Deliverer {
     const c = this.commands.get(id);
     if (c.status !== "queued") return c;
     this.commands.transition(id, "delivering", "service", `fleet send to ${c.target}`);
-    const dir = await mkdtemp(join(tmpdir(), "fleet-control-msg-"));
+    let dir: string;
+    try {
+      dir = await this.io.mkdtemp(join(tmpdir(), "fleet-control-msg-"));
+    } catch {
+      return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+    }
     try {
       const file = join(dir, `${c.id}.txt`);
-      await Bun.write(file, messageFor(c));
+      try {
+        await this.io.write(file, messageFor(c));
+      } catch {
+        return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+      }
       let result: SendResult;
       try {
         result = await this.send(c.target, file);
@@ -70,7 +91,8 @@ export class Deliverer {
       const { status, detail } = classify(result);
       return this.commands.transition(id, status, "service", detail);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // Cleanup can fail and mask the result; a crash or failed mkdtemp can leave files behind.
+      await this.io.rm(dir);
     }
   }
 }
