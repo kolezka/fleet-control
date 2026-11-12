@@ -181,13 +181,14 @@ export class Requests {
       if (input.expectedRevision !== r.revision) {
         throw new RequestError("conflict", `${r.id} is for revision ${r.revision}, the answer named revision ${input.expectedRevision}`);
       }
-      if (!r.allowedResponses.includes(input.response)) {
+      const response = input.response;
+      if (!r.allowedResponses.includes(response)) {
         throw new RequestError("invalid", `response must be one of ${r.allowedResponses.join(", ")}`);
       }
       const at = this.now().toISOString();
       this.db.query("UPDATE requests SET status = 'resolved', response = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?")
-        .run(input.response, actor, input.note ?? "", at, r.id);
-      this.event(r.id, r.runId, "resolved", actor, `${input.response}${input.note ? `: ${input.note}` : ""}`, at);
+        .run(response, actor, input.note ?? "", at, r.id);
+      this.event(r.id, r.runId, "resolved", actor, `${response}${input.note ? `: ${input.note}` : ""}`, at);
       return this.get(r.id);
     })();
   }
