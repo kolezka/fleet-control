@@ -54,3 +54,18 @@ test("a timer callback that runs inside setTimer does not leave a dead handle bl
   sockets[1]!.emit("close");
   expect(sockets).toHaveLength(3);
 });
+
+test("stop closes the socket and stays stopped when clearTimer throws", () => {
+  const error = new Error("clear failed");
+  const sockets: FakeSocket[] = [];
+  const client = new HostAgentClient({ url: "wss://example.com", hostId: "h", token: "secret",
+    socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
+    execute: async (item) => ({ id: item.attemptId, status: "delivered" }),
+    setTimer: () => 1, clearTimer: () => { throw error; } });
+  client.start();
+  // A pending retry and an installed socket at once: reached by restarting from inside clearTimer in real code.
+  (client as any).schedule();
+  expect(() => client.stop()).toThrow(error);
+  expect(sockets[0]!.closed).toBe(1);
+  expect(() => client.sendInventory(["x"])).toThrow(/not connected|stale/);
+});

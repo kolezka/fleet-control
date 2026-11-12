@@ -74,10 +74,14 @@ export class HostAgentClient {
     const timer = this.timer;
     this.timer = undefined;
     this.retry = undefined;
-    if (timer !== undefined) this.options.clearTimer(timer);
     const socket = this.socket;
     this.socket = undefined;
-    socket?.close(1000, "stopped");
+    // A throwing clearTimer must not leave the socket open. If close also throws, its error wins.
+    try {
+      if (timer !== undefined) this.options.clearTimer(timer);
+    } finally {
+      socket?.close(1000, "stopped");
+    }
   }
 
   sendInventory(sessions: string[]): void {
