@@ -51,8 +51,9 @@ export interface AgentSocketDependencies {
   onInventory(inventory: AgentInventory): void | Promise<void>;
 }
 
+// Lone surrogates are rejected so an id cannot alias another one after UTF-8 storage.
 function nonempty(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return typeof value === "string" && value.trim().length > 0 && value.isWellFormed();
 }
 
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
