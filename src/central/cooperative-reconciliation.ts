@@ -7,7 +7,8 @@ export type ReconciliationDisposition = "unknown" | "completed" | "failed" | "no
 export type Reconciliation = { commandId: string; requestId: string; actor: string; disposition: ReconciliationDisposition; evidence: string; expectedSequence: string | null; sequence: string; supersedesSequence: string | null; at: string };
 
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
-const validSequence = (value: unknown): value is string | null => value === null || (typeof value === "string" && /^[1-9][0-9]*$/.test(value));
+const validSequence = (value: unknown, maxDigits: number): value is string | null => value === null || (typeof value === "string" && value.length <= maxDigits && /^[1-9][0-9]*$/.test(value));
+const validLifecycleSequence = (value: unknown): value is string | null => validSequence(value, 19) && (value === null || value.length < 19 || value <= "9223372036854775807");
 
 // Assertions are independent evidence, not authoritative lifecycle or execution state.
 export class CooperativeReconciliation {
@@ -93,7 +94,7 @@ export class CooperativeReconciliation {
     if (!principal || principal.role !== "operator") throw new Error("access denied");
     const actor = principal.name;
     if (!validId(actor)) throw new Error("access denied");
-    if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validSequence(expectedSequence) || !validSequence(expectedAssertionSequence)) throw new CommandError("invalid", "invalid reconciliation request");
+    if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validLifecycleSequence(expectedSequence) || !validSequence(expectedAssertionSequence, 1000)) throw new CommandError("invalid", "invalid reconciliation request");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [existing] = await tx<Reconciliation[]>`SELECT command_id AS "commandId", request_id AS "requestId", actor, disposition, evidence, expected_sequence AS "expectedSequence", sequence::text AS sequence, supersedes_sequence::text AS "supersedesSequence", at FROM central_cooperative_reconciliations WHERE request_id = ${requestId}`;
