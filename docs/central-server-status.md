@@ -55,6 +55,10 @@ A local real-agent smoke attempt initialized MCP and discovered both cooperative
 
 `transitionScoped` and optional request-store mutation guards provide transaction-bound hooks, but the server and MCP handlers do not wire them to incarnation validation. `transitionScoped` now passes a snapshot of its scope as the guard’s second argument; guards must use that argument and lock slot, identity and incarnation in `lockForClaim` order before the event lock. Existing one-argument guards still type-check but must be adapted if they relied on a mutable scope closure; the API cannot enforce this contract. Existing supervisor routes therefore do not gain incarnation fencing from these methods. Old deployed readers may not understand `claimed`; old writers and delivery workers may bypass the cooperative locking contract. Any eventual cutover must account for all readers and writers and needs a reviewed, tested compatibility and recovery design. There is no safe production migration procedure here; do not enable the prototype or remove its fence as a production cutover.
 
+## Delivery confirmation compatibility
+
+`classify` now requires the expected target as its second argument. Exit code 0 counts as delivered only when raw stdout is exactly `<target>: delivered`, optionally followed by one LF or CRLF. `fleetSender` no longer trims stdout. Custom senders and direct callers that relied on substring matches, extra whitespace, or the old one-argument API must change. Previously recorded outcomes are not reclassified. A sender can spoof even an exact response; this check does not authenticate the sender or prove execution. Unconfirmed results remain unknown and are not automatically retried.
+
 ## Limits and safety
 
 - **No real agent dispatch:** the mounted socket is inventory-only; the entry point does not wire delivery attempts or start a host-agent process. The dispatch message has no runtime instance ID, although the separate executor requires one. Do not treat the isolated components as an end-to-end delivery path.

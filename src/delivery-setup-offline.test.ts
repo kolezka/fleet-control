@@ -19,7 +19,7 @@ for (const failure of ["mkdtemp", "write"] as const) {
       write: async (_file: string, _content: string) => { calls.push("write"); if (failure === "write") throw new Error("secret-token"); },
       rm: async (_dir: string) => { calls.push("rm"); },
     };
-    const deliverer = new Deliverer(store as unknown as Commands, async () => { calls.push("sender"); return { exitCode: 0, stdout: "delivered", stderr: "" }; }, io);
+    const deliverer = new Deliverer(store as unknown as Commands, async () => { calls.push("sender"); return { exitCode: 0, stdout: "session: delivered", stderr: "" }; }, io);
     expect((await deliverer.deliver(command.id)).status).toBe("delivery_unknown");
     expect((await deliverer.deliver(command.id)).status).toBe("delivery_unknown");
     expect(events.map(({ status }) => status)).toEqual(["delivering", "delivery_unknown"]);

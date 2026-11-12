@@ -14,13 +14,13 @@ afterAll(async () => { await fleet?.cleanup(); });
 const submit = (c: Commands, key: string, target: string, text = "check the build") =>
   c.submit({ idempotencyKey: key, target, actor: "test", text }).command.id;
 
-test("classify: only exit 0 with 'delivered' is delivered; all unconfirmed results are unknown", () => {
-  expect(classify({ exitCode: 0, stdout: "s: delivered", stderr: "" }).status).toBe("delivered");
-  expect(classify({ exitCode: 0, stdout: "", stderr: "" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 6, stdout: "", stderr: "s: message file x is empty or blank, not sent" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 5, stdout: "", stderr: "s: pasted but first line not found in pane" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 2, stdout: "", stderr: "no session s" }).status).toBe("delivery_unknown");
-  expect(classify({ exitCode: 3, stdout: "", stderr: "s: a dialog opened during the paste, Enter not pressed." }).status).toBe("delivery_unknown");
+test("classify: exact target confirmation is delivered; unconfirmed results are unknown", () => {
+  expect(classify({ exitCode: 0, stdout: "s: delivered", stderr: "" }, "s").status).toBe("delivered");
+  expect(classify({ exitCode: 0, stdout: "", stderr: "" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 6, stdout: "", stderr: "s: message file x is empty or blank, not sent" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 5, stdout: "", stderr: "s: pasted but first line not found in pane" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 2, stdout: "", stderr: "no session s" }, "s").status).toBe("delivery_unknown");
+  expect(classify({ exitCode: 3, stdout: "", stderr: "s: a dialog opened during the paste, Enter not pressed." }, "s").status).toBe("delivery_unknown");
 });
 
 test("real fleet send puts the command id in the pane and records delivered", async () => {

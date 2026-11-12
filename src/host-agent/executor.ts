@@ -52,7 +52,7 @@ export class DeliveryExecutor {
 
     let status: "delivered" | "unknown" = "unknown";
     try {
-      if (classify(await this.send(intent)).status === "delivered") status = "delivered";
+      if (classify(await this.send(intent), intent.target).status === "delivered") status = "delivered";
     } catch {
       // A sender failure cannot prove whether delivery occurred.
     }

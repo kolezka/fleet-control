@@ -4,7 +4,7 @@ import { DeliveryJournal, JournalError } from "./journal.ts";
 import { DeliveryExecutor, type CommandOffer } from "./executor.ts";
 
 const offer: CommandOffer = { id: "cmd-1", hostId: "host-1", target: "supervisor", text: "hello", instanceId: "instance-1" };
-const confirmed = { exitCode: 0, stdout: "delivered", stderr: "" };
+const confirmed = { exitCode: 0, stdout: "supervisor: delivered", stderr: "" };
 
 function setup(send: (offer: CommandOffer) => Promise<typeof confirmed>, lookup = async (_target: string) => "instance-1") {
   const db = new Database(":memory:");

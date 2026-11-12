@@ -31,7 +31,7 @@ for (const outcome of ["delivered", "delivery_unknown", "store failure"] as cons
       calls.push("send");
       return outcome === "delivery_unknown"
         ? { exitCode: 7, stdout: "", stderr: "delivery uncertain" }
-        : { exitCode: 0, stdout: "delivered", stderr: "" };
+        : { exitCode: 0, stdout: "session: delivered", stderr: "" };
     };
     const deliverer = new Deliverer(store as unknown as Commands, send, io);
     const originalWarn = console.warn;

@@ -28,7 +28,7 @@ export function fleetSender(fleetBin: string, confPath: string): Sender {
       stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-    return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+    return { exitCode, stdout, stderr: stderr.trim() };
   };
 }
 
@@ -45,8 +45,9 @@ export function messageFor(c: Command): string {
 }
 
 // Sender output cannot prove no effect. Unconfirmed results are unknown and never retried automatically.
-export function classify(r: SendResult): { status: "delivered" | "delivery_unknown"; detail: string } {
-  if (r.exitCode === 0 && /delivered/.test(r.stdout)) return { status: "delivered", detail: r.stdout };
+export function classify(r: SendResult, target: string): { status: "delivered" | "delivery_unknown"; detail: string } {
+  const expected = `${target}: delivered`;
+  if (r.exitCode === 0 && (r.stdout === expected || r.stdout === `${expected}\n` || r.stdout === `${expected}\r\n`)) return { status: "delivered", detail: r.stdout };
   const detail = `fleet send exit ${r.exitCode}: ${r.stderr || r.stdout || "no output"}`;
   return { status: "delivery_unknown", detail };
 }
@@ -86,7 +87,7 @@ export class Deliverer {
       } catch {
         return this.commands.transition(id, "delivery_unknown", "service", "fleet send failed with an exception");
       }
-      const { status, detail } = classify(result);
+      const { status, detail } = classify(result, c.target);
       return this.commands.transition(id, status, "service", detail);
     } finally {
       try {
