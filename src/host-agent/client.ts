@@ -39,6 +39,7 @@ function parseDispatch(raw: unknown, hostId: string): AgentDispatch | null {
 
 export class HostAgentClient {
   private socket: HostSocket | undefined;
+  private connection: object | undefined;
   private timer: unknown;
   private running = false;
   private reconnects = 0;
@@ -106,11 +107,13 @@ export class HostAgentClient {
     Reflect.apply(send, socket, [raw]);
   }
 
-  private send(message: AgentInventory | AgentReceipt): void {
+  private sendReceipt(message: AgentReceipt, socket: HostSocket, current: () => boolean): void {
     const raw = JSON.stringify(message);
+    if (!current()) return;
     if (Buffer.byteLength(raw, "utf8") > MAX_AGENT_MESSAGE_BYTES) throw new RangeError("message too large");
-    if (!this.socket) throw new Error("not connected");
-    this.socket.send(raw);
+    const send = socket.send;
+    if (!current()) return;
+    Reflect.apply(send, socket, [raw]);
   }
 
   private connect(): void {
@@ -119,28 +122,31 @@ export class HostAgentClient {
     try { socket = this.options.socketFactory(this.url, { headers: { Authorization: `Bearer ${this.options.token}` } }); }
     catch (error) { this.options.onError?.(error); this.schedule(); return; }
     this.socket = socket;
+    const connection = this.connection = {};
+    const current = () => this.running && this.socket === socket && this.connection === connection;
     socket.addEventListener("open", () => {
-      if (this.socket !== socket || !this.running) return;
+      if (!current()) return;
       this.reconnects = 0;
       const generation = ++this.inventoryGeneration;
       void Promise.resolve().then(async () => {
-        if (!this.running || this.socket !== socket || this.inventoryGeneration !== generation) return;
+        if (!current() || this.inventoryGeneration !== generation) return;
         const inventory = this.options.inventory;
-        if (!inventory || !this.running || this.socket !== socket || this.inventoryGeneration !== generation) return;
+        if (!inventory || !current() || this.inventoryGeneration !== generation) return;
         const sessions = await Reflect.apply(inventory, this.options, []);
-        if (this.running && this.socket === socket && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
+        if (current() && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
       }).catch((error) => this.options.onError?.(error));
     });
     socket.addEventListener("close", () => {
-      if (this.socket !== socket) return;
+      if (!current()) return;
       this.socket = undefined;
       this.inventoryGeneration++;
       this.schedule();
     });
-    socket.addEventListener("error", (event) => { if (this.socket === socket) this.options.onError?.(event); });
+    socket.addEventListener("error", (event) => { if (current()) this.options.onError?.(event); });
     socket.addEventListener("message", (event) => {
-      if (this.socket !== socket || !this.running) return;
+      if (!current()) return;
       const dispatch = parseDispatch(event.data, this.options.hostId);
+      if (!current()) return;
       if (!dispatch || this.pending >= maxPending) {
         this.socket = undefined;
         socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch");
@@ -150,11 +156,12 @@ export class HostAgentClient {
       this.pending++;
       this.queue = this.queue.then(async () => {
         try {
-          if (!this.running || this.socket !== socket) return;
+          if (!current()) return;
           const outcome = await this.options.execute(Object.freeze(dispatch));
           if (outcome.id !== dispatch.attemptId || !["started", "delivered", "unknown"].includes(outcome.status)) throw new Error("invalid journal outcome");
+          if (!current()) return;
           const receipt: AgentReceipt = { version: 1, type: "receipt", hostId: dispatch.hostId, commandId: dispatch.commandId, attemptId: dispatch.attemptId, status: outcome.status === "delivered" ? "delivered" : "unknown" };
-          if (this.running && this.socket === socket) this.send(receipt);
+          if (current()) this.sendReceipt(receipt, socket, current);
         } catch (error) { this.options.onError?.(error); }
         finally { this.pending--; }
       });
