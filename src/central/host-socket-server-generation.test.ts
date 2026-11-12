@@ -103,3 +103,54 @@ test("multiple pending inventory failures close a current socket only once", asy
   expect(adapter.listHosts()).toEqual([]);
 });
 
+
+test("accepted host identity survives mutation before message and close", () => {
+  const seen: string[] = [];
+  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: (value) => { seen.push(value.hostId); } });
+  const socket = { data: { hostId: "host-a" }, send: () => 1, close: () => {} } as unknown as ServerWebSocket<HostSocketData>;
+  adapter.websocket.open(socket);
+  socket.data.hostId = "host-b";
+  adapter.websocket.message(socket, inventory("current"));
+  expect(seen).toEqual(["host-a"]);
+  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: ["current"] }]);
+  adapter.websocket.open(socket);
+  adapter.websocket.close(socket);
+  expect(adapter.listHosts()).toEqual([]);
+});
+
+test("failed reentrant open cannot overwrite an accepted generation", async () => {
+  let reject!: (error: Error) => void;
+  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: () => new Promise<void>((_, fail) => { reject = fail; }) });
+  const occupied = { data: { hostId: "host-a" }, send: () => 1, close: () => {} } as unknown as ServerWebSocket<HostSocketData>;
+  adapter.websocket.open(occupied);
+  const closed: number[] = [];
+  const socket = { data: { hostId: "host-a" }, send: () => 1, close: (code: number) => {
+    closed.push(code);
+    if (code === 1008) { socket.data.hostId = "host-b"; adapter.websocket.open(socket); }
+  } } as unknown as ServerWebSocket<HostSocketData>;
+  adapter.websocket.open(socket);
+  socket.data.hostId = "host-c";
+  adapter.websocket.message(socket, JSON.stringify({ version: 1, type: "inventory", hostId: "host-b", sessions: ["current"] }));
+  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: null }, { hostId: "host-b", sessions: ["current"] }]);
+  reject(new Error("current failure"));
+  await Promise.resolve(); await Promise.resolve();
+  expect(closed).toEqual([1008, 1011]);
+  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: null }]);
+});
+
+test("message and close without an accepted open are no-ops", () => {
+  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: () => { throw new Error("unexpected"); } });
+  const socket = { data: { hostId: "host-a" }, send: () => 1, close: () => { throw new Error("unexpected close"); } } as unknown as ServerWebSocket<HostSocketData>;
+  adapter.websocket.message(socket, inventory("ignored"));
+  adapter.websocket.close(socket);
+  expect(adapter.listHosts()).toEqual([]);
+});
+
+test("close uses the accepted identity after data mutation", () => {
+  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: () => {} });
+  const socket = { data: { hostId: "host-a" }, send: () => 1, close: () => {} } as unknown as ServerWebSocket<HostSocketData>;
+  adapter.websocket.open(socket);
+  socket.data.hostId = "host-b";
+  adapter.websocket.close(socket);
+  expect(adapter.listHosts()).toEqual([]);
+});

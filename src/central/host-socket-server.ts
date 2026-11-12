@@ -16,7 +16,7 @@ export function createHostSocketServer(options: {
     onInventory: options.onInventory,
   });
 
-  const generations = new WeakMap<ServerWebSocket<HostSocketData>, object>();
+  const generations = new WeakMap<ServerWebSocket<HostSocketData>, { readonly hostId: string }>();
 
   return {
     listHosts: () => sockets.listHosts(),
@@ -37,21 +37,25 @@ export function createHostSocketServer(options: {
     websocket: {
       maxPayloadLength: MAX_AGENT_MESSAGE_BYTES,
       open(socket: ServerWebSocket<HostSocketData>) {
-        if (sockets.connect(socket.data.hostId, socket)) generations.set(socket, {});
+        const hostId = socket.data.hostId;
+        if (sockets.connect(hostId, socket)) generations.set(socket, { hostId });
       },
       message(socket: ServerWebSocket<HostSocketData>, message: string | Buffer) {
         const generation = generations.get(socket);
-        const hostId = socket.data.hostId;
+        if (!generation) return;
+        const { hostId } = generation;
         void sockets.message(hostId, socket, message).catch(() => {
-          if (!generation || generations.get(socket) !== generation) return;
+          if (generations.get(socket) !== generation) return;
           generations.delete(socket);
           sockets.disconnect(hostId, socket);
           socket.close(1011, "inventory failed");
         });
       },
       close(socket: ServerWebSocket<HostSocketData>) {
+        const generation = generations.get(socket);
+        if (!generation) return;
         generations.delete(socket);
-        sockets.disconnect(socket.data.hostId, socket);
+        sockets.disconnect(generation.hostId, socket);
       },
     },
   };
