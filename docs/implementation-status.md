@@ -28,7 +28,7 @@ The legacy deliverer marks a command `delivering` before preparing its temporary
 
 Several sections below say the viewer-plus-send test is skipped, or that a read-only viewer blocks `tmux send-keys`, `fleet send` and the watchdog. That was true of the agent-fleet checkout used then. The repository now pins `vendor/agent-fleet` at `5871fa5` (PR #7, the paste-keys fix; see the pinned-dependency section and [dependency maintenance](agent-fleet-dependency.md)). In this checkout `scripts/watchdog.sh` no longer calls `tmux send-keys`; its `keys()` helper pastes raw bytes, and `src/terminal/viewer-send.test.ts` ran and passed against the pinned CLI with the read-only viewer attached.
 
-What stays open: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md) now records the merged fix (2026-11-12 update). A real Claude Code agent receiving the pasted Enter with the page open has not been checked. The viewer should not be used with real agent sessions until that check and the owner's authorization. This fix lives only in the repository's pinned submodule: the installed `.4` service was not upgraded and still runs its earlier code, `.15` was not contacted, and nothing was deployed or pushed.
+What stays open: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md) now records the merged fix (2026-11-12 update). A real Claude Code agent received the pasted Enter with the read-only viewer open on 2026-11-12 (`scripts/viewer-agent-smoke.ts`, two runs, owner-approved; private tmux fleet, not a real fleet). This fix lives only in the repository's pinned submodule: the installed `.4` service was not upgraded and still runs its earlier code, `.15` was not contacted, and nothing was deployed or pushed.
 
 ## Latest: pinned CLI dependency (2026-11-09)
 
@@ -180,7 +180,7 @@ Setup and removal: [installation.md](installation.md). Evidence read back from t
 ## Not implemented in this project
 
 - A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. `.15` has nothing.
-- Using the viewer with real agent sessions: the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)) is fixed in the pinned `vendor/agent-fleet` (see the 2026-11-11 correction above), but a real Claude Code agent receiving the pasted Enter with the viewer open is unchecked, the installed `.4` service was not upgraded, and real-session use needs the owner's authorization.
+- Using the viewer with real agent sessions: the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)) is fixed in the pinned `vendor/agent-fleet` (see the 2026-11-11 correction above), and a real Claude Code agent received the pasted Enter with the viewer open (2026-11-12, private fleet), but the installed `.4` service was not upgraded, and real-session use needs the owner's authorization.
 - phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
 - Terminal input and exclusive input leases. The viewer is read-only by design.
 - Push event stream (the page polls every 3 s for requests and commands, 15 s for sessions).
@@ -238,7 +238,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Suggested next order
 
-1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Still open: the same with a real Claude Code agent, and upgrading the installed `.4` service (not authorized so far).
+1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Done with a real Claude Code agent (2026-11-12, `scripts/viewer-agent-smoke.ts`). Still open: upgrading the installed `.4` service.
 2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, after the real-agent check above and the `.4` upgrade decision.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
 4. Input lease design, then implementation.
