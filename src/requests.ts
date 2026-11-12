@@ -143,18 +143,20 @@ export class Requests {
   }): SupervisorRequest {
     return this.db.transaction(() => {
       const run = this.run(input.runId);
-      if (input.origin !== run.orchestrator) throw new RequestError("forbidden", `${input.origin} is not the orchestrator of ${run.id}`);
+      const origin = input.origin;
+      if (origin !== run.orchestrator) throw new RequestError("forbidden", `${origin} is not the orchestrator of ${run.id}`);
       if (input.expectedRevision !== run.revision) {
         throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
       }
-      const allowed = input.allowedResponses?.length ? input.allowedResponses : input.kind === "approval" ? ["approve", "decline"] : ["answer"];
+      const kind = input.kind;
+      const allowed = input.allowedResponses?.length ? input.allowedResponses : kind === "approval" ? ["approve", "decline"] : ["answer"];
       const id = `req-${crypto.randomUUID()}`;
       const at = this.now().toISOString();
       this.db.query(`INSERT INTO requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence,
           allowed_responses, blocking, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`)
-        .run(id, run.id, run.phase, run.revision, input.kind, nonEmpty(input.question, "question"), input.proposedAction ?? "",
-          input.scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, input.origin, at);
-      this.event(id, run.id, "opened", input.origin, `${input.kind} for ${run.phase} r${run.revision}`, at);
+        .run(id, run.id, run.phase, run.revision, kind, nonEmpty(input.question, "question"), input.proposedAction ?? "",
+          input.scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, origin, at);
+      this.event(id, run.id, "opened", origin, `${kind} for ${run.phase} r${run.revision}`, at);
       return this.get(id);
     })();
   }
