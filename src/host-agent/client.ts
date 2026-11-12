@@ -67,6 +67,7 @@ export class HostAgentClient {
 
   stop(): void {
     this.running = false;
+    this.connection = undefined;
     this.inventoryGeneration++;
     if (this.timer !== undefined) this.options.clearTimer(this.timer);
     this.timer = undefined;
@@ -119,11 +120,20 @@ export class HostAgentClient {
 
   private connect(): void {
     if (!this.running) return;
+    // The factory can stop or restart the client; only this attempt may install its socket or retry.
+    const connection = this.connection = {};
+    const owns = () => this.running && this.connection === connection;
     let socket: HostSocket;
     try { socket = this.options.socketFactory(this.url, { headers: { Authorization: `Bearer ${this.options.token}` } }); }
-    catch (error) { this.reportError(error); this.schedule(); return; }
+    catch (error) { this.reportError(error); if (owns()) this.schedule(); return; }
+    if (!owns()) {
+      // A newer attempt may have installed this same object; only close a socket nobody owns.
+      if (socket !== this.socket) {
+        try { socket.close(1000, "stopped"); } catch (error) { this.reportError(error); }
+      }
+      return;
+    }
     this.socket = socket;
-    const connection = this.connection = {};
     const current = () => this.running && this.socket === socket && this.connection === connection;
     socket.addEventListener("open", () => {
       if (!current()) return;
