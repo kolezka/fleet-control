@@ -54,7 +54,7 @@ for (const method of ["get", "getBounded", "events"] as const) {
         expect(result).toEqual(method === "events" ? [{ commandId: id }] : { id });
         expect(queries).toHaveLength(1);
         expect(queries[0]?.values[0]).toBe(id);
-        expect(runnerCalls()).toBe(useRunner && method !== "events" ? 1 : 0);
+        expect(runnerCalls()).toBe(useRunner ? 1 : 0);
       });
     }
   }
