@@ -17,9 +17,19 @@ export function createHostSocketServer(options: {
   });
 
   const generations = new WeakMap<ServerWebSocket<HostSocketData>, { readonly hostId: string }>();
+  const open = new Set<ServerWebSocket<HostSocketData>>();
+  let shuttingDown = false;
 
   return {
     listHosts: () => sockets.listHosts(),
+    // Close every accepted socket with 1001 so a graceful server stop does not wait on idle hosts.
+    // Sockets that open afterwards are closed at once. Hosts reconnect to the next server.
+    closeAll() {
+      shuttingDown = true;
+      for (const socket of [...open]) {
+        try { socket.close(1001, "server shutting down"); } catch { /* Already closed. */ }
+      }
+    },
     fetch(request: Request, server: Pick<Server<HostSocketData>, "upgrade">): Response | undefined {
       const url = new URL(request.url);
       if (url.pathname !== "/api/host/socket") return new Response("not found", { status: 404 });
@@ -37,8 +47,12 @@ export function createHostSocketServer(options: {
     websocket: {
       maxPayloadLength: MAX_AGENT_MESSAGE_BYTES,
       open(socket: ServerWebSocket<HostSocketData>) {
+        if (shuttingDown) {
+          try { socket.close(1001, "server shutting down"); } catch { /* Already closed. */ }
+          return;
+        }
         const hostId = socket.data.hostId;
-        if (sockets.connect(hostId, socket)) generations.set(socket, { hostId });
+        if (sockets.connect(hostId, socket)) { generations.set(socket, { hostId }); open.add(socket); }
       },
       message(socket: ServerWebSocket<HostSocketData>, message: string | Buffer) {
         const generation = generations.get(socket);
@@ -52,6 +66,7 @@ export function createHostSocketServer(options: {
         });
       },
       close(socket: ServerWebSocket<HostSocketData>) {
+        open.delete(socket);
         const generation = generations.get(socket);
         if (!generation) return;
         generations.delete(socket);
