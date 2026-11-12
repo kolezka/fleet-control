@@ -200,11 +200,13 @@ export class HostAgentClient {
     // cancel must not clear or reconnect for a later start.
     const retry = {};
     this.retry = retry;
-    this.timer = this.options.setTimer(() => {
+    const handle = this.options.setTimer(() => {
       if (this.retry !== retry) return;
       this.retry = undefined;
       this.timer = undefined;
       this.connect();
     }, delay);
+    // A synchronous setTimer may already have run this retry (and scheduled a newer one).
+    if (this.retry === retry) this.timer = handle;
   }
 }
