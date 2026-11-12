@@ -16,7 +16,7 @@ Do not restart product discovery or redesign the agreed layout without a new rea
 
 Updated 2026-11-11. Work moves to another machine; this section is the handoff.
 
-**Where the code is.** Branch `central-server-backend`, draft [PR #6](https://github.com/kolezka/fleet-control/pull/6), based on `main` at `6b23049`. As of 2026-11-12, local and remote heads matched at `c1549ae`; the PR was open and draft. Check both heads before continuing. Read [central server status](central-server-status.md) before claiming anything works. Draft PR #5 (`feat/host-agent-receipt-outbox`) holds only the receipt outbox, which PR #6 also contains; the owner has not yet decided whether to close #5.
+**Where the code is.** Branch `central-server-backend`, draft [PR #6](https://github.com/kolezka/fleet-control/pull/6), based on `main` at `6b23049`. The PR is a draft; check the local and remote heads before continuing rather than relying on a recorded commit. Read [central server status](central-server-status.md) before claiming anything works. Draft PR #5 (`feat/host-agent-receipt-outbox`) holds only the receipt outbox, which PR #6 also contains; the owner has not yet decided whether to close #5.
 
 **Goal.** A central Bun/Hono/PostgreSQL server holds control state (commands, approvals, supervisor identities); hosts keep execution. UI changes are out of scope for this work (the current Terminal Deck stays). No remote host access or deployment without separate authorization. Hono and a local PostgreSQL test container are authorized dependencies.
 
