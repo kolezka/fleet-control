@@ -1,6 +1,6 @@
 # agent-fleet: send-keys fails while a read-only viewer is attached
 
-Status: fixed in agent-fleet `5871fa5` (PR #7), which this repository pins as `vendor/agent-fleet`; the real-agent check below is still open. Found 2026-11-09 on 192.168.50.4 (macOS, tmux 3.8) during the Fleet Control stage 5 browser check.
+Status: fixed in agent-fleet `5871fa5` (PR #7), which this repository pins as `vendor/agent-fleet`. Verified with a real Claude Code agent on 2026-11-12 (see the update below); upgrading the installed `.4` service is still open. Found 2026-11-09 on 192.168.50.4 (macOS, tmux 3.8) during the Fleet Control stage 5 browser check.
 
 ## Symptom
 
@@ -51,7 +51,11 @@ Regression test: attach a read-only client in `tests/socket-and-attach-stub.sh` 
 
 ## Status update (2026-11-12)
 
-The fix was merged in agent-fleet as PR #7 (`5871fa5`). Its `scripts/watchdog.sh` no longer calls `tmux send-keys`. Fleet Control pins that commit, and `src/terminal/viewer-send.test.ts` passes against it with the read-only viewer attached. Still open: a real Claude Code agent receiving the pasted Enter with the page open, and upgrading the installed `.4` service. Neither has been done.
+The fix was merged in agent-fleet as PR #7 (`5871fa5`). Its `scripts/watchdog.sh` no longer calls `tmux send-keys`. Fleet Control pins that commit, and `src/terminal/viewer-send.test.ts` passes against it with the read-only viewer attached. Still open at that time: a real Claude Code agent receiving the pasted Enter with the page open (done 2026-11-12, below), and upgrading the installed `.4` service (still open).
+
+## Real-agent check (2026-11-12)
+
+Owner-approved. `scripts/viewer-agent-smoke.ts` (opt-in: `VIEWER_AGENT_SMOKE=1` and `VIEWER_AGENT_CWD` set to a folder already trusted in Claude Code) creates a private tmux fleet with the pinned CLI, starts a real Claude Code agent (Haiku) with `fleet start`, waits for its first reply, then opens the same read-only viewer the page uses. With the viewer attached, plain `send-keys` is refused; the script then submits a command with a random sum and delivers it through `Deliverer` and `fleet send`. Two runs on `.4` (Claude Code 2.1.322): both `delivered`, and the agent answered the sum in the pane, so the pasted Enter reached a real agent. The agent had no MCP servers and Bash, Edit, Write, Read and network tools disallowed; it ran with the owner's Claude Code settings, so its hooks ran too. The default permission mode was tried first: agent-fleet then never detected the UI (it waits for `bypass permissions on` or `for shortcuts`, and the owner's status line shows neither), so `fleet start` failed after 90 s. A fresh temp folder fails on the trust dialog, which the watchdog never answers by design.
 
 ## Status (2026-11-09 15:20, historical)
 
