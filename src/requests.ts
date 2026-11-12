@@ -197,11 +197,12 @@ export class Requests {
     return this.db.transaction(() => {
       const r = this.get(input.requestId);
       const run = this.run(r.runId);
-      if (input.actor !== run.orchestrator) throw new RequestError("forbidden", `${input.actor} is not the orchestrator of ${run.id}`);
+      const actor = input.actor;
+      if (actor !== run.orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${run.id}`);
       if (r.status === "acknowledged") return r;
       if (r.status !== "resolved") throw new RequestError("conflict", `${r.id} is ${r.status}; only a resolved request can be acknowledged`);
       this.setStatus(r.id, "acknowledged");
-      this.event(r.id, r.runId, "acknowledged", input.actor, `read answer "${r.response}"`, this.now().toISOString());
+      this.event(r.id, r.runId, "acknowledged", actor, `read answer "${r.response}"`, this.now().toISOString());
       return this.get(r.id);
     })();
   }
@@ -209,10 +210,11 @@ export class Requests {
   withdraw(input: { requestId: string; actor: string; reason: string }): SupervisorRequest {
     return this.db.transaction(() => {
       const r = this.get(input.requestId);
-      if (input.actor !== this.run(r.runId).orchestrator) throw new RequestError("forbidden", `${input.actor} is not the orchestrator of ${r.runId}`);
+      const actor = input.actor;
+      if (actor !== this.run(r.runId).orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${r.runId}`);
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; only an open request can be withdrawn`);
       this.setStatus(r.id, "withdrawn");
-      this.event(r.id, r.runId, "withdrawn", input.actor, nonEmpty(input.reason, "reason"), this.now().toISOString());
+      this.event(r.id, r.runId, "withdrawn", actor, nonEmpty(input.reason, "reason"), this.now().toISOString());
       return this.get(r.id);
     })();
   }
