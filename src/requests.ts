@@ -254,6 +254,7 @@ export class Requests {
   }
 
   get(id: string): SupervisorRequest {
+    if (!id.isWellFormed()) throw new RequestError("invalid", "invalid requestId encoding");
     const r = this.db.query<Row, [string]>(`${reqSelect} WHERE id = ?`).get(id);
     if (!r) throw new RequestError("not_found", `no request ${id}`);
     return decode(r);
