@@ -152,16 +152,29 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
           let input: unknown;
           try { input = JSON.parse(raw); } catch { return error(400, "invalid JSON"); }
           if (!input || typeof input !== "object" || Array.isArray(input) || (input as Record<string, unknown>).jsonrpc !== "2.0" || typeof (input as Record<string, unknown>).method !== "string") return error(400, "invalid MCP request");
+          const hasId = Object.hasOwn(input, "id");
+          const requestId = (input as Record<string, unknown>).id;
+          if (hasId && !((typeof requestId === "string" && requestId.length <= 256) || (typeof requestId === "number" && Number.isSafeInteger(requestId)))) return error(400, "invalid MCP request");
           if (containsEncodedSecret(raw) || secrets.some((secret) => raw.includes(secret) || JSON.stringify(input).includes(secret))) return error(400, "invalid MCP request");
           if (controller.signal.aborted) throw new Error("aborted");
           forwarded = true;
           const upstream = await centralFetch(endpoint, { method: "POST", redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${supervisorToken}`, "x-fleet-incarnation-id": incarnationId, "x-fleet-incarnation-token": incarnationToken, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: raw });
           if (controller.signal.aborted) { cancel(upstream.body, track); throw new Error("aborted"); }
           if (!upstream.ok) { cancel(upstream.body, track); return unknown(502); }
-          if (upstream.status === 202 || upstream.status === 204) { cancel(upstream.body, track); return new Response(null, { status: upstream.status }); }
-          if (!/^application\/json(?:\s*;|$)/i.test(upstream.headers.get("content-type") ?? "")) { cancel(upstream.body, track); return unknown(502); }
+          if (upstream.status === 202 || upstream.status === 204) {
+            if (hasId) { cancel(upstream.body, track); return unknown(502); }
+            const acknowledgement = await readLimited(upstream.body, responseLimit, controller.signal, track);
+            return acknowledgement.length === 0 ? new Response(null, { status: upstream.status }) : unknown(502);
+          }
+          if (!hasId || !/^application\/json(?:\s*;|$)/i.test(upstream.headers.get("content-type") ?? "")) { cancel(upstream.body, track); return unknown(502); }
           const text = new TextDecoder("utf-8", { fatal: true }).decode(await readLimited(upstream.body, responseLimit, controller.signal, track));
           const parsed: unknown = JSON.parse(text);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return unknown(502);
+          const response = parsed as Record<string, unknown>;
+          const hasResult = Object.hasOwn(response, "result");
+          const hasError = Object.hasOwn(response, "error");
+          if (response.jsonrpc !== "2.0" || !Object.hasOwn(response, "id") || response.id !== requestId || hasResult === hasError) return unknown(502);
+          if (hasError && (!response.error || typeof response.error !== "object" || Array.isArray(response.error) || !Number.isInteger((response.error as Record<string, unknown>).code) || typeof (response.error as Record<string, unknown>).message !== "string")) return unknown(502);
           const normalized = JSON.stringify(parsed);
           if (containsSecret(parsed) || secrets.some((secret) => text.includes(secret) || normalized.includes(secret))) return unknown(502);
           return new Response(normalized, { status: upstream.status, headers: { "content-type": "application/json" } });
