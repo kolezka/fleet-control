@@ -147,6 +147,7 @@ export class CentralCommands {
   }
 
   async get(id: string): Promise<CentralCommand> {
+    if (typeof id !== "string" || !id.isWellFormed()) throw new CommandError("invalid", "invalid command ID");
     const query = async (db: SQL | TransactionSQL) => {
       const [command] = await db<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id}`;
       if (!command) throw new CommandError("not_found", `no command ${id}`);
@@ -222,6 +223,7 @@ export class CentralCommands {
 
   // Cooperative operator reads return at most one bounded JSON value per row.
   async getBounded(id: string): Promise<CentralCommand> {
+    if (typeof id !== "string" || !id.isWellFormed()) throw new CommandError("invalid", "invalid command ID");
     const query = async (db: SQL | TransactionSQL) => {
       const [row] = await db<{ command: CentralCommand | null }[]>`SELECT CASE WHEN
         octet_length(id)::bigint + octet_length(idempotency_key) + octet_length(host_id) + octet_length(target) + octet_length(actor) + octet_length(text) + octet_length(status) + octet_length(created_at) + octet_length(updated_at) <= 270336
@@ -273,6 +275,7 @@ export class CentralCommands {
   }
 
   async events(id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {
+    if (id !== undefined && (typeof id !== "string" || !id.isWellFormed())) throw new CommandError("invalid", "invalid command ID");
     return this.eventsWithConnection(this.db, id, afterSeq);
   }
 
