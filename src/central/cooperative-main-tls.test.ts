@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cooperativeConfig, runCooperativeCli, startCooperative } from "./cooperative-main.ts";
@@ -14,6 +14,7 @@ async function makeCert(dir: string, name: string) {
   const cert = join(dir, name + "-cert.pem"), key = join(dir, name + "-key.pem");
   const generated = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", key, "-out", cert], { stdout: "ignore", stderr: "ignore" });
   expect(await generated.exited).toBe(0);
+  await chmod(key, 0o600);
   return { cert, key };
 }
 
