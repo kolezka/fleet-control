@@ -78,6 +78,7 @@ function parseMessage(raw: string): AgentReceipt | AgentInventory | null {
 
 export class AgentSockets {
   private connections = new Map<string, AgentSocket>();
+  private registrations = new Map<string, object>();
   private closing = new WeakSet<AgentSocket>();
   private inventories = new Map<string, string[] | null>();
 
@@ -95,6 +96,7 @@ export class AgentSockets {
       return false;
     }
     this.connections.set(hostId, socket);
+    this.registrations.set(hostId, {});
     this.inventories.set(hostId, null);
     return true;
   }
@@ -103,6 +105,7 @@ export class AgentSockets {
   disconnect(hostId: string, socket: AgentSocket): void {
     if (this.connections.get(hostId) === socket) {
       this.connections.delete(hostId);
+      this.registrations.delete(hostId);
       this.inventories.delete(hostId);
     }
   }
@@ -127,14 +130,28 @@ export class AgentSockets {
 
   // A successful send is not a receipt. The caller owns retries and delivery state.
   dispatch(message: AgentDispatch): boolean {
-    const socket = this.connections.get(message.hostId);
-    if (!socket || this.closing.has(socket)) return false;
-    if (message.version !== 1 || message.type !== "dispatch" || !nonempty(message.hostId) ||
-        !nonempty(message.commandId) || !nonempty(message.attemptId) || !nonempty(message.target) || !nonempty(message.text)) {
-      throw new TypeError("invalid dispatch");
-    }
-    const raw = JSON.stringify(message);
+    const hostId = message.hostId;
+    const socket = this.connections.get(hostId);
+    const registration = this.registrations.get(hostId);
+    if (!socket || !registration || this.closing.has(socket)) return false;
+    const version = message.version;
+    if (version !== 1) throw new TypeError("invalid dispatch");
+    const type = message.type;
+    if (type !== "dispatch" || !nonempty(hostId)) throw new TypeError("invalid dispatch");
+    const commandId = message.commandId;
+    if (!nonempty(commandId)) throw new TypeError("invalid dispatch");
+    const attemptId = message.attemptId;
+    if (!nonempty(attemptId)) throw new TypeError("invalid dispatch");
+    const target = message.target;
+    if (!nonempty(target)) throw new TypeError("invalid dispatch");
+    const text = message.text;
+    if (!nonempty(text)) throw new TypeError("invalid dispatch");
+    const snapshot: AgentDispatch = Object.assign(Object.create(null), {
+      version, type, hostId, commandId, attemptId, target, text,
+    });
+    const raw = JSON.stringify(snapshot);
     if (Buffer.byteLength(raw, "utf8") > MAX_AGENT_MESSAGE_BYTES) throw new RangeError("dispatch too large");
+    if (this.registrations.get(hostId) !== registration || this.connections.get(hostId) !== socket || this.closing.has(socket)) return false;
     // Bun reports -1 when backpressure is applied and 0 when a message is dropped.
     // Neither a queued send nor backpressure establishes a receipt.
     const result = socket.send(raw);
