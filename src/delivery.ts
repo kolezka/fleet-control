@@ -61,10 +61,13 @@ export function fleetSender(fleetBin: string, confPath: string, spawn: SpawnSend
   };
 }
 
-// The first line carries the command id, so fleet send's "first line appeared" check is specific to it.
+// The bundled sender probes only the first 40 characters, not the full command ID.
 export function messageFor(c: Command): string {
+  // Backslashes are doubled so literal escape text cannot collide with escaped controls.
+  // Actors without backslashes or listed controls are unchanged; other Unicode is not sanitized.
+  const actor = c.actor.replace(/[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (character) => character === "\\" ? "\\\\" : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return [
-    `Fleet Control command ${c.id} from ${c.actor}:`,
+    `Fleet Control command ${c.id} from ${actor}:`,
     "",
     c.text,
     "",
