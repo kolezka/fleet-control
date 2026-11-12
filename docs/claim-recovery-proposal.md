@@ -1,6 +1,6 @@
-# Claim recovery for a dead incarnation: proposal
+# Claim recovery for a dead incarnation
 
-Status: proposal for the owner's decision. Nothing here is implemented.
+Status: the owner chose option A, with settlement allowed only after the claiming incarnation is inactive or its identity retired. A is implemented in `src/central/cooperative-settlement.ts`. B and C are not implemented.
 
 ## Current behaviour
 
@@ -48,8 +48,8 @@ The new incarnation of the same identity may adopt an old claim, but may only re
 
 Start with A. Add B only if late reports turn out to be common. Leave C until the host executor journal is part of a real runtime.
 
-## Decision needed
+## Decision
 
-1. Approve A as the recovery policy?
-2. If yes, should settlement also be allowed for a claim whose incarnation is still active (operator override), or only after it is inactive? The proposal says only after.
-3. B now, later, or never?
+1. A approved and implemented.
+2. Settlement only after the incarnation is inactive or its identity retired. No override for a live incarnation.
+3. B and C are not implemented. Revisit B only if late reports turn out to be common.

@@ -8,6 +8,7 @@ import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 
@@ -37,7 +38,7 @@ pgTest("loopback cooperative flow separates submission, claim and lifecycle insp
     await identities.initialize();
     await incarnations.initialize();
     await claims.initialize();
-    await lifecycle.initialize();
+    await lifecycle.initialize(); await new CooperativeSettlement(db).initialize();
     await identities.enroll(principal);
     const credential = await incarnations.activate(principal);
     const operatorToken = crypto.randomUUID();

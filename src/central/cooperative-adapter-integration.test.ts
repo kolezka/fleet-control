@@ -8,6 +8,7 @@ import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import { createCooperativeAdapter } from "../host-agent/cooperative-adapter.ts";
@@ -39,7 +40,7 @@ pgTest("local adapter reaches loopback central and fences replaced incarnations"
     await identities.initialize();
     await incarnations.initialize();
     await claims.initialize();
-    await lifecycle.initialize();
+    await lifecycle.initialize(); await new CooperativeSettlement(db).initialize();
     await identities.enroll(principal);
     const credential = await incarnations.activate(principal);
     const operatorToken = token();

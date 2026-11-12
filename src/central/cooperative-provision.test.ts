@@ -8,6 +8,7 @@ import { SupervisorIncarnations } from "./incarnations.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { CentralRequests } from "./requests.ts";
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
@@ -52,6 +53,9 @@ pgTest("fresh installation is isolated, atomic and usable by cooperative stores"
     const [{ seq }] = await db`SELECT seq::text AS seq FROM central_cooperative_lifecycle_events`;
     await reconciliation.reconcile({ role: "operator", name: "operator" }, command.id, "assert", "unknown", "test", seq, null);
     await expect(db`DELETE FROM central_cooperative_reconciliations`).rejects.toThrow("reconciliation is immutable");
+    await db`INSERT INTO central_cooperative_settlements (command_id, request_id, actor, disposition, evidence, at) VALUES (${command.id}, 'settle', 'operator', 'unknown', 'test', 'now')`;
+    await expect(db`UPDATE central_cooperative_settlements SET evidence = 'changed'`).rejects.toThrow("settlement is immutable");
+    await expect(db`DELETE FROM central_cooperative_settlements`).rejects.toThrow("settlement is immutable");
     const delivery = (await commands.submit({ idempotencyKey: "delivery", hostId: "host", target: "session", actor: "operator", text: "deliver" })).command;
     const attempts = new CentralAttempts(db);
     const attempt = await attempts.begin(delivery.id, "host");
@@ -94,6 +98,7 @@ pgTest("provisioned catalog matches independently initialized stores", async () 
     await new CooperativeClaims(db, incarnations).initialize();
     await new CooperativeLifecycle(db, incarnations).initialize();
     await new CooperativeReconciliation(db).initialize();
+    await new CooperativeSettlement(db).initialize();
     await new CentralRequests(db).initialize();
 
     const catalog = async (schema: string) => {

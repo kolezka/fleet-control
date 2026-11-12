@@ -10,6 +10,7 @@ import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { provisionCooperative } from "./cooperative-provision.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import { withCooperativeSchema } from "./schema-guard.ts";
@@ -139,7 +140,7 @@ export async function startCooperative(env: Record<string, string | undefined> =
     await identities.enroll(supervisor);
     const credential = await incarnations.activate(supervisor);
     const commands = new CentralCommands(db, undefined, runner);
-    const app = createCooperativeCentralApp({ auth, identities, commands, claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner), reconciliation: new CooperativeReconciliation(db, undefined, runner) });
+    const app = createCooperativeCentralApp({ auth, identities, commands, claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner), reconciliation: new CooperativeReconciliation(db, undefined, runner), settlement: new CooperativeSettlement(db, undefined, runner) });
     const pending = new Set<Promise<Response>>();
     const server = Bun.serve({ hostname: "127.0.0.1", port: config.port, ...(tls ? { tls } : {}), fetch(request, server) {
       if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}`) return new Response("invalid host", { status: 403 });
