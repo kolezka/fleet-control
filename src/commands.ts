@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 export type CommandStatus =
   | "queued" // stored on the host; not yet shown to the recipient
   | "delivering" // a delivery attempt is in progress; after a crash this becomes delivery_unknown
-  | "delivered" // fleet send confirmed the text appeared in the recipient pane
+  | "delivered" // sender reported delivery; the bundled sender checks only a first-line prefix
   | "delivery_unknown" // an attempt may or may not have reached the pane; never retried automatically
   | "claimed" // cooperatively reserved, not accepted
   | "accepted"

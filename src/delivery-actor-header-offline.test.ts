@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { Commands } from "./commands.ts";
 import { Deliverer, messageFor } from "./delivery.ts";
 
-test("delivery escapes controls in legacy actor headers without changing command text or confirmation", async () => {
+test("delivery escapes controls in actor headers without changing command text or confirmation", async () => {
   const db = new Database(":memory:");
   try {
     const commands = new Commands(db);
