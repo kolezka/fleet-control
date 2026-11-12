@@ -120,7 +120,7 @@ export class HostAgentClient {
     if (!this.running) return;
     let socket: HostSocket;
     try { socket = this.options.socketFactory(this.url, { headers: { Authorization: `Bearer ${this.options.token}` } }); }
-    catch (error) { this.options.onError?.(error); this.schedule(); return; }
+    catch (error) { this.reportError(error); this.schedule(); return; }
     this.socket = socket;
     const connection = this.connection = {};
     const current = () => this.running && this.socket === socket && this.connection === connection;
@@ -134,7 +134,7 @@ export class HostAgentClient {
         if (!inventory || !current() || this.inventoryGeneration !== generation) return;
         const sessions = await Reflect.apply(inventory, this.options, []);
         if (current() && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
-      }).catch((error) => this.options.onError?.(error));
+      }).catch((error) => this.reportError(error));
     });
     socket.addEventListener("close", () => {
       if (!current()) return;
@@ -142,7 +142,7 @@ export class HostAgentClient {
       this.inventoryGeneration++;
       this.schedule();
     });
-    socket.addEventListener("error", (event) => { if (current()) this.options.onError?.(event); });
+    socket.addEventListener("error", (event) => { if (current()) this.reportError(event); });
     socket.addEventListener("message", (event) => {
       if (!current()) return;
       const dispatch = parseDispatch(event.data, this.options.hostId);
@@ -162,10 +162,17 @@ export class HostAgentClient {
           if (!current()) return;
           const receipt: AgentReceipt = { version: 1, type: "receipt", hostId: dispatch.hostId, commandId: dispatch.commandId, attemptId: dispatch.attemptId, status: outcome.status === "delivered" ? "delivered" : "unknown" };
           if (current()) this.sendReceipt(receipt, socket, current);
-        } catch (error) { this.options.onError?.(error); }
+        } catch (error) { this.reportError(error); }
         finally { this.pending--; }
       });
     });
+  }
+
+  // The observer is caller code. If it throws, log a fixed message instead of the raw errors
+  // (they can carry secrets) so the dispatch queue and event handlers keep working.
+  private reportError(error: unknown): void {
+    try { this.options.onError?.(error); }
+    catch { console.error("host client onError observer threw; the original error was not reported"); }
   }
 
   private schedule(): void {
