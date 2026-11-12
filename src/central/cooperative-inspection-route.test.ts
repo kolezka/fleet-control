@@ -79,6 +79,15 @@ test("inspection decodes identifiers once under a mount prefix", async () => {
   expect(ids.at(-1)).toBe("cmd");
 });
 
+test("route uses command identifier when mount prefix also names id", async () => {
+  const ids: string[] = [];
+  const app = new Hono();
+  app.route("/tenant/:id", createCooperativeInspectionRoute({ auth, inspection: { async inspectBounded(id) { ids.push(id); return null; } } }));
+  const response = await app.request("/tenant/outer/api/commands/inner/cooperative", { headers: headers("operator-secret") });
+  expect(response.status).toBe(404);
+  expect(ids).toEqual(["inner"]);
+});
+
 test("route caps serialized UTF-8 JSON including escaping and envelope", async () => {
   let text = "";
   const inspection = {
