@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SQL } from "bun";
@@ -68,6 +68,7 @@ test("serves HTTPS and the host socket over wss with a trusted certificate only"
   try {
     const generated = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", key, "-out", cert], { stdout: "ignore", stderr: "ignore" });
     expect(await generated.exited).toBe(0);
+    await chmod(key, 0o600);
     const operator = "tls-operator-token", host = "tls-host-token";
     const hash = (value: string) => createHash("sha256").update(value).digest("hex");
     const credentials = JSON.stringify([
