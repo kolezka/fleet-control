@@ -25,9 +25,9 @@ const calls: Record<string, (store: CentralCommands) => Promise<unknown>> = {
 };
 
 function fixture() {
-  let inRunner = 0, outside = 0;
+  let inRunner = 0, outside = 0, inside = 0;
   const tx = (async (parts: TemplateStringsArray) => {
-    if (!inRunner) outside++;
+    if (inRunner) inside++; else outside++;
     const query = parts.join("?");
     if (query.includes("central_command_event_lock")) return [{ id: 1 }];
     if (query.includes("WHERE idempotency_key")) return [];
@@ -43,7 +43,7 @@ function fixture() {
     inRunner++;
     try { return await operation(tx); } finally { inRunner--; }
   };
-  return { store: new CentralCommands(db, () => new Date(at), runner), outside: () => outside };
+  return { store: new CentralCommands(db, () => new Date(at), runner), outside: () => outside, inside: () => inside };
 }
 
 test("table covers every public store operation", () => {
@@ -57,5 +57,7 @@ for (const [name, call] of Object.entries(calls)) {
     const f = fixture();
     await call(f.store).catch((error) => { if (String(error).includes("bypasses runner")) throw error; });
     expect(f.outside()).toBe(0);
+    // Guards against a method that silently stops issuing SQL through the runner.
+    expect(f.inside()).toBeGreaterThan(0);
   });
 }
