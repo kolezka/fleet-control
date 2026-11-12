@@ -52,6 +52,26 @@ test("gate never combines an old phase with a later approval", () => {
   }
 });
 
+test("gate failure rolls back its savepoint without aborting the outer transaction", () => {
+  const db = new Database(":memory:", { strict: true });
+  try {
+    const requests = new Requests(db);
+    requests.registerRun({ runId: "run", orchestrator: "supervisor", phase: "review" });
+    const originalList = requests.list.bind(requests);
+    const failure = new Error("list failed");
+    db.transaction(() => {
+      requests.list = () => { throw failure; };
+      expect(() => requests.gate("run", "review", 1)).toThrow(failure);
+      requests.list = originalList;
+      expect(requests.gate("run", "review", 1).approved).toBe(false);
+      requests.updatePhase({ runId: "run", actor: "supervisor", expectedRevision: 1, phase: "next", phaseStatus: "planned", newRevision: true });
+    })();
+    expect(requests.run("run").revision).toBe(2);
+  } finally {
+    db.close();
+  }
+});
+
 test("gate inside an outer transaction can see uncommitted approval", () => {
   const db = new Database(":memory:", { strict: true });
   try {
