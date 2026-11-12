@@ -41,13 +41,24 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     await lifecycle.report(principal, credential, command.id, "done", "completed", "done detail");
     const page = await inspection.inspect(command.id, { limit: 2 });
     expect(page?.command.status).toBe("claimed");
-    expect(page?.claim).toEqual({ incarnationId: credential.incarnationId, requestId: "claim-one", createdAt: page!.command.updatedAt });
+    expect(page?.claim).toEqual({ incarnationId: credential.incarnationId, incarnationActive: true, requestId: "claim-one", createdAt: page!.command.updatedAt });
     expect(page?.events.map((event) => [event.seq, event.status])).toEqual([["9007199254740993", "accepted"], ["9007199254740994", "running"]]);
     expect(page?.nextCursor).toBe("9007199254740994");
     const last = await inspection.inspect(command.id, { limit: 2, cursor: page!.nextCursor! });
     expect(last?.events.map((event) => [event.seq, event.status])).toEqual([["9007199254740995", "completed"]]);
     expect(last?.nextCursor).toBeNull();
     expect(JSON.stringify(page)).not.toContain(credential.token);
+    // A replaced incarnation's claim is shown as orphaned, on both read paths.
+    const replacement = await incarnations.activate(principal);
+    expect((await inspection.inspect(command.id))?.claim?.incarnationActive).toBe(false);
+    // An active incarnation of a retired identity is frozen too.
+    const second = (await commands.submit({ idempotencyKey: "two", hostId: "host", target: "session", actor: "operator", text: "more work" })).command;
+    await claims.claim(principal, replacement, "claim-two");
+    expect((await inspection.inspect(second.id))?.claim?.incarnationActive).toBe(true);
+    await registry.retire(principal);
+    expect((await inspection.inspect(second.id))?.claim?.incarnationActive).toBe(false);
+    expect((await inspection.inspectBounded(second.id, { limit: 1 }))?.claim?.incarnationActive).toBe(false);
+    expect((await inspection.inspectBounded(command.id, { limit: 1 }))?.claim).toMatchObject({ incarnationId: credential.incarnationId, incarnationActive: false });
     expect(JSON.stringify(page)).not.toMatch(/token|hash/i);
     expect((await commands.get(command.id)).status).toBe("claimed");
     expect((await db`SELECT count(*)::int AS count FROM central_cooperative_lifecycle_events`)[0]!.count).toBe(3);
@@ -62,7 +73,7 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     }) as unknown as TransactionSQL;
     const bounded = new CooperativeInspection(db, async (operation) => operation(capturingDb));
     const firstEvent = page!.events[0]!;
-    const rowFields = [...Object.values(page!.command), ...Object.values(page!.claim!), ...Object.values(firstEvent)];
+    const rowFields = [...Object.values(page!.command), ...Object.values({ ...page!.claim!, incarnationActive: "" }), ...Object.values(firstEvent)];
     const baseBytes = rowFields.reduce((sum, value) => sum + Buffer.byteLength(String(value), "utf8"), 0) - Buffer.byteLength(firstEvent.detail, "utf8");
     const detailBytes = 270336 - baseBytes;
     const boundaryDetail = "é".repeat(Math.floor(detailBytes / 2)) + (detailBytes % 2 ? "x" : "");

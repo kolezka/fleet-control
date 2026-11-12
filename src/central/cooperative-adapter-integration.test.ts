@@ -110,7 +110,8 @@ pgTest("local adapter reaches loopback central and fences replaced incarnations"
     expect(staleClaim.body.result.isError).toBe(true);
     expect(staleReport.status).toBe(200);
     expect(staleReport.body.result.isError).toBe(true);
-    expect(await inspect(commandId)).toEqual(before);
+    // Replacement changes only the claim's incarnation flag.
+    expect(await inspect(commandId)).toEqual({ ...before, claim: { ...before.claim, incarnationActive: false } });
     const next = await inspect(nextId);
     expect(next.command.status).toBe("queued");
     expect(next.claim).toBeNull();

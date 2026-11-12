@@ -177,7 +177,9 @@ pgTest("loopback cooperative flow separates submission, claim and lifecycle insp
     await identities.retire(principal);
     expect((await rawCall(liveHeaders, "cooperative_report", { commandId: queued.id, requestId: "retired-report", status: "accepted", detail: "valid transition" })).status).toBe(401);
     expect((await rawCall(liveHeaders, "cooperative_claim", { requestId: "retired-claim" })).status).toBe(401);
-    expect(await inspection.inspect(queued.id)).toEqual(beforeRetirement);
+    // Retirement changes only the claim's flag: nobody can report on it any more.
+    expect(beforeRetirement?.claim?.incarnationActive).toBe(true);
+    expect(await inspection.inspect(queued.id)).toEqual({ ...beforeRetirement!, claim: { ...beforeRetirement!.claim!, incarnationActive: false } });
   } finally {
     listener?.stop(true);
     await Promise.all([db.close(), observer.close()]);
