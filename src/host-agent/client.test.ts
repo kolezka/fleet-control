@@ -40,7 +40,7 @@ test("requires secure URLs, prevents URL credentials and sends bearer header", (
 });
 
 test("validates bounded protocol and never executes unrecognized frames", async () => {
-  const invalid = [JSON.stringify({ ...dispatch, hostId: "wrong" }), JSON.stringify({ ...dispatch, version: 2 }), JSON.stringify({ ...dispatch, type: "shell" }), JSON.stringify({ ...dispatch, command: "rm" }), "x".repeat(65537), new Uint8Array([1])];
+  const invalid = [JSON.stringify({ ...dispatch, hostId: "wrong" }), JSON.stringify({ ...dispatch, version: 2 }), JSON.stringify({ ...dispatch, type: "shell" }), JSON.stringify({ ...dispatch, command: "rm" }), JSON.stringify({ ...dispatch, attemptId: "a\ud800" }), JSON.stringify({ ...dispatch, text: "\udc00" }), "x".repeat(65537), new Uint8Array([1])];
   for (const data of invalid) {
     let executed = false;
     const { client, sockets } = setup({ execute: async () => { executed = true; return { id: "attempt", status: "delivered" }; } });

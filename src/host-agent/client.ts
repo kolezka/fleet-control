@@ -23,7 +23,8 @@ export interface HostClientOptions {
 const delays = [1000, 2000, 5000, 10000, 30000];
 const maxPending = 100;
 const keys = ["version", "type", "hostId", "commandId", "attemptId", "target", "text"];
-const nonempty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+// Lone surrogates are rejected so an id cannot alias another one after UTF-8 storage.
+const nonempty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.isWellFormed();
 
 function parseDispatch(raw: unknown, hostId: string): AgentDispatch | null {
   if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > MAX_AGENT_MESSAGE_BYTES) return null;

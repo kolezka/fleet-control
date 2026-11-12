@@ -110,6 +110,8 @@ describe("agent sockets", () => {
     JSON.stringify({ ...receipt, hostId: "host-b" }), JSON.stringify({ ...receipt, status: "completed" }),
     JSON.stringify({ ...receipt, extra: 1 }), JSON.stringify({ ...inventory, sessions: [""] }),
     JSON.stringify({ version: 1, type: "command", hostId: "host-a" }),
+    // Lone surrogates can be stored as U+FFFD and alias a different id.
+    JSON.stringify({ ...receipt, commandId: "cmd-\ud800" }), JSON.stringify({ ...receipt, attemptId: "\udc00try" }),
   ])("closes malformed or out of scope messages: %s", async (raw) => {
     const { sockets, socket, receipts, inventories } = setup();
     await sockets.message("host-a", socket, raw);
