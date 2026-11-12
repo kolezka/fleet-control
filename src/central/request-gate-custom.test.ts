@@ -29,7 +29,7 @@ function fixture(rows: Row[]) {
       matches.sort((a, b) => priority(a) - priority(b) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
       return Promise.resolve(matches.slice(0, 1));
     }
-    if (query.includes("central_request_event_lock")) return Promise.resolve([]);
+    if (query.includes("central_request_event_lock")) return Promise.resolve([{ id: 1 }]);
     throw new Error(`Unexpected SQL: ${query}`);
   }) as unknown as SQL;
   db.begin = (async (fn: (tx: SQL) => Promise<unknown>) => fn(db)) as typeof db.begin;

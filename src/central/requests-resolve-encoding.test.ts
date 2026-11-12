@@ -12,7 +12,7 @@ function fixture(request: Record<string, unknown> = {}, run: Record<string, unkn
   const sql = async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?");
     calls.push({ query, values });
-    if (query.includes("FROM central_request_event_lock")) return [];
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("FROM central_requests")) return [{ ...row }];
     if (query.includes("FROM central_runs")) return [{ id: "run", orchestrator: "owner", phase: "plan", revision: 1, phaseStatus: "planned", updatedAt: original.createdAt, ...run }];
     if (query.includes("UPDATE central_requests")) {

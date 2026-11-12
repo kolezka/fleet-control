@@ -10,6 +10,7 @@ function fixture(runId = "run", phase = "plan", owner = "owner") {
   const sql = (async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?");
     calls.push({ query, values });
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("FROM central_runs")) return [{ id: runId, orchestrator: owner, phase, revision: 1 }];
     if (query.includes("FROM central_requests") && query.includes("WHERE id")) return [{ id: values[0], evidence: "[]", allowedResponses: "[]" }];
     return [];

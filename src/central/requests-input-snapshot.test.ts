@@ -20,6 +20,7 @@ function fixture(pause?: { match: string; entered: () => void; resume: Promise<v
       pause.entered();
       await pause.resume;
     }
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("SELECT id, orchestrator, phase, revision")) return [run];
     if (query.includes("SELECT id, run_id AS")) return [requestRow];
     if (query.includes("UPDATE central_requests SET status = 'stale'")) return [];
@@ -133,6 +134,7 @@ test("registerRun snapshots phase before an async guard", async () => {
   // This case uses a separate SQL stub because the common fixture models an existing run.
   const sql = async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?"); calls.push({ query, values });
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("SELECT id, orchestrator, phase, revision")) return query.includes("FOR UPDATE") ? [] : [{ ...run, id: "new-run" }];
     return [];
   };

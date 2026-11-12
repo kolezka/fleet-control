@@ -12,7 +12,7 @@ function fixture(owner = "owner") {
   const sql = async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const query = parts.join("?");
     calls.push({ query, values });
-    if (query.includes("FROM central_request_event_lock")) return [];
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("FROM central_runs")) return [{ ...run }];
     if (query.includes("UPDATE central_runs")) {
       run = { ...run, phase: values[0] as string, revision: values[1] as number, phaseStatus: values[2] as string, updatedAt: values[3] as string };

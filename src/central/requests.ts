@@ -31,7 +31,8 @@ export class CentralRequests {
     return this.db.begin(async (tx) => {
       // Lock order: guard locks, event lock, then request/run locks.
       if (guard) await guard(tx as unknown as SQL);
-      await tx`SELECT id FROM central_request_event_lock WHERE id = 1 FOR UPDATE`;
+      const rows = await tx`SELECT id FROM central_request_event_lock WHERE id = 1 FOR UPDATE`;
+      if (!rows[0]) throw new Error("central request event lock row missing");
       return fn(tx as unknown as SQL);
     }) as Promise<T>;
   }

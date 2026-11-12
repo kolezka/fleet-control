@@ -7,7 +7,7 @@ test("scoped gate requires a guard before reading owner and decision", async () 
   const calls: string[] = [];
   const db = ((strings: TemplateStringsArray) => {
     const query = strings.join("?");
-    if (query.includes("central_request_event_lock")) calls.push("event lock");
+    if (query.includes("central_request_event_lock")) { calls.push("event lock"); return Promise.resolve([{ id: 1 }]); }
     if (query.includes("FROM central_runs")) { calls.push("owner"); return Promise.resolve([{ id: "run", orchestrator: "owner", phase: "plan", revision: 1 }]); }
     if (query.includes("FROM central_requests")) { calls.push("decision"); return Promise.resolve([{ id: "approval", status: "resolved", response: "approve", resolvedBy: "human" }]); }
     return Promise.resolve([]);

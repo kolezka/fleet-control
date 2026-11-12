@@ -18,6 +18,7 @@ test("gate selects a decisive approval independently of the display limit", asyn
   let gateQuery = "";
   const db = ((strings: TemplateStringsArray) => {
     const query = strings.join("?");
+    if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
     if (query.includes("FROM central_runs")) return Promise.resolve([{ id: "run", phase: "plan", revision: 1 }]);
     if (query.includes("FROM central_requests")) {
       gateQuery = query;

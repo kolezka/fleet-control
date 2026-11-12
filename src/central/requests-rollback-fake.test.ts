@@ -19,7 +19,7 @@ function fixture(failure?: Error) {
       const staged = structuredClone(committed);
       const tx = async (parts: TemplateStringsArray, ...values: unknown[]) => {
         const query = parts.join("?");
-        if (query.includes("FROM central_request_event_lock")) return [];
+        if (query.includes("FROM central_request_event_lock")) return [{ id: 1 }];
         if (query.includes("FROM central_requests")) return values[0] === staged.row.id ? [{ ...staged.row }] : [];
         if (query.includes("FROM central_runs")) return values[0] === "run" ? [{ id: "run", orchestrator: "owner", phase: "plan", revision: 1, phaseStatus: "planned", updatedAt: at }] : [];
         if (query.includes("UPDATE central_requests")) {
