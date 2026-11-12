@@ -275,7 +275,7 @@ export class CentralCommands {
 
   private async eventsWithConnection(db: SQL | TransactionSQL, id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {
     if (typeof afterSeq !== "string" || !/^(0|[1-9][0-9]*)$/.test(afterSeq) || afterSeq.length > 19 || (afterSeq.length === 19 && afterSeq > "9223372036854775807")) throw new CommandError("invalid", "invalid event cursor");
-    return id
+    return id !== undefined
       ? await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE command_id = ${id} AND seq > ${afterSeq}::bigint ORDER BY central_command_events.seq`
       : await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE seq > ${afterSeq}::bigint ORDER BY central_command_events.seq`;
   }
