@@ -119,6 +119,9 @@ export class Commands {
       if (!allowed[c.status].includes(to)) {
         throw new CommandError("conflict", `${id} is ${c.status}; cannot become ${to}`);
       }
+      if (!actor.isWellFormed() || !detail.isWellFormed()) {
+        throw new CommandError("invalid", "command event fields must contain valid Unicode");
+      }
       const at = this.now().toISOString();
       this.db.query("UPDATE commands SET status = ?, updated_at = ? WHERE id = ?").run(to, at, id);
       this.event(id, to, actor, detail, at);
