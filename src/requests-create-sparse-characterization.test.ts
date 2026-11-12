@@ -4,7 +4,7 @@ import { Requests } from "./requests.ts";
 
 // Characterizes unsafe current behavior, not an intended invariant.
 for (const replacement of [false, true]) {
-  test(`unsafe create behavior: ${replacement ? "toJSON replacement" : "sparse arrays"} stores holes as null`, () => {
+  test(`unsafe allowedResponses behavior: ${replacement ? "toJSON replacement" : "sparse arrays"} stores holes as null`, () => {
     const db = new Database(":memory:", { strict: true });
     try {
       const requests = new Requests(db);
@@ -22,13 +22,13 @@ for (const replacement of [false, true]) {
       };
       const created = requests.create({
         runId: "run", origin: "owner", expectedRevision: 1, kind: "approval", question: "Proceed?",
-        evidence: inputArray(), allowedResponses: inputArray(),
+        evidence: ["proof"], allowedResponses: inputArray(),
       });
-      expect(created.evidence as unknown).toEqual([null, "present"]);
+      expect(created.evidence).toEqual(["proof"]);
       expect(created.allowedResponses as unknown).toEqual([null, "present"]);
       expect(requests.get(created.id)).toEqual(created);
       expect(db.query("SELECT evidence, allowed_responses FROM requests WHERE id = ?").get(created.id))
-        .toEqual({ evidence: '[null,"present"]', allowed_responses: '[null,"present"]' });
+        .toEqual({ evidence: '["proof"]', allowed_responses: '[null,"present"]' });
     } finally { db.close(); }
   });
 }

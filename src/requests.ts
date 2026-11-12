@@ -42,6 +42,15 @@ const nonEmpty = (v: string, name: string) => {
   return v.trim();
 };
 
+function serializeEvidence(value: string[] | undefined): string {
+  const json = JSON.stringify(value ?? []);
+  const decoded: unknown = json === undefined ? undefined : JSON.parse(json);
+  if (!Array.isArray(decoded) || !decoded.every((entry) => typeof entry === "string" && entry.isWellFormed())) {
+    throw new RequestError("invalid", "invalid request evidence");
+  }
+  return json!;
+}
+
 export class Requests {
   constructor(private db: Database, private now: () => Date = () => new Date()) {
     db.run(`CREATE TABLE IF NOT EXISTS runs (
@@ -162,7 +171,7 @@ export class Requests {
       this.db.query(`INSERT INTO requests (id, run_id, phase, revision, kind, question, proposed_action, scope, evidence,
           allowed_responses, blocking, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`)
         .run(id, run.id, run.phase, run.revision, kind, normalizedQuestion, proposedAction ?? "",
-          scope ?? "", JSON.stringify(input.evidence ?? []), JSON.stringify(allowed), input.blocking === false ? 0 : 1, origin, at);
+          scope ?? "", serializeEvidence(input.evidence), JSON.stringify(allowed), input.blocking === false ? 0 : 1, origin, at);
       this.event(id, run.id, "opened", origin, `${kind} for ${run.phase} r${run.revision}`, at);
       return this.get(id);
     })();
