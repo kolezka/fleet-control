@@ -1,6 +1,6 @@
 # agent-fleet: send-keys fails while a read-only viewer is attached
 
-Status: open. Found 2026-11-09 on 192.168.50.4 (macOS, tmux 3.8) during the Fleet Control stage 5 browser check.
+Status: fixed in agent-fleet `5871fa5` (PR #7), which this repository pins as `vendor/agent-fleet`; the real-agent check below is still open. Found 2026-11-09 on 192.168.50.4 (macOS, tmux 3.8) during the Fleet Control stage 5 browser check.
 
 ## Symptom
 
@@ -49,7 +49,11 @@ Fleet Control reports this honestly (`delivery_unknown`), but it must be fixed b
 
 Regression test: attach a read-only client in `tests/socket-and-attach-stub.sh` (or a real tmux test), then assert `paste_file` returns 0 and the pane received Enter.
 
-## Status (2026-11-09 15:20)
+## Status update (2026-11-12)
+
+The fix was merged in agent-fleet as PR #7 (`5871fa5`). Its `scripts/watchdog.sh` no longer calls `tmux send-keys`. Fleet Control pins that commit, and `src/terminal/viewer-send.test.ts` passes against it with the read-only viewer attached. Still open: a real Claude Code agent receiving the pasted Enter with the page open, and upgrading the installed `.4` service. Neither has been done.
+
+## Status (2026-11-09 15:20, historical)
 
 A fix exists, not yet committed: the agent-fleet session's worktree `~/Development/agent-fleet.worktrees/paste-keys-ro` (branch `fix/paste-keys-read-only`) replaces every `send-keys` in `scripts/watchdog.sh` with `keys()`, which pastes raw bytes from a buffer (`paste-buffer -S` where tmux has it). Its own tests pass, including the new check 8 in `scripts/test-local.sh` (viewer attached, `send-keys` refused, `fleet send` still presses Enter, Escape / C-u / 2 / Enter arrive as `1b 15 32 0d`).
 
