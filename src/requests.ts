@@ -187,6 +187,9 @@ export class Requests {
       }
       const at = this.now().toISOString();
       const note = input.note;
+      if (!actor.isWellFormed() || (note != null && !note.isWellFormed())) {
+        throw new RequestError("invalid", "invalid resolution metadata encoding");
+      }
       this.db.query("UPDATE requests SET status = 'resolved', response = ?, resolved_by = ?, resolution_note = ?, resolved_at = ? WHERE id = ?")
         .run(response, actor, note ?? "", at, r.id);
       this.event(r.id, r.runId, "resolved", actor, `${response}${note ? `: ${note}` : ""}`, at);
