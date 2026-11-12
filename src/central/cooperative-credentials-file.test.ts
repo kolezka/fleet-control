@@ -13,7 +13,7 @@ const credentials = JSON.stringify([
   { tokenHash: hash("supervisor-token"), principal: { name: "sup", role: "supervisor", principalId: "p1", hostId: "h1", session: "s1" } },
 ]);
 
-async function start(dir: string, credentialsFile: string) {
+async function start(dir: string, credentialsFile: string, cwd?: string) {
   const script = join(dir, "start.ts");
   await writeFile(script, `import { startCooperative } from ${JSON.stringify(main)};
 try { const running = await startCooperative(process.env); console.error("[child] started"); await running.stop(); }
@@ -28,7 +28,7 @@ catch (error) { console.error("[child] rejected " + (error as Error).message); }
       COOPERATIVE_INCARNATION_FILE: join(dir, "incarnation.json"),
       COOPERATIVE_PORT: "0",
     },
-    stdout: "ignore", stderr: "pipe", stdin: "ignore",
+    cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore",
   });
   const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
   try {
@@ -51,9 +51,16 @@ test("credentials must be a private regular file owned by the current user, chec
     const target = join(dir, "target.json");
     await writeFile(target, credentials, { mode: 0o600 });
     await symlink(target, link);
-    const relative = "credentials.json";
-    for (const file of [open, link, relative, dir]) {
-      const text = await start(dir, file);
+    // The relative name resolves to a valid private file in the child cwd, so only the path check rejects it.
+    await writeFile(join(dir, "credentials.json"), credentials, { mode: 0o600 });
+    const big = join(dir, "big.json");
+    await writeFile(big, " ".repeat(1024 * 1024 + 1) + credentials, { mode: 0o600 });
+    const invalid = join(dir, "invalid.json");
+    await writeFile(invalid, new Uint8Array([0xff, 0xfe]), { mode: 0o600 });
+    const fifo = join(dir, "fifo");
+    expect(Bun.spawnSync(["mkfifo", "-m", "600", fifo]).exitCode).toBe(0);
+    for (const [file, cwd] of [[open], [link], ["credentials.json", dir], [dir], [big], [invalid], [fifo]] as [string, string?][]) {
+      const text = await start(dir, file, cwd);
       expect(text).toContain("[child] rejected invalid or unreadable cooperative credentials file");
       expect(text).not.toContain("[fake] sql open");
     }

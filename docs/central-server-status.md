@@ -101,7 +101,7 @@ The cooperative adapter checks a monotonic deadline after each request and respo
 
 ## Central credentials file
 
-`COOPERATIVE_CREDENTIALS_FILE` must now be an absolute path to a regular file owned by the current user with no group or other permissions, at most 1 MiB of valid UTF-8, and not a final-component symlink. This matches the adapter config checks. Startup rejects anything else with the same generic error, before any SQL client is created. Existing setups with a relative path, a 0644 file or a symlink will fail to start until fixed. Same-UID processes remain trusted, and parent directory symlinks are still followed. The legacy `src/central/main.ts` entry point is unchanged.
+`COOPERATIVE_CREDENTIALS_FILE` must now be an absolute path to a regular file owned by the current user with no group or other permissions, at most 1 MiB of valid UTF-8, and not a final-component symlink. These are the adapter config checks, except the size limit (adapter config: 64 KiB). Startup rejects anything else with the same generic error, before any SQL client is created. Existing setups with a relative path, a 0644 file or a symlink will fail to start until fixed. Same-UID processes remain trusted, and parent directory symlinks are still followed. The legacy `src/central/main.ts` entry point is unchanged.
 
 ## Adapter JSON text secret screening
 
