@@ -168,9 +168,10 @@ export class CentralCommands {
 
   async listScoped(status: CommandStatus | undefined, scope: SupervisorCommandScope, guard: SupervisorReadGuard, pagination: CommandListPagination = {}): Promise<CommandPage> {
     const { hostId, session } = scope;
+    const { limit, cursor } = pagination;
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
-      return this.listWithConnection(tx, status, { hostId, target: session }, pagination);
+      return this.listWithConnection(tx, status, { hostId, target: session }, { limit, cursor });
     });
   }
 
@@ -185,17 +186,22 @@ export class CentralCommands {
   }
 
   async list(status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
-    return this.runner ? this.runner((tx) => this.listWithConnection(tx, status, scope, pagination)) : this.listWithConnection(this.db, status, scope, pagination);
+    const capturedScope = { hostId: scope?.hostId, target: scope?.target };
+    const capturedPagination = { limit: pagination.limit, cursor: pagination.cursor };
+    return this.runner ? this.runner((tx) => this.listWithConnection(tx, status, capturedScope, capturedPagination)) : this.listWithConnection(this.db, status, capturedScope, capturedPagination);
   }
 
   private async listWithConnection(db: SQL | TransactionSQL, status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
     if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
-    if ((scope?.hostId !== undefined && !validScopeValue(scope.hostId)) || (scope?.target !== undefined && !validScopeValue(scope.target))) throw new CommandError("invalid", "invalid scope");
+    const scopeHostId = scope?.hostId;
+    const scopeTarget = scope?.target;
+    if ((scopeHostId !== undefined && !validScopeValue(scopeHostId)) || (scopeTarget !== undefined && !validScopeValue(scopeTarget))) throw new CommandError("invalid", "invalid scope");
     const limit = pagination.limit ?? 100;
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new CommandError("invalid", "limit must be an integer between 1 and 1000");
-    const cursor = pagination.cursor === undefined ? null : decodeCursor(pagination.cursor);
-    const hostId = scope?.hostId ?? null;
-    const target = scope?.target ?? null;
+    const cursorValue = pagination.cursor;
+    const cursor = cursorValue === undefined ? null : decodeCursor(cursorValue);
+    const hostId = scopeHostId ?? null;
+    const target = scopeTarget ?? null;
     const filterStatus = status ?? null;
     if (cursor && (cursor.hostId !== hostId || cursor.target !== target || cursor.status !== filterStatus)) throw new CommandError("invalid", "invalid cursor");
     const createdAt = cursor?.createdAt ?? null;
@@ -226,12 +232,15 @@ export class CentralCommands {
 
   async listBounded(status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
     if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
-    if ((scope?.hostId !== undefined && !validScopeValue(scope.hostId)) || (scope?.target !== undefined && !validScopeValue(scope.target))) throw new CommandError("invalid", "invalid scope");
+    const scopeHostId = scope?.hostId;
+    const scopeTarget = scope?.target;
+    if ((scopeHostId !== undefined && !validScopeValue(scopeHostId)) || (scopeTarget !== undefined && !validScopeValue(scopeTarget))) throw new CommandError("invalid", "invalid scope");
     const limit = pagination.limit ?? 4;
     if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new CommandError("invalid", "invalid limit");
-    const cursor = pagination.cursor === undefined ? null : decodeCursor(pagination.cursor);
-    const hostId = scope?.hostId ?? null;
-    const target = scope?.target ?? null;
+    const cursorValue = pagination.cursor;
+    const cursor = cursorValue === undefined ? null : decodeCursor(cursorValue);
+    const hostId = scopeHostId ?? null;
+    const target = scopeTarget ?? null;
     const filterStatus = status ?? null;
     if (cursor && (cursor.hostId !== hostId || cursor.target !== target || cursor.status !== filterStatus)) throw new CommandError("invalid", "invalid cursor");
     const createdAt = cursor?.createdAt ?? null;
