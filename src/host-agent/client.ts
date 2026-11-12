@@ -163,7 +163,8 @@ export class HostAgentClient {
         // A throwing close must not skip the reconnect; the old socket is already ignored by current().
         try { socket.close(typeof event.data === "string" && Buffer.byteLength(event.data, "utf8") > MAX_AGENT_MESSAGE_BYTES ? 1009 : 1008, "invalid dispatch"); }
         catch (error) { this.reportError(error); }
-        this.schedule();
+        // close or the error observer may have stopped or restarted the client; a newer attempt owns retries then.
+        if (this.connection === connection) this.schedule();
         return;
       }
       this.pending++;
