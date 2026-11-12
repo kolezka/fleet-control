@@ -48,7 +48,7 @@ export class SupervisorIdentityRegistry {
     return this.runner ? this.runner(query) : query(this.db);
   }
 
-  // The caller must retain this transaction until its protected work commits or rolls back.
+  // Retain this transaction through commit. If a slot is needed, lock it before identity.
   async lockActive(tx: import("bun").TransactionSQL, identity: SupervisorIdentity): Promise<boolean> {
     identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) return false;
