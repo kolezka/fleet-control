@@ -76,8 +76,13 @@ async function writeIncarnationFile(path: string, credential: { incarnationId: s
   }
 }
 
-export async function startCooperative(env: Record<string, string | undefined> = process.env) {
+// How long stop() lets accepted requests finish and reply before force-closing connections.
+export const CENTRAL_SHUTDOWN_GRACE_MS = 10_000;
+
+export async function startCooperative(env: Record<string, string | undefined> = process.env, options: { shutdownGraceMs?: number } = {}) {
   const config = cooperativeConfig(env);
+  const shutdownGraceMs = options.shutdownGraceMs ?? CENTRAL_SHUTDOWN_GRACE_MS;
+  if (!Number.isSafeInteger(shutdownGraceMs) || shutdownGraceMs < 1 || shutdownGraceMs > 2_147_483_647) throw new Error("invalid shutdown grace");
   rejectAmbientPostgresEnvironment(process.env);
   // Checked early so no schema is provisioned; the exclusive create below is the real guard.
   if (!(await missing(config.incarnationFile))) throw new Error("incarnation file must not exist");
@@ -113,7 +118,21 @@ export async function startCooperative(env: Record<string, string | undefined> =
       return task;
     } });
     let stopping: Promise<void> | undefined;
-    const stop = () => stopping ??= (async () => { await server.stop(true); await Promise.allSettled([...pending]); await pool.close(); })();
+    // Stop accepting, let accepted requests reply until the grace deadline, then force-close.
+    // server.stop(false) can resolve while a handler for a gone client still runs, so also wait
+    // on pending. SQL work is always awaited (unbounded) before the pool closes under it.
+    const stop = () => stopping ??= (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), shutdownGraceMs); });
+      try {
+        const drained = await Promise.race([Promise.allSettled([server.stop(false), ...pending]).then(() => true), deadline]);
+        if (!drained) await server.stop(true);
+      } finally {
+        clearTimeout(timer);
+        await Promise.allSettled([...pending]);
+        await pool.close();
+      }
+    })();
     try { await writeIncarnationFile(config.incarnationFile, credential); }
     catch {
       await stop().catch(() => {});
@@ -137,7 +156,17 @@ export async function runCooperativeCli(env: Record<string, string | undefined> 
   return { running, line: JSON.stringify({ url: `http://127.0.0.1:${running.server.port}`, incarnationId: running.incarnationId }) };
 }
 
+// SIGINT or SIGTERM starts a graceful stop. Both listeners are removed once stopping begins,
+// so a second signal gets the default action and kills the process immediately.
 if (import.meta.main) {
-  runCooperativeCli().then(({ line }) => { console.log(line); })
-    .catch(() => { console.error("cooperative startup failed; check configuration and use a fresh schema"); process.exitCode = 1; });
+  runCooperativeCli().then(({ running, line }) => {
+    console.log(line);
+    const onSignal = () => {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      running.stop().catch(() => { console.error("cooperative shutdown failed; in-flight outcomes may be unknown"); process.exitCode = 1; });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }, () => { console.error("cooperative startup failed; check configuration and use a fresh schema"); process.exitCode = 1; });
 }
