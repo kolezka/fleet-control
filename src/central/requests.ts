@@ -86,6 +86,7 @@ export class CentralRequests {
       const run = await this.getRun(tx, input.runId, true);
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
       if (input.expectedRevision !== run.revision) throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
+      if (!validEncoding(input.actor) || (input.phase !== undefined && !validEncoding(input.phase)) || !validEncoding(input.phaseStatus)) throw new RequestError("invalid", "invalid request encoding");
       const phase = input.phase?.trim() || run.phase, changed = input.newRevision || phase !== run.phase;
       const revision = run.revision + (changed ? 1 : 0), status = nonEmpty(input.phaseStatus, "phaseStatus"), at = this.now().toISOString();
       await tx`UPDATE central_runs SET phase = ${phase}, revision = ${revision}, phase_status = ${status}, updated_at = ${at} WHERE id = ${run.id}`;
