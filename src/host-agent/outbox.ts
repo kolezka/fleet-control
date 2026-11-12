@@ -14,7 +14,7 @@ export class OutboxError extends Error {
 }
 
 function validate(receipt: HostReceipt): void {
-  if (!receipt || ![receipt.hostId, receipt.commandId, receipt.attemptId].every((value) => typeof value === "string" && value.trim()) ||
+  if (!receipt || ![receipt.hostId, receipt.commandId, receipt.attemptId].every((value) => typeof value === "string" && value.isWellFormed() && value.trim()) ||
       (receipt.status !== "delivered" && receipt.status !== "unknown")) {
     throw new OutboxError("invalid", "receipt requires host, command, attempt and terminal status");
   }
@@ -33,6 +33,7 @@ export class ReceiptOutbox {
   }
 
   enqueue(receipt: HostReceipt): { created: boolean } {
+    if (receipt) receipt = { hostId: receipt.hostId, commandId: receipt.commandId, attemptId: receipt.attemptId, status: receipt.status };
     validate(receipt);
     return this.db.transaction(() => {
       const created = this.db.query("INSERT OR IGNORE INTO host_receipt_outbox (attempt_id, host_id, command_id, status) VALUES (?, ?, ?, ?)")
@@ -48,6 +49,7 @@ export class ReceiptOutbox {
   }
 
   acknowledge(receipt: HostReceipt): void {
+    if (receipt) receipt = { hostId: receipt.hostId, commandId: receipt.commandId, attemptId: receipt.attemptId, status: receipt.status };
     validate(receipt);
     this.db.transaction(() => {
       this.requireMatching(receipt);
