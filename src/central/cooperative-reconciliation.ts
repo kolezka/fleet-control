@@ -57,7 +57,8 @@ export class CooperativeReconciliation {
   // HTTP-only bounded page. The existing list contract remains unchanged.
   async listBounded(principal: Principal, commandId: string, options: { limit: number; cursor?: string }): Promise<{ assertions: Reconciliation[]; nextCursor: string | null } | null> {
     if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
-    if (!validId(commandId) || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 4) throw new CommandError("invalid", "invalid parameters");
+    const limit = options.limit;
+    if (!validId(commandId) || !Number.isInteger(limit) || limit < 1 || limit > 4) throw new CommandError("invalid", "invalid parameters");
     const cursor = options.cursor ?? "0";
     if (typeof cursor !== "string" || !/^(0|[1-9][0-9]{0,999})$/.test(cursor)) throw new CommandError("invalid", "invalid cursor");
     type Row = { present: boolean; oversized: boolean; commandId: string | null; requestId: string | null; actor: string | null; disposition: ReconciliationDisposition | null; evidence: string | null; expectedSequence: string | null; sequence: string | null; supersedesSequence: string | null; at: string | null };
@@ -76,12 +77,12 @@ export class CooperativeReconciliation {
         CASE WHEN NOT assertion.oversized THEN assertion.at END AS at
         FROM central_cooperative_claims claim LEFT JOIN LATERAL (
           SELECT page.*, (octet_length(page.command_id) + octet_length(page.request_id) + octet_length(page.actor) + octet_length(page.disposition) + octet_length(page.evidence) + COALESCE(octet_length(page.expected_sequence), 0) + octet_length(page.sequence::text) + COALESCE(octet_length(page.supersedes_sequence::text), 0) + octet_length(page.at) > 270336) AS oversized
-          FROM (SELECT * FROM central_cooperative_reconciliations WHERE command_id = claim.command_id AND sequence > ${cursor}::numeric ORDER BY sequence LIMIT ${options.limit + 1}) page
+          FROM (SELECT * FROM central_cooperative_reconciliations WHERE command_id = claim.command_id AND sequence > ${cursor}::numeric ORDER BY sequence LIMIT ${limit + 1}) page
         ) assertion ON true WHERE claim.command_id = ${commandId} ORDER BY assertion.sequence`;
       if (!rows.length) return null;
       if (rows.some((row) => row.oversized)) throw new Error("assertion page too large");
       const assertions = rows.filter((row) => row.sequence !== null).map((row): Reconciliation => ({ commandId: row.commandId!, requestId: row.requestId!, actor: row.actor!, disposition: row.disposition!, evidence: row.evidence!, expectedSequence: row.expectedSequence, sequence: row.sequence!, supersedesSequence: row.supersedesSequence, at: row.at! }));
-      const hasMore = assertions.length > options.limit;
+      const hasMore = assertions.length > limit;
       if (hasMore) assertions.pop();
       return { assertions, nextCursor: hasMore ? assertions[assertions.length - 1]!.sequence : null };
     };
@@ -89,13 +90,15 @@ export class CooperativeReconciliation {
   }
 
   async reconcile(principal: Principal, commandId: string, requestId: string, disposition: ReconciliationDisposition, evidence: string, expectedSequence: string | null, expectedAssertionSequence: string | null): Promise<Reconciliation> {
-    if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
+    if (!principal || principal.role !== "operator") throw new Error("access denied");
+    const actor = principal.name;
+    if (!validId(actor)) throw new Error("access denied");
     if (!validId(commandId) || !validId(requestId) || !["unknown", "completed", "failed", "not-executed"].includes(disposition) || typeof evidence !== "string" || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validSequence(expectedSequence) || !validSequence(expectedAssertionSequence)) throw new CommandError("invalid", "invalid reconciliation request");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
       const [existing] = await tx<Reconciliation[]>`SELECT command_id AS "commandId", request_id AS "requestId", actor, disposition, evidence, expected_sequence AS "expectedSequence", sequence::text AS sequence, supersedes_sequence::text AS "supersedesSequence", at FROM central_cooperative_reconciliations WHERE request_id = ${requestId}`;
       if (existing) {
-        if (existing.commandId !== commandId || existing.actor !== principal.name || existing.disposition !== disposition || existing.evidence !== evidence || existing.expectedSequence !== expectedSequence || existing.supersedesSequence !== expectedAssertionSequence) throw new CommandError("conflict", "reconciliation request ID was used for a different intent");
+        if (existing.commandId !== commandId || existing.actor !== actor || existing.disposition !== disposition || existing.evidence !== evidence || existing.expectedSequence !== expectedSequence || existing.supersedesSequence !== expectedAssertionSequence) throw new CommandError("conflict", "reconciliation request ID was used for a different intent");
         return existing;
       }
       const [claim] = await tx`SELECT command_id FROM central_cooperative_claims WHERE command_id = ${commandId}`;
@@ -106,8 +109,8 @@ export class CooperativeReconciliation {
       if ((latestAssertion?.sequence ?? null) !== expectedAssertionSequence) throw new CommandError("conflict", "stale assertion sequence");
       const sequence = (BigInt(expectedAssertionSequence ?? "0") + 1n).toString();
       const at = this.now().toISOString();
-      await tx`INSERT INTO central_cooperative_reconciliations (command_id, request_id, actor, disposition, evidence, expected_sequence, sequence, supersedes_sequence, at) VALUES (${commandId}, ${requestId}, ${principal.name}, ${disposition}, ${evidence}, ${expectedSequence}, ${sequence}::numeric, ${expectedAssertionSequence}::numeric, ${at})`;
-      return { commandId, requestId, actor: principal.name, disposition, evidence, expectedSequence, sequence, supersedesSequence: expectedAssertionSequence, at };
+      await tx`INSERT INTO central_cooperative_reconciliations (command_id, request_id, actor, disposition, evidence, expected_sequence, sequence, supersedes_sequence, at) VALUES (${commandId}, ${requestId}, ${actor}, ${disposition}, ${evidence}, ${expectedSequence}, ${sequence}::numeric, ${expectedAssertionSequence}::numeric, ${at})`;
+      return { commandId, requestId, actor, disposition, evidence, expectedSequence, sequence, supersedesSequence: expectedAssertionSequence, at };
     });
   }
 }

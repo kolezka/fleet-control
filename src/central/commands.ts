@@ -64,6 +64,7 @@ export class CentralCommands {
   }
 
   private async submitWithMode(input: CentralCommandInput, bounded: boolean): Promise<{ command: CentralCommand; created: boolean }> {
+    input = { idempotencyKey: input.idempotencyKey, hostId: input.hostId, target: input.target, actor: input.actor, text: input.text };
     if (![input.idempotencyKey, input.hostId, input.target, input.actor, input.text].every((value) => typeof value === "string" && value.isWellFormed())) throw new CommandError("invalid", "invalid command encoding");
     const text = input.text.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
@@ -114,12 +115,14 @@ export class CentralCommands {
     });
   }
 
-  // The guard must only perform transaction-bound work, before the event lock is acquired.
-  async transitionScoped(id: string, to: "accepted" | "rejected" | "running" | "completed" | "failed", actor: string, detail: string, scope: { hostId: string; session: string }, guard: (tx: TransactionSQL) => Promise<boolean>): Promise<CentralCommand> {
+  // The guard must use the supplied scope and lock slot, identity and incarnation
+  // in lockForClaim order before the event lock is acquired.
+  async transitionScoped(id: string, to: "accepted" | "rejected" | "running" | "completed" | "failed", actor: string, detail: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard): Promise<CentralCommand> {
+    const { hostId, session } = scope;
     return this.db.begin(async (tx) => {
-      if (!await guard(tx)) throw new Error("access denied");
+      if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
-      const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${scope.hostId} AND target = ${scope.session} FOR UPDATE`;
+      const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session} FOR UPDATE`;
       if (!current) throw new Error("access denied");
       if (!["accepted", "rejected", "running", "completed", "failed"].includes(to) || !allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
       const at = this.now().toISOString();
