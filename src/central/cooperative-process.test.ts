@@ -182,6 +182,8 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
       await expect(db`SELECT setval(${`${schema}.${sequence}`}::regclass, 1)`).rejects.toThrow("permission denied");
     }
     const replacement = await new SupervisorIncarnations(db).activate(principal);
+    // Replacement changes only the claim's incarnation flag: the old incarnation can no longer report.
+    const orphaned = { ...before, claim: { ...before.claim, incarnationActive: false } };
     secrets.push(replacement.token);
     const incarnations = new SupervisorIncarnations(db);
     expect(await db.begin((tx) => incarnations.lockForClaim(tx, principal, incarnation))).toBe(false);
@@ -192,7 +194,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     expect(staleClaim.body.result).toEqual({ isError: true, content: [{ type: "text", text: "request failed" }] });
     expect(staleReport.status).toBe(200);
     expect(staleReport.body.result).toEqual({ isError: true, content: [{ type: "text", text: "request failed" }] });
-    expect(await inspect(activeId)).toEqual(before);
+    expect(await inspect(activeId)).toEqual(orphaned);
     expect(await inspect(nextId)).toEqual(nextBefore);
 
     const replacementFile = join(directory, "replacement-incarnation.json");
@@ -213,7 +215,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
     const replacementReport = await call("cooperative_report", { commandId: activeId, requestId: "replacement-report", status: "running", detail: "synthetic" }, local, replacementAdapter.url);
     expect(replacementReport.status).toBe(200);
     expect(replacementReport.body.result).toEqual({ isError: true, content: [{ type: "text", text: "request failed" }] });
-    expect(await inspect(activeId)).toEqual(before);
+    expect(await inspect(activeId)).toEqual(orphaned);
     expect(await inspect(nextId)).toEqual(nextClaimed);
   } finally {
     for (const child of children) child.process.kill("SIGKILL");
