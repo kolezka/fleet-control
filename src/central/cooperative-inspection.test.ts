@@ -49,8 +49,15 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     expect(last?.nextCursor).toBeNull();
     expect(JSON.stringify(page)).not.toContain(credential.token);
     // A replaced incarnation's claim is shown as orphaned, on both read paths.
-    await incarnations.activate(principal);
+    const replacement = await incarnations.activate(principal);
     expect((await inspection.inspect(command.id))?.claim?.incarnationActive).toBe(false);
+    // An active incarnation of a retired identity is frozen too.
+    const second = (await commands.submit({ idempotencyKey: "two", hostId: "host", target: "session", actor: "operator", text: "more work" })).command;
+    await claims.claim(principal, replacement, "claim-two");
+    expect((await inspection.inspect(second.id))?.claim?.incarnationActive).toBe(true);
+    await registry.retire(principal);
+    expect((await inspection.inspect(second.id))?.claim?.incarnationActive).toBe(false);
+    expect((await inspection.inspectBounded(second.id, { limit: 1 }))?.claim?.incarnationActive).toBe(false);
     expect((await inspection.inspectBounded(command.id, { limit: 1 }))?.claim).toMatchObject({ incarnationId: credential.incarnationId, incarnationActive: false });
     expect(JSON.stringify(page)).not.toMatch(/token|hash/i);
     expect((await commands.get(command.id)).status).toBe("claimed");
