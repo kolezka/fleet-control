@@ -69,8 +69,10 @@ export class HostAgentClient {
     this.running = false;
     this.connection = undefined;
     this.inventoryGeneration++;
-    if (this.timer !== undefined) this.options.clearTimer(this.timer);
+    // Detach before clearTimer: it may restart the client and schedule a timer that must survive.
+    const timer = this.timer;
     this.timer = undefined;
+    if (timer !== undefined) this.options.clearTimer(timer);
     const socket = this.socket;
     this.socket = undefined;
     socket?.close(1000, "stopped");
