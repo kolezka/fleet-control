@@ -24,8 +24,8 @@ function decodeCursor(cursor: string): { createdAt: string; id: string; hostId: 
 }
 
 const MAX_SCOPE_LENGTH = 256;
-// One rule for submit and list scope: a nonempty string of at most 256 characters.
-const validScopeValue = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= MAX_SCOPE_LENGTH;
+// Scope values must also be representable as PostgreSQL text.
+const validScopeValue = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= MAX_SCOPE_LENGTH && !value.includes("\0");
 
 const allowed: Record<CommandStatus, CommandStatus[]> = {
   queued: ["delivering", "accepted", "rejected"],

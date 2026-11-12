@@ -42,6 +42,14 @@ test("Bun UTF-8 replaces an isolated surrogate and valid replacement matches the
 });
 
 for (const method of ["get", "transition", "events"] as const) {
+  for (const field of ["hostId", "session"] as const) {
+    test(`${method}Scoped rejects NUL in ${field} before guard and SQL`, async () => {
+      const { invoke, scopes, queries } = fixture();
+      const scope = { hostId: field === "hostId" ? "host\0id" : replacement, session: field === "session" ? "session\0id" : replacement };
+      const result = await invoke(method, replacement, scope).then(() => "resolved", () => "rejected");
+      expect({ result, scopes, queries }).toEqual({ result: "rejected", scopes: [], queries: [] });
+    });
+  }
   for (const field of ["id", "hostId", "session"] as const) {
     test(`${method}Scoped rejects malformed UTF-16 in ${field} before guard and SQL`, async () => {
       const { invoke, scopes, queries } = fixture();
