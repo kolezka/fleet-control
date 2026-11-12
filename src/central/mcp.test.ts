@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Requests } from "../requests.ts";
+import { RequestError, Requests } from "../requests.ts";
+import type { SQL, TransactionSQL } from "bun";
 import type { CentralRequests } from "./requests.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CommandError, type CommandStatus } from "../commands.ts";
 import { CentralAuth, type Principal } from "./auth.ts";
 import { createHash } from "node:crypto";
-import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage } from "./commands.ts";
+import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage, SupervisorCommandScope, SupervisorReadGuard } from "./commands.ts";
+import type { RequestMutationGuard } from "./requests.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import type { CooperativeClaims } from "./cooperative-claims.ts";
@@ -41,6 +43,22 @@ class FakeCommands implements CentralMcpCommands {
     const limit = pagination.limit ?? 100;
     return { commands: rows.slice(start, start + limit), nextCursor: start + limit < rows.length ? String(start + limit) : null };
   }
+  async getScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard) {
+    if (typeof guard !== "function" || await guard({} as TransactionSQL, scope) !== true) throw new Error("access denied");
+    const command = this.rows.find((row) => row.id === id && row.hostId === scope.hostId && row.target === scope.session);
+    if (!command) throw new Error("access denied");
+    return command;
+  }
+  async listScoped(status: CommandStatus | undefined, scope: SupervisorCommandScope, guard: SupervisorReadGuard, pagination?: CommandListPagination) {
+    if (typeof guard !== "function" || await guard({} as TransactionSQL, scope) !== true) throw new Error("access denied");
+    return this.list(status, { hostId: scope.hostId, target: scope.session }, pagination);
+  }
+  async transitionScoped(id: string, status: "accepted" | "rejected" | "running" | "completed" | "failed", actor: string, detail: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard) {
+    if (typeof guard !== "function" || await guard({} as TransactionSQL, scope) !== true) throw new Error("access denied");
+    const command = this.rows.find((row) => row.id === id && row.hostId === scope.hostId && row.target === scope.session);
+    if (!command) throw new Error("access denied");
+    return this.transition(id, status, actor, detail);
+  }
   async transition(id: string, status: CommandStatus, actor: string, detail: string) {
     const command = await this.get(id);
     const allowed: Partial<Record<CommandStatus, CommandStatus[]>> = { queued: ["accepted", "rejected"], accepted: ["running", "completed", "failed"], running: ["completed", "failed"] };
@@ -51,8 +69,33 @@ class FakeCommands implements CentralMcpCommands {
   }
 }
 
+function fakeRequests(local: Requests): CentralRequests {
+  return new Proxy(local, {
+    get(target, property) {
+      if (property === "list") return async (filter: Parameters<Requests["list"]>[0]) => ({ requests: target.list(filter), nextCursor: null });
+      if (property === "gate") return async () => { throw new Error("unscoped gate not allowed for supervisors"); };
+      if (property === "gateScoped") return async (runId: string, phase: string, revision: number, owner: string, guard: RequestMutationGuard) => {
+        if (typeof guard !== "function") throw new Error("access denied");
+        await guard({} as SQL);
+        if (target.run(runId).orchestrator !== owner) throw new RequestError("forbidden", "access denied");
+        return target.gate(runId, phase, revision);
+      };
+      if (["registerRun", "updatePhase", "create", "acknowledge", "withdraw"].includes(String(property))) {
+        return async (input: unknown, guard?: RequestMutationGuard) => {
+          if (typeof guard !== "function") throw new Error("access denied");
+          await guard({} as SQL);
+          return Reflect.apply(Reflect.get(target, property, target), target, [input]);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as CentralRequests;
+}
+
 async function connect(commands: FakeCommands, principal: Principal, requests?: CentralRequests) {
-  const server = buildCentralMcpServer({ commands, requests }, principal);
+  const identity = principal.role === "supervisor" ? { name: principal.name, principalId: principal.principalId, hostId: principal.hostId, session: principal.session } : undefined;
+  const server = buildCentralMcpServer({ commands, requests, identities: { async lockActive(_tx, candidate) { return !!identity && Object.keys(candidate).every((key) => candidate[key as keyof typeof candidate] === identity[key as keyof typeof identity]); } } }, principal);
   const client = new Client({ name: "test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -212,14 +255,7 @@ test("command pagination forwards filters and retains supervisor scope on contin
 
 test("request tools enforce role, principal ownership and revision scope", async () => {
   const db = new Database(":memory:");
-  const localRequests = new Requests(db);
-  const requests = new Proxy(localRequests, {
-    get(target, property) {
-      if (property === "list") return async (filter: Parameters<Requests["list"]>[0]) => ({ requests: target.list(filter), nextCursor: null });
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  }) as unknown as CentralRequests;
+  const requests = fakeRequests(new Requests(db));
   const commands = new FakeCommands();
   const alice = await connect(commands, operator, requests);
   const owner = await connect(commands, supervisor, requests);
@@ -281,13 +317,7 @@ test("request tools enforce role, principal ownership and revision scope", async
 test("run ownership remains bound to supervisor scope across fresh auth configurations", async () => {
   const db = new Database(":memory:");
   const localRequests = new Requests(db);
-  const requests = new Proxy(localRequests, {
-    get(target, property) {
-      if (property === "list") return async (filter: Parameters<Requests["list"]>[0]) => ({ requests: target.list(filter), nextCursor: null });
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  }) as unknown as CentralRequests;
+  const requests = fakeRequests(localRequests);
   const commands = new FakeCommands();
   const authenticate = (principal: Principal, token = "token") => new CentralAuth([{ tokenHash: createHash("sha256").update(token).digest("hex"), principal }]).authenticate(new Request("http://localhost", { headers: { authorization: `Bearer ${token}` } }))!;
   const owner = await connect(commands, authenticate(supervisor), requests);
@@ -312,7 +342,7 @@ test("run ownership remains bound to supervisor scope across fresh auth configur
       ["legacy-name", supervisor.name],
       ["legacy-scoped", "central-supervisor\n" + JSON.stringify([supervisor.name, supervisor.hostId, supervisor.session])],
     ] as [string, string][]) {
-      await requests.registerRun({ runId, phase: "plan", orchestrator });
+      localRequests.registerRun({ runId, phase: "plan", orchestrator });
       expect((await call(owner.client, "run_register", { runId, phase: "plan" })).isError).toBe(true);
       expect((await call(owner.client, "phase_update", { runId, expectedRevision: 1, phaseStatus: "stolen", newRevision: false })).isError).toBe(true);
     }

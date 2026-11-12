@@ -4,6 +4,7 @@ import { CommandError, MAX_TEXT, type CommandStatus } from "../commands.ts";
 import { authorize, supervisorIdentity, type CentralAuth, type Principal, type SupervisorIdentityLookup } from "./auth.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
 import type { CentralRequests } from "./requests.ts";
+import type { SupervisorIdentityRegistry } from "./identity-registry.ts";
 
 const MAX_BODY = 32 * 1024;
 const statuses: CommandStatus[] = ["queued", "delivering", "delivered", "delivery_unknown", "claimed", "accepted", "rejected", "running", "completed", "failed"];
@@ -31,7 +32,7 @@ async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
   return body;
 }
 
-export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcpCommands; identities: SupervisorIdentityLookup; requests?: CentralRequests; allowedOrigins?: readonly string[]; listHosts?: () => { hostId: string; sessions: string[] | null }[] }) {
+export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcpCommands; identities: SupervisorIdentityLookup & Partial<Pick<SupervisorIdentityRegistry, "lockActive">>; requests?: CentralRequests; allowedOrigins?: readonly string[]; listHosts?: () => { hostId: string; sessions: string[] | null }[] }) {
   const app = new Hono<Env>();
   app.use("*", async (c, next) => {
     const principal = deps.auth.authenticate(c.req.raw);
@@ -86,7 +87,8 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcp
       try { body = await boundedBody(request); } catch { return c.json({ error: "body too large" }, 413); }
       request = new Request(request.url, { method: request.method, headers: request.headers, body });
     }
-    const server = buildCentralMcpServer({ commands: deps.commands, requests: deps.requests }, principal);
+    const identities = typeof deps.identities.lockActive === "function" ? { lockActive: deps.identities.lockActive.bind(deps.identities) } : undefined;
+    const server = buildCentralMcpServer({ commands: deps.commands, requests: deps.requests, identities }, principal);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     try { return await transport.handleRequest(request); } finally { await server.close(); }

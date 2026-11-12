@@ -23,7 +23,8 @@ function fixture(requests?: CentralRequests, identities: { matches(identity: imp
     },
     async transition() { throw new Error("not used"); },
   };
-  return { app: createCentralApp({ auth, commands, requests, identities, allowedOrigins: ["http://localhost"] }), saved };
+  const fencedIdentities = { ...identities, async lockActive(_tx: unknown, identity: import("./identity-registry.ts").SupervisorIdentity) { return identities.matches(identity); } };
+  return { app: createCentralApp({ auth, commands, requests, identities: fencedIdentities, allowedOrigins: ["http://localhost"] }), saved };
 }
 const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
 const command = { hostId: "h1", target: "s1", text: "run", idempotencyKey: "key", actor: "spoofed" };
@@ -94,9 +95,16 @@ describe("central HTTP boundary", () => {
     const calls: unknown[] = [];
     const owner = `central-supervisor\n${JSON.stringify(["supervisor", "supervisor-id", "h1", "s1"])}`;
     const requests = {
-      async registerRun(input: unknown) { calls.push(input); return input; },
-      async run(id: string) { return { id, orchestrator: id === "own" ? owner : "someone-else" }; },
-      async gate(runId: string, phase: string, revision: number) { calls.push({ runId, phase, revision }); return { approved: false }; },
+      async registerRun(input: { runId: string; orchestrator: string }, guard: (tx: any) => Promise<void>) {
+        await guard({});
+        if (input.runId !== "own" || input.orchestrator !== owner) throw new Error("access denied");
+        calls.push(input); return input;
+      },
+      async gateScoped(runId: string, phase: string, revision: number, actor: string, guard: (tx: any) => Promise<void>) {
+        await guard({});
+        if (runId !== "own" || actor !== owner) throw new Error("access denied");
+        calls.push({ runId, phase, revision }); return { approved: false };
+      },
       async resolve(input: unknown) { calls.push(input); return input; },
     } as unknown as CentralRequests;
     const { app } = fixture(requests);

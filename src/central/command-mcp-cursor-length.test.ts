@@ -17,8 +17,15 @@ const STORE_CURSOR_LIMIT = 8192;
 const parse = (response: unknown) => JSON.parse((response as { content: { text: string }[] }).content[0]!.text);
 const pad = (seed: string, unit: string, length: number) => (seed + unit.repeat(length)).slice(0, length);
 
-async function connect(commands: CentralCommands, principal: Principal) {
-  const server = buildCentralMcpServer({ commands }, principal);
+async function connect(commands: CentralCommands, principal: Extract<Principal, { role: "supervisor" }>) {
+  // This fake checks the identity tuple but does not acquire or prove a database lock.
+  const identities = {
+    async lockActive(_tx: unknown, candidate: { principalId: string; name: string; hostId: string; session: string }) {
+      return candidate.principalId === principal.principalId && candidate.name === principal.name
+        && candidate.hostId === principal.hostId && candidate.session === principal.session;
+    },
+  };
+  const server = buildCentralMcpServer({ commands, identities }, principal);
   const client = new Client({ name: "cursor-length-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
