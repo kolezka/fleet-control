@@ -85,7 +85,7 @@ export class Deliverer {
 
   constructor(private commands: Commands, private send: Sender, private io: DeliveryIO = defaultIO) {}
 
-  // One delivery at a time per service, so two pastes never interleave in one pane.
+  // This queue serializes only this instance, not other processes or senders.
   deliver(id: string): Promise<Command> {
     const run = this.chain.then(() => this.deliverNow(id));
     this.chain = run.catch(() => {});
