@@ -59,6 +59,10 @@ A local real-agent smoke attempt initialized MCP and discovered both cooperative
 
 Local command submission rejects malformed UTF-16 in the idempotency key, actor and text before lookup or insertion, and snapshots each input field once. Older SQLite writes may already have replaced malformed characters with U+FFFD. An invalid retry is rejected even if its normalized form exists; rejection does not prove the original was not committed and must not trigger submission under a new key. Existing rows are not repaired.
 
+## Local actor size
+
+Local command submission does not impose a separate actor length limit. With authentication disabled, the loopback REST command route accepts the actor supplied by the caller. Delivery escapes control characters in the actor header, expanding each to six ASCII characters; an offline test confirms the expansion, not service exhaustion. Large actors can increase storage and memory use. Existing records and exact replays need a compatibility decision before adding a limit.
+
 ## Local recipient response race
 
 The local SQLite command state machine rejects recipient acceptance and rejection while a send is still `delivering`. A response can arrive after the text is visible but before the sender returns, so the response may fail and require a retry. This is reproduced with an in-memory database and a gated fake sender, not with live fleet. Simply allowing those transitions would let the later delivery result conflict with or overwrite the response; a fix must preserve both facts and cover restart recovery. Recipient authority is also not enforced in the local service.
