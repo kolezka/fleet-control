@@ -23,8 +23,8 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
   server.registerTool("command_submit", {
     description:
       "Queue an instruction for one fleet session and try to deliver it with fleet send. " +
-      "The result says queued, delivered or delivery_unknown. Delivered only means the text reached the pane; " +
-      "it is not acceptance or execution. Reuse the same idempotencyKey when retrying.",
+      "The result says queued, delivered or delivery_unknown. Delivered is a sender report, not proof the full message reached the pane, " +
+      "nor acceptance or execution. Reuse the same idempotencyKey when retrying.",
     inputSchema: {
       target: z.string().regex(/^[A-Za-z0-9._-]+$/).describe("Recipient session, e.g. the supervisor"),
       text: z.string().min(1).max(MAX_TEXT),

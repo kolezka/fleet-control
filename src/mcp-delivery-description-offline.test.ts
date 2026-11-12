@@ -29,6 +29,8 @@ test("command_deliver describes queued attempts and does not resend unknown outc
   await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
+    const submitDescription = tools.find((tool) => tool.name === "command_submit")?.description;
+    expect(submitDescription).toMatch(/not proof.*full.*message/i);
     const description = tools.find((tool) => tool.name === "command_deliver")?.description;
     expect(description).toMatch(/attempt delivery of a queued command/i);
     expect(description).not.toMatch(/refus(?:ed|al)/i);
