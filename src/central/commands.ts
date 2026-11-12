@@ -121,7 +121,7 @@ export class CentralCommands {
   // in lockForClaim order before the event lock is acquired.
   async transitionScoped(id: string, to: "accepted" | "rejected" | "running" | "completed" | "failed", actor: string, detail: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard): Promise<CentralCommand> {
     const { hostId, session } = scope;
-    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
+    if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")) || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
@@ -149,7 +149,7 @@ export class CentralCommands {
   }
 
   async get(id: string): Promise<CentralCommand> {
-    if (typeof id !== "string" || !id.isWellFormed()) throw new CommandError("invalid", "invalid command ID");
+    if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0"))) throw new CommandError("invalid", "invalid command ID");
     const query = async (db: SQL | TransactionSQL) => {
       const [command] = await db<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id}`;
       if (!command) throw new CommandError("not_found", `no command ${id}`);
@@ -162,7 +162,7 @@ export class CentralCommands {
   // must acquire slot, identity and incarnation locks in lockForClaim order.
   async getScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard): Promise<CentralCommand> {
     const { hostId, session } = scope;
-    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
+    if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")) || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       const [command] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session}`;
@@ -183,7 +183,7 @@ export class CentralCommands {
 
   async eventsScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard, afterSeq = "0"): Promise<CentralCommandEvent[]> {
     const { hostId, session } = scope;
-    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
+    if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")) || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       const [command] = await tx`SELECT id FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session}`;
@@ -225,7 +225,7 @@ export class CentralCommands {
 
   // Cooperative operator reads return at most one bounded JSON value per row.
   async getBounded(id: string): Promise<CentralCommand> {
-    if (typeof id !== "string" || !id.isWellFormed()) throw new CommandError("invalid", "invalid command ID");
+    if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0"))) throw new CommandError("invalid", "invalid command ID");
     const query = async (db: SQL | TransactionSQL) => {
       const [row] = await db<{ command: CentralCommand | null }[]>`SELECT CASE WHEN
         octet_length(id)::bigint + octet_length(idempotency_key) + octet_length(host_id) + octet_length(target) + octet_length(actor) + octet_length(text) + octet_length(status) + octet_length(created_at) + octet_length(updated_at) <= 270336
@@ -277,7 +277,7 @@ export class CentralCommands {
   }
 
   async events(id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {
-    if (id !== undefined && (typeof id !== "string" || !id.isWellFormed())) throw new CommandError("invalid", "invalid command ID");
+    if (id !== undefined && (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")))) throw new CommandError("invalid", "invalid command ID");
     return this.eventsWithConnection(this.db, id, afterSeq);
   }
 
