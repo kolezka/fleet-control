@@ -14,6 +14,7 @@ import { provisionCooperative } from "./cooperative-provision.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import { withCooperativeSchema } from "./schema-guard.ts";
 import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
+import { loadTlsFiles, tlsFilesFromEnv } from "./tls-files.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
 
 // Disposable experiment only. The database and all its roles/writers must be trusted.
@@ -28,7 +29,9 @@ import type { CooperativeTransactionRunner } from "./incarnations.ts";
 // COOPERATIVE_INCARNATION_FILE to an absolute path that does not exist yet. Exactly one
 // supervisor and at least one operator are required. The new incarnation secret is
 // written once to that file (exclusive create, mode 0600) and never printed.
-// No host agent, dispatch, automatic execution, TLS, recovery or cleanup is provided.
+// Optional COOPERATIVE_TLS_CERT_FILE and COOPERATIVE_TLS_KEY_FILE (both, absolute PEM paths)
+// serve HTTPS on the same loopback port.
+// No host agent, dispatch, automatic execution, recovery or cleanup is provided.
 export function cooperativeConfig(env: Record<string, string | undefined>) {
   const raw = env.COOPERATIVE_DATABASE_URL;
   const runtimeRaw = env.COOPERATIVE_RUNTIME_DATABASE_URL;
@@ -49,7 +52,8 @@ export function cooperativeConfig(env: Record<string, string | undefined>) {
   if (env.COOPERATIVE_HOST !== undefined && env.COOPERATIVE_HOST !== "127.0.0.1") throw new Error("listener must bind to 127.0.0.1");
   const port = env.COOPERATIVE_PORT ?? "4873";
   if (!/^\d+$/.test(port) || Number(port) > 65535) throw new Error("invalid port");
-  return { databaseUrl: raw!, runtimeDatabaseUrl: runtimeRaw!, runtimeRole: runtimeUrl.username, schema, credentialsFile, incarnationFile, port: Number(port) };
+  const tls = tlsFilesFromEnv(env.COOPERATIVE_TLS_CERT_FILE, env.COOPERATIVE_TLS_KEY_FILE, "cooperative");
+  return { databaseUrl: raw!, runtimeDatabaseUrl: runtimeRaw!, runtimeRole: runtimeUrl.username, schema, credentialsFile, incarnationFile, port: Number(port), ...(tls ? { tls } : {}) };
 }
 
 function parseCredentials(text: string): Credential[] {
@@ -114,6 +118,8 @@ export async function startCooperative(env: Record<string, string | undefined> =
   let credentials: Credential[];
   try { credentials = parseCredentials(await readPrivateText(config.credentialsFile)); }
   catch { throw new Error("invalid or unreadable cooperative credentials file"); }
+  // Before provisioning, so a bad certificate never creates a schema.
+  const tls = config.tls ? await loadTlsFiles(config.tls, "cooperative") : undefined;
   const auth = new CentralAuth(credentials);
   const supervisor = credentials.find((c) => c.principal.role === "supervisor")!.principal;
   if (supervisor.role !== "supervisor") throw new Error("supervisor required");
@@ -135,7 +141,7 @@ export async function startCooperative(env: Record<string, string | undefined> =
     const commands = new CentralCommands(db, undefined, runner);
     const app = createCooperativeCentralApp({ auth, identities, commands, claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner), reconciliation: new CooperativeReconciliation(db, undefined, runner) });
     const pending = new Set<Promise<Response>>();
-    const server = Bun.serve({ hostname: "127.0.0.1", port: config.port, fetch(request, server) {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: config.port, ...(tls ? { tls } : {}), fetch(request, server) {
       if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}`) return new Response("invalid host", { status: 403 });
       const task = Promise.resolve(app.fetch(request));
       pending.add(task);
@@ -164,7 +170,7 @@ export async function startCooperative(env: Record<string, string | undefined> =
       db = undefined;
       throw new IncarnationFileError();
     }
-    return { server, incarnationId: credential.incarnationId, incarnationFile: config.incarnationFile, stop };
+    return { server, url: `${tls ? "https" : "http"}://127.0.0.1:${server.port}`, incarnationId: credential.incarnationId, incarnationFile: config.incarnationFile, stop };
   } catch (error) {
     if (error instanceof IncarnationFileError) throw new Error("cooperative startup failed: could not write incarnation file; schema remains and must not be reused");
     await Promise.allSettled([admin.close(), ...(db ? [db.close()] : [])]);
@@ -178,7 +184,7 @@ class IncarnationFileError extends Error {}
 // The only stdout line. It must never contain the incarnation token.
 export async function runCooperativeCli(env: Record<string, string | undefined> = process.env) {
   const running = await startCooperative(env);
-  return { running, line: JSON.stringify({ url: `http://127.0.0.1:${running.server.port}`, incarnationId: running.incarnationId }) };
+  return { running, line: JSON.stringify({ url: running.url, incarnationId: running.incarnationId }) };
 }
 
 // SIGINT or SIGTERM starts a graceful stop. Both listeners are removed once stopping begins,
