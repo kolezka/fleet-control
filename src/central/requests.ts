@@ -182,6 +182,7 @@ export class CentralRequests {
   async get(id: string): Promise<SupervisorRequest> { return this.getRequest(this.db, id); }
   async list(filter: { runId?: string; status?: RequestStatus; limit?: number; cursor?: string } = {}): Promise<{ requests: SupervisorRequest[]; nextCursor: string | null }> {
     const runId = filter.runId ?? null, status = filter.status ?? null, limit = filter.limit ?? 100;
+    if ([runId, status].some((value) => value !== null && (typeof value !== "string" || !value.isWellFormed() || value.includes("\0")))) throw new RequestError("invalid", "invalid request filter encoding");
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new RequestError("invalid", "limit must be between 1 and 1000");
     let after: { createdAt: string; id: string } | null = null;
     if (filter.cursor !== undefined) {
