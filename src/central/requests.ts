@@ -132,6 +132,7 @@ export class CentralRequests {
       }
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; it cannot be answered`);
       if (!r.allowedResponses.includes(input.response)) throw new RequestError("invalid", `response must be one of ${r.allowedResponses.join(", ")}`);
+      if (!validEncoding(actor) || !validEncoding(input.response) || !validEncoding(note)) throw new RequestError("invalid", "invalid request encoding");
       const at = this.now().toISOString();
       await tx`UPDATE central_requests SET status = 'resolved', response = ${input.response}, resolved_by = ${actor}, resolution_note = ${note}, resolved_at = ${at} WHERE id = ${r.id}`;
       await this.event(tx, r.id, r.runId, "resolved", actor, `${input.response}${input.note ? `: ${input.note}` : ""}`, at);
