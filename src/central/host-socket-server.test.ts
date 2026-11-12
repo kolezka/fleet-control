@@ -90,3 +90,20 @@ test("websocket payload limit rejects oversized messages", async () => {
   expect([1009, 1006]).toContain(await closing);
   expect(inventories).toEqual([]);
 });
+
+test("closeAll closes accepted sockets with 1001 and rejects later opens", async () => {
+  const inventories: AgentInventory[] = [];
+  const adapter = createHostSocketServer({ auth, onInventory: (item) => { inventories.push(item); } });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: adapter.fetch, websocket: adapter.websocket });
+  servers.push(server);
+  const url = `ws://127.0.0.1:${server.port}/api/host/socket`;
+  const first = await connect(url, "host-a-token");
+  await waitFor(() => adapter.listHosts().length === 1);
+  const firstClosed = closed(first);
+  adapter.closeAll();
+  expect(await firstClosed).toBe(1001);
+  await waitFor(() => adapter.listHosts().length === 0);
+  const late = await connect(url, "host-b-token");
+  expect(await closed(late)).toBe(1001);
+  expect(adapter.listHosts()).toEqual([]);
+});

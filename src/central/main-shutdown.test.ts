@@ -85,17 +85,17 @@ test("stop() force-closes after the grace deadline but still waits for SQL work 
   }
 });
 
-test("an open host WebSocket cannot hold stop() past the grace deadline", async () => {
-  const { running, port, log } = await startInProcess(0, { shutdownGraceMs: 200 });
+test("stop() closes open host WebSockets with 1001 instead of waiting for the grace deadline", async () => {
+  const { running, port, log } = await startInProcess(0, { shutdownGraceMs: 4_000 });
   const BunSocket = WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => WebSocket;
   const socket = new BunSocket(`ws://127.0.0.1:${port}/api/host/socket`, { headers: { authorization: `Bearer ${hostToken}` } });
   try {
     await within(new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = reject; }), 5_000, "socket open");
-    const closed = new Promise<void>((resolve) => { socket.onclose = () => resolve(); });
+    const closed = new Promise<number>((resolve) => { socket.onclose = (event) => resolve(event.code); });
     const started = performance.now();
     await within(running.stop(), 5_000, "stop");
-    expect(performance.now() - started).toBeGreaterThanOrEqual(150);
-    await within(closed, 5_000, "socket close");
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(await within(closed, 5_000, "socket close")).toBe(1001);
     expect(log).toContain("sql close");
   } finally {
     socket.close();

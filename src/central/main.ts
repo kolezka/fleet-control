@@ -83,15 +83,17 @@ export async function startCentral(env: Record<string, string | undefined> = pro
     });
     const pool = db;
     let stopping: Promise<void> | undefined;
-    // Stop accepting, let accepted requests reply until the grace deadline, then force-close.
-    // Open host WebSockets keep server.stop(false) waiting, so they are closed at the deadline.
+    // Stop accepting, close idle host WebSockets with 1001, let accepted requests reply
+    // until the grace deadline, then force-close.
     // SQL work is always awaited (unbounded) before the pool closes under it.
     return { server, stop() {
       return stopping ??= (async () => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), shutdownGraceMs); });
         try {
-          const drained = await Promise.race([Promise.allSettled([server.stop(false), ...pending]).then(() => true), deadline]);
+          const graceful = Promise.allSettled([server.stop(false), ...pending]);
+          hostSocket.closeAll();
+          const drained = await Promise.race([graceful.then(() => true), deadline]);
           if (!drained) await server.stop(true);
         } finally {
           clearTimeout(timer);
