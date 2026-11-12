@@ -66,7 +66,7 @@ export class CentralCommands {
 
   private async submitWithMode(input: CentralCommandInput, bounded: boolean): Promise<{ command: CentralCommand; created: boolean }> {
     input = { idempotencyKey: input.idempotencyKey, hostId: input.hostId, target: input.target, actor: input.actor, text: input.text };
-    if (![input.idempotencyKey, input.hostId, input.target, input.actor, input.text].every((value) => typeof value === "string" && value.isWellFormed())) throw new CommandError("invalid", "invalid command encoding");
+    if (![input.idempotencyKey, input.hostId, input.target, input.actor, input.text].every((value) => typeof value === "string" && value.isWellFormed() && !value.includes("\0"))) throw new CommandError("invalid", "invalid command encoding");
     const text = input.text.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
     if (text.length > MAX_TEXT) throw new CommandError("invalid", `instruction text is longer than ${MAX_TEXT} characters`);

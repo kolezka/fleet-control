@@ -33,7 +33,7 @@ const invalidHosts = [
   ["trailing Unicode whitespace", "host "],
   ["leading control", "\u0001host"],
   ["trailing control", "host\u007f"],
-  ["embedded control", "ho\u0000st"],
+  ["embedded control", "ho\u0001st"],
 ] as const;
 
 for (const [label, hostId] of invalidHosts) {
