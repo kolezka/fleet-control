@@ -18,6 +18,12 @@ Latest full local run (2026-11-11), against the disposable loopback PostgreSQL f
 
 These results do not establish production readiness. The sections below record earlier service work and verification, not central-backend acceptance.
 
+## Legacy host authority limits
+
+The legacy host service authenticates principal names but does not assign operator or supervisor roles. Its MCP request tools and same-origin HTTP answer endpoint do not enforce that a human operator, rather than the originating supervisor, resolves an approval. The host gate reports matching stored responses; it is not proof of human authority. Command response and report tools also lack a recipient-identity check. Treat these as unresolved authorization gaps, not as guarantees of the central cooperative prototype. Do not use these legacy paths as a security boundary for autonomous execution.
+
+The legacy deliverer marks a command `delivering` before preparing its temporary message file. If directory creation or file writing fails, it can remain `delivering` even though the sender was not invoked. Restart recovery may mark it unknown. This is a static code finding, not a tested recovery procedure; do not automatically requeue it.
+
 ## Correction: send-keys blocker vs the pinned fix (2026-11-11)
 
 Several sections below say the viewer-plus-send test is skipped, or that a read-only viewer blocks `tmux send-keys`, `fleet send` and the watchdog. That was true of the agent-fleet checkout used then. The repository now pins `vendor/agent-fleet` at `5871fa5` (PR #7, the paste-keys fix; see the pinned-dependency section and [dependency maintenance](agent-fleet-dependency.md)). In this checkout `scripts/watchdog.sh` no longer calls `tmux send-keys`; its `keys()` helper pastes raw bytes, and `src/terminal/viewer-send.test.ts` ran and passed against the pinned CLI with the read-only viewer attached.
