@@ -1,4 +1,4 @@
-import { AGENT_PROTOCOL_VERSION, MAX_AGENT_MESSAGE_BYTES, validInventorySessions, type AgentDispatch, type AgentInventory, type AgentReceipt } from "../central/agent-sockets.ts";
+import { AGENT_PROTOCOL_VERSION, MAX_AGENT_MESSAGE_BYTES, MAX_INVENTORY_SESSIONS, validInventorySessions, type AgentDispatch, type AgentInventory, type AgentReceipt } from "../central/agent-sockets.ts";
 
 export interface HostSocket {
   addEventListener(type: "open" | "message" | "close" | "error", listener: (event: any) => void): void;
@@ -65,6 +65,7 @@ export class HostAgentClient {
 
   stop(): void {
     this.running = false;
+    this.inventoryGeneration++;
     if (this.timer !== undefined) this.options.clearTimer(this.timer);
     this.timer = undefined;
     const socket = this.socket;
@@ -73,10 +74,36 @@ export class HostAgentClient {
   }
 
   sendInventory(sessions: string[]): void {
-    if (!validInventorySessions(sessions)) throw new TypeError("invalid inventory");
-    this.inventoryGeneration++;
-    const inventory: AgentInventory = { version: 1, type: "inventory", hostId: this.options.hostId, sessions: [...sessions] };
-    this.send(inventory);
+    this.publishInventory(sessions, false);
+  }
+
+  private publishInventory(sessions: string[], staleIsIgnored: boolean): void {
+    const socket = this.socket;
+    const stale = () => { if (!staleIsIgnored) throw new Error("stale inventory"); };
+    const generation = this.inventoryGeneration;
+    if (!Array.isArray(sessions)) throw new TypeError("invalid inventory");
+    const length = sessions.length;
+    if (!Number.isInteger(length) || length < 0 || length > MAX_INVENTORY_SESSIONS) throw new TypeError("invalid inventory");
+    const captured: string[] = [];
+    for (let index = 0; index < length; index++) {
+      if (!Object.hasOwn(sessions, index)) throw new TypeError("invalid inventory");
+      captured[index] = sessions[index]!;
+    }
+    if (!validInventorySessions(captured)) throw new TypeError("invalid inventory");
+    if (this.inventoryGeneration !== generation || this.socket !== socket) return stale();
+    // Valid inventory supersedes older work even if serialization or sending fails.
+    // Invalid input does not supersede it.
+    const ownGeneration = ++this.inventoryGeneration;
+    Object.defineProperty(captured, "toJSON", { value: undefined });
+    const inventory: AgentInventory = Object.assign(Object.create(null), { version: 1, type: "inventory", hostId: this.options.hostId, sessions: captured });
+    if (this.inventoryGeneration !== ownGeneration || this.socket !== socket) return stale();
+    const raw = JSON.stringify(inventory);
+    if (this.inventoryGeneration !== ownGeneration || this.socket !== socket) return stale();
+    if (Buffer.byteLength(raw, "utf8") > MAX_AGENT_MESSAGE_BYTES) throw new RangeError("message too large");
+    if (!socket) throw new Error("not connected");
+    const send = socket.send;
+    if (this.inventoryGeneration !== ownGeneration || this.socket !== socket) return stale();
+    Reflect.apply(send, socket, [raw]);
   }
 
   private send(message: AgentInventory | AgentReceipt): void {
@@ -95,15 +122,19 @@ export class HostAgentClient {
     socket.addEventListener("open", () => {
       if (this.socket !== socket || !this.running) return;
       this.reconnects = 0;
-      if (!this.options.inventory) return;
       const generation = ++this.inventoryGeneration;
-      void Promise.resolve().then(() => this.options.inventory!()).then((sessions) => {
-        if (this.running && this.socket === socket && this.inventoryGeneration === generation) this.sendInventory(sessions);
+      void Promise.resolve().then(async () => {
+        if (!this.running || this.socket !== socket || this.inventoryGeneration !== generation) return;
+        const inventory = this.options.inventory;
+        if (!inventory || !this.running || this.socket !== socket || this.inventoryGeneration !== generation) return;
+        const sessions = await Reflect.apply(inventory, this.options, []);
+        if (this.running && this.socket === socket && this.inventoryGeneration === generation) this.publishInventory(sessions, true);
       }).catch((error) => this.options.onError?.(error));
     });
     socket.addEventListener("close", () => {
       if (this.socket !== socket) return;
       this.socket = undefined;
+      this.inventoryGeneration++;
       this.schedule();
     });
     socket.addEventListener("error", (event) => { if (this.socket === socket) this.options.onError?.(event); });
