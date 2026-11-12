@@ -1,4 +1,5 @@
 import { SQL } from "bun";
+import { X509Certificate, createPrivateKey } from "node:crypto";
 import { CentralAuth, type Credential } from "./auth.ts";
 import { CentralCommands } from "./commands.ts";
 import { CentralRequests } from "./requests.ts";
@@ -7,7 +8,7 @@ import { createCentralApp } from "./server.ts";
 import { createHostSocketServer, type HostSocketData } from "./host-socket-server.ts";
 import type { Server } from "bun";
 
-type Config = { databaseUrl: string; credentialsFile: string; hostname: "127.0.0.1"; port: number };
+type Config = { databaseUrl: string; credentialsFile: string; hostname: "127.0.0.1"; port: number; tls?: { certFile: string; keyFile: string } };
 
 export function centralConfig(env: Record<string, string | undefined>): Config {
   const databaseUrl = env.CENTRAL_DATABASE_URL;
@@ -16,6 +17,13 @@ export function centralConfig(env: Record<string, string | undefined>): Config {
   if (env.CENTRAL_HOST !== undefined && env.CENTRAL_HOST !== "127.0.0.1") throw new Error("central listener must bind to 127.0.0.1");
   const portText = env.CENTRAL_PORT ?? "4872";
   if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) throw new Error("invalid central port");
+  // TLS is optional and still loopback-only; it lets host agents use wss:// without a proxy.
+  const certFile = env.CENTRAL_TLS_CERT_FILE, keyFile = env.CENTRAL_TLS_KEY_FILE;
+  if ((certFile === undefined) !== (keyFile === undefined)) throw new Error("central TLS needs both certificate and key files");
+  if (certFile !== undefined && keyFile !== undefined) {
+    if (!certFile.startsWith("/") || !keyFile.startsWith("/")) throw new Error("central TLS files must be absolute paths");
+    return { databaseUrl, credentialsFile, hostname: "127.0.0.1", port: Number(portText), tls: { certFile, keyFile } };
+  }
   return { databaseUrl, credentialsFile, hostname: "127.0.0.1", port: Number(portText) };
 }
 
@@ -30,7 +38,8 @@ function parseCredentials(text: string): Credential[] {
 type Dependencies = {
   readCredentials(path: string): Promise<string>;
   createSql(url: string): SQL;
-  serve(options: { hostname: "127.0.0.1"; port: number; fetch: (request: Request, server: Server<HostSocketData>) => Response | undefined | Promise<Response>; websocket: ReturnType<typeof createHostSocketServer>["websocket"] }): Pick<Server<HostSocketData>, "stop">;
+  readTlsFile?(path: string): Promise<string>;
+  serve(options: { hostname: "127.0.0.1"; port: number; tls?: { cert: string; key: string }; fetch: (request: Request, server: Server<HostSocketData>) => Response | undefined | Promise<Response>; websocket: ReturnType<typeof createHostSocketServer>["websocket"] }): Pick<Server<HostSocketData>, "stop">;
 };
 
 const defaults: Dependencies = {
@@ -54,6 +63,15 @@ export async function startCentral(env: Record<string, string | undefined> = pro
     auth = new CentralAuth(credentials);
   }
   catch { throw new Error("invalid or unreadable central credentials file"); }
+  let tls: { cert: string; key: string } | undefined;
+  if (config.tls) {
+    const read = deps.readTlsFile ?? ((path: string) => Bun.file(path).text());
+    try { tls = { cert: await read(config.tls.certFile), key: await read(config.tls.keyFile) }; }
+    catch { throw new Error("unreadable central TLS files"); }
+    // Parse and pair-check here so a bad certificate fails before the database is touched.
+    try { if (!new X509Certificate(tls.cert).checkPrivateKey(createPrivateKey(tls.key))) throw new Error("mismatch"); }
+    catch { throw new Error("invalid central TLS files"); }
+  }
   let db: SQL | undefined;
   try {
     db = deps.createSql(config.databaseUrl);
@@ -72,6 +90,7 @@ export async function startCentral(env: Record<string, string | undefined> = pro
     const server = deps.serve({
       hostname: config.hostname,
       port: config.port,
+      ...(tls ? { tls } : {}),
       fetch: (request, server) => {
         if (new URL(request.url).pathname === "/api/host/socket") return hostSocket.fetch(request, server);
         const task = Promise.resolve(app.fetch(request));
