@@ -3,6 +3,7 @@ import { RequestError, type RequestKind, type RequestStatus, type Run, type Supe
 
 // The caller must bind the authenticated principal to the input actor before calling.
 // A guard fences that principal in this transaction; it does not authenticate the input.
+// Callers must capture immutable identity values for both the input and guard closure.
 export type RequestMutationGuard = (tx: SQL) => Promise<void>;
 
 type Event = { seq: string; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string };
@@ -59,6 +60,7 @@ export class CentralRequests {
   }
 
   async registerRun(input: { runId: string; orchestrator: string; phase: string }, guard?: RequestMutationGuard): Promise<Run> {
+    input = { runId: input.runId, orchestrator: input.orchestrator, phase: input.phase };
     const id = nonEmpty(input.runId, "runId"), actor = nonEmpty(input.orchestrator, "orchestrator");
     return this.transaction(async (tx) => {
       const existing = await tx<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs WHERE id = ${id} FOR UPDATE`;
@@ -74,6 +76,7 @@ export class CentralRequests {
   }
 
   async updatePhase(input: { runId: string; actor: string; expectedRevision: number; phase?: string; phaseStatus: string; newRevision: boolean }, guard?: RequestMutationGuard): Promise<{ run: Run; staled: string[] }> {
+    input = { runId: input.runId, actor: input.actor, expectedRevision: input.expectedRevision, phase: input.phase, phaseStatus: input.phaseStatus, newRevision: input.newRevision };
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, input.runId, true);
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
@@ -95,6 +98,7 @@ export class CentralRequests {
   }
 
   async create(input: CreateInput, guard?: RequestMutationGuard): Promise<SupervisorRequest> {
+    input = { runId: input.runId, origin: input.origin, expectedRevision: input.expectedRevision, kind: input.kind, question: input.question, proposedAction: input.proposedAction, scope: input.scope, evidence: input.evidence?.slice(), allowedResponses: input.allowedResponses?.slice(), blocking: input.blocking };
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, input.runId, true);
       if (input.origin !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.origin} is not the orchestrator of ${run.id}`);
@@ -109,6 +113,7 @@ export class CentralRequests {
   }
 
   async resolve(input: { requestId: string; response: string; actor: string; expectedRevision: number; note?: string }): Promise<SupervisorRequest> {
+    input = { requestId: input.requestId, response: input.response, actor: input.actor, expectedRevision: input.expectedRevision, note: input.note };
     return this.transaction(async (tx) => {
       const r = await this.getRequest(tx, input.requestId, true), run = await this.getRun(tx, r.runId, true), actor = nonEmpty(input.actor, "actor"), note = input.note ?? "";
       if (input.expectedRevision !== r.revision || run.revision !== r.revision || run.phase !== r.phase) throw new RequestError("conflict", `${r.id} has a stale revision`);
@@ -134,6 +139,7 @@ export class CentralRequests {
   }
 
   private async changeStatus(input: { requestId: string; actor: string }, status: "acknowledged" | "withdrawn", reason?: string, guard?: RequestMutationGuard): Promise<SupervisorRequest> {
+    input = { requestId: input.requestId, actor: input.actor };
     return this.transaction(async (tx) => {
       const r = await this.getRequest(tx, input.requestId, true), run = await this.getRun(tx, r.runId, true);
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
