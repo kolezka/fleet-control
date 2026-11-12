@@ -215,8 +215,10 @@ export class Requests {
       const actor = input.actor;
       if (actor !== this.run(r.runId).orchestrator) throw new RequestError("forbidden", `${actor} is not the orchestrator of ${r.runId}`);
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; only an open request can be withdrawn`);
+      const reason = input.reason;
+      if (!reason.isWellFormed()) throw new RequestError("invalid", "invalid reason encoding");
       this.setStatus(r.id, "withdrawn");
-      this.event(r.id, r.runId, "withdrawn", actor, nonEmpty(input.reason, "reason"), this.now().toISOString());
+      this.event(r.id, r.runId, "withdrawn", actor, nonEmpty(reason, "reason"), this.now().toISOString());
       return this.get(r.id);
     })();
   }
