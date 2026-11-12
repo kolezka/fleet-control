@@ -9,8 +9,11 @@ export class JournalError extends Error {
   }
 }
 
+export type JournalLease = { readonly held: boolean };
+
 export class DeliveryJournal {
-  constructor(private db: Database) {
+  // Holding the lease here keeps it reachable for as long as the journal is.
+  constructor(private db: Database, private lease?: JournalLease) {
     db.run("PRAGMA busy_timeout = 5000");
     db.run(`CREATE TABLE IF NOT EXISTS host_delivery_attempts (
       id TEXT PRIMARY KEY NOT NULL,
@@ -20,6 +23,7 @@ export class DeliveryJournal {
   }
 
   private requireNoTransaction(): void {
+    if (this.lease && !this.lease.held) throw new Error("delivery journal executor lease was released");
     if (this.db.inTransaction) throw new Error("delivery journal requires a connection outside a transaction");
   }
 
@@ -61,8 +65,8 @@ export class DeliveryJournal {
     }).immediate();
   }
 
-  // The runtime must enforce exclusive startup reconciliation before any executor is active.
-  // This journal does not acquire an executor lock, and is not yet integrated into the runtime.
+  // Safe only while no other executor is active: open through openExclusiveJournal
+  // (executor-lease.ts). No runtime does that yet.
   reconcileAfterRestart(): number {
     this.requireNoTransaction();
     return this.db.query("UPDATE host_delivery_attempts SET status = 'unknown' WHERE status = 'started'").run().changes;
