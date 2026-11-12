@@ -42,6 +42,11 @@ test("route enforces roles, validates input and sanitizes store failures", async
     expect((await app.request(`${path}?${query}`, { headers: headers("operator-secret") })).status).toBe(400);
   }
   expect((await app.request("/api/commands/%20/cooperative", { headers: headers("operator-secret") })).status).toBe(400);
+  for (const id of ["%FF", "%C0%AF", "%E2%82"]) {
+    const response = await app.request(`/api/commands/${id}/cooperative`, { headers: headers("operator-secret") });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid inspection parameters" });
+  }
   expect(calls).toHaveLength(0);
   expect((await app.request(path, { headers: headers("operator-secret") })).status).toBe(200);
   expect(calls[0]).toEqual(["cmd", { limit: 4 }]);
@@ -53,6 +58,25 @@ test("route enforces roles, validates input and sanitizes store failures", async
   const error = await app.request("/api/commands/error/cooperative", { headers: headers("operator-secret") });
   expect(error.status).toBe(500);
   expect(await error.text()).toBe('{"error":"request failed"}');
+});
+
+test("inspection decodes identifiers once under a mount prefix", async () => {
+  const ids: string[] = [];
+  const app = new Hono();
+  app.route("/v1", createCooperativeInspectionRoute({ auth, inspection: { async inspectBounded(id) { ids.push(id); return null; } } }));
+  for (const [encoded, expected] of [["plain", "plain"], ["foo%2Fbar", "foo/bar"], ["100%25", "100%"], ["foo%252Fbar", "foo%2Fbar"]]) {
+    expect((await app.request(`/v1/api/commands/${encoded}/cooperative`, { headers: headers("operator-secret") })).status).toBe(404);
+    expect(ids.at(-1)).toBe(expected);
+  }
+  expect((await app.request("/v1/api/commands/%FF/cooperative", { headers: headers("operator-secret") })).status).toBe(400);
+  expect(ids).toHaveLength(4);
+  const nonStrict = new Hono({ strict: false });
+  nonStrict.route("/v1", createCooperativeInspectionRoute({ auth, inspection: { async inspectBounded(id) { ids.push(id); return null; } } }));
+  expect((await app.request("/v1/api/commands/cmd/cooperative/", { headers: headers("operator-secret") })).status).toBe(404);
+  expect(ids).toHaveLength(4);
+  expect((await nonStrict.request("/v1/api/commands/cmd/cooperative/", { headers: headers("operator-secret") })).status).toBe(404);
+  expect(ids).toHaveLength(5);
+  expect(ids.at(-1)).toBe("cmd");
 });
 
 test("route caps serialized UTF-8 JSON including escaping and envelope", async () => {

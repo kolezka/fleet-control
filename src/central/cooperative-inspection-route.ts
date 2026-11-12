@@ -12,7 +12,13 @@ export function createCooperativeInspectionRoute(deps: {
     const principal = deps.auth.authenticate(c.req.raw);
     if (!principal) return c.json({ error: "unauthorized" }, 401);
     if (principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
-    const id = c.req.param("id");
+    let id: string;
+    try {
+      const segments = new URL(c.req.url).pathname.split("/");
+      if (segments.at(-1) === "") segments.pop();
+      id = decodeURIComponent(segments.at(-2) ?? "");
+    }
+    catch { return c.json({ error: "invalid inspection parameters" }, 400); }
     const query = new URL(c.req.url).searchParams;
     const limits = query.getAll("limit");
     const cursors = query.getAll("cursor");

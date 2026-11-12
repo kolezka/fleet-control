@@ -13,6 +13,25 @@ const auth = new CentralAuth([
 const headers = (token: string) => ({ authorization: `Bearer ${token}` });
 const path = "/api/commands/cmd/cooperative/assertions";
 
+test("assertions decodes identifiers once under a mount prefix", async () => {
+  const ids: string[] = [];
+  const app = new Hono();
+  app.route("/v1", createCooperativeAssertionsRoute({ auth, reconciliation: { async listBounded(_principal, id) { ids.push(id); return null; } } }));
+  for (const [encoded, expected] of [["plain", "plain"], ["foo%2Fbar", "foo/bar"], ["100%25", "100%"], ["foo%252Fbar", "foo%2Fbar"]]) {
+    expect((await app.request(`/v1/api/commands/${encoded}/cooperative/assertions`, { headers: headers("operator") })).status).toBe(404);
+    expect(ids.at(-1)).toBe(expected);
+  }
+  expect((await app.request("/v1/api/commands/%FF/cooperative/assertions", { headers: headers("operator") })).status).toBe(400);
+  expect(ids).toHaveLength(4);
+  const nonStrict = new Hono({ strict: false });
+  nonStrict.route("/v1", createCooperativeAssertionsRoute({ auth, reconciliation: { async listBounded(_principal, id) { ids.push(id); return null; } } }));
+  expect((await app.request("/v1/api/commands/cmd/cooperative/assertions/", { headers: headers("operator") })).status).toBe(404);
+  expect(ids).toHaveLength(4);
+  expect((await nonStrict.request("/v1/api/commands/cmd/cooperative/assertions/", { headers: headers("operator") })).status).toBe(404);
+  expect(ids).toHaveLength(5);
+  expect(ids.at(-1)).toBe("cmd");
+});
+
 test("assertions route enforces the serialized UTF-8 response cap", async () => {
   const app = createCooperativeAssertionsRoute({ auth, reconciliation: { async listBounded() {
     return { assertions: [{ commandId: "cmd", requestId: "r", actor: "a", disposition: "unknown" as const, evidence: "\u0001".repeat(350000), expectedSequence: null, sequence: "1", supersedesSequence: null, at: "now" }], nextCursor: null };
@@ -39,6 +58,11 @@ test("assertions route enforces roles, validates parameters and sanitizes failur
     expect((await app.request(`${path}?${query}`, { headers: headers("operator") })).status).toBe(400);
   }
   expect((await app.request("/api/commands/%20/cooperative/assertions", { headers: headers("operator") })).status).toBe(400);
+  for (const id of ["%FF", "%C0%AF", "%E2%82"]) {
+    const response = await app.request(`/api/commands/${id}/cooperative/assertions`, { headers: headers("operator") });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid assertion parameters" });
+  }
   expect(calls).toHaveLength(0);
   const empty = await app.request(path, { headers: headers("operator") });
   expect(await empty.json()).toEqual({ assertions: [], nextCursor: null });
