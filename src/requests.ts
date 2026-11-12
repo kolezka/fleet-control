@@ -156,7 +156,7 @@ export class Requests {
       const r = this.get(input.requestId);
       const actor = nonEmpty(input.actor, "actor");
       if (r.status === "resolved" || r.status === "acknowledged") {
-        if (r.response === input.response && r.resolvedBy === actor) return r; // the same answer retried
+        if (r.response === input.response && r.resolvedBy === actor && r.revision === input.expectedRevision && (r.resolutionNote ?? "") === (input.note ?? "")) return r;
         throw new RequestError("conflict", `${r.id} was already answered "${r.response}" by ${r.resolvedBy} at ${r.resolvedAt}`);
       }
       if (r.status !== "open") throw new RequestError("conflict", `${r.id} is ${r.status}; it cannot be answered`);
