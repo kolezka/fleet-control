@@ -89,8 +89,15 @@ export class Deliverer {
       const { status, detail } = classify(result);
       return this.commands.transition(id, status, "service", detail);
     } finally {
-      // Cleanup can fail and mask the result; a crash or failed mkdtemp can leave files behind.
-      await this.io.rm(dir);
+      try {
+        await this.io.rm(dir);
+      } catch {
+        try {
+          console.warn("Delivery cleanup failed");
+        } catch {
+          // A broken logger must not replace the delivery outcome.
+        }
+      }
     }
   }
 }
