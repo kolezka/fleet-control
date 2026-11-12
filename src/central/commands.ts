@@ -1,5 +1,6 @@
 import type { SQL, TransactionSQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { validId } from "./identity-registry.ts";
 import { CommandError, MAX_TEXT, type Command, type CommandStatus } from "../commands.ts";
 
 export type CentralCommandEvent = { seq: string; commandId: string; status: CommandStatus; actor: string; detail: string; at: string };
@@ -92,6 +93,7 @@ export class CentralCommands {
         }
         return { command: existing, created: false };
       }
+      if (bounded && !validId(input.hostId)) throw new CommandError("invalid", "invalid cooperative hostId");
       const at = this.now().toISOString();
       const id = `cmd-${crypto.randomUUID()}`;
       const [command] = await tx<CentralCommand[]>`INSERT INTO central_commands (id, idempotency_key, host_id, target, actor, text, status, created_at, updated_at)

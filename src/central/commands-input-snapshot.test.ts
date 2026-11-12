@@ -85,3 +85,15 @@ for (const mode of ["submit", "submitBounded"] as const) {
     expect(f.eventActors).toEqual([]);
   });
 }
+
+test("submitBounded replays an existing command with a previously accepted host", async () => {
+  const original = { ...input(), hostId: " old-host " };
+  const existing: CentralCommand = { ...original, text: original.text.trim(), id: "cmd-existing", status: "queued", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+  const f = fixture(existing);
+  const pending = f.store.submitBounded(original);
+  await f.waiting;
+  f.release();
+  expect(await pending).toEqual({ command: existing, created: false });
+  expect(f.commands).toEqual([]);
+  expect(f.eventActors).toEqual([]);
+});
