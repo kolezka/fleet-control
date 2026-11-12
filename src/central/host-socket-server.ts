@@ -16,6 +16,8 @@ export function createHostSocketServer(options: {
     onInventory: options.onInventory,
   });
 
+  const generations = new WeakMap<ServerWebSocket<HostSocketData>, object>();
+
   return {
     listHosts: () => sockets.listHosts(),
     fetch(request: Request, server: Pick<Server<HostSocketData>, "upgrade">): Response | undefined {
@@ -35,15 +37,20 @@ export function createHostSocketServer(options: {
     websocket: {
       maxPayloadLength: MAX_AGENT_MESSAGE_BYTES,
       open(socket: ServerWebSocket<HostSocketData>) {
-        sockets.connect(socket.data.hostId, socket);
+        if (sockets.connect(socket.data.hostId, socket)) generations.set(socket, {});
       },
       message(socket: ServerWebSocket<HostSocketData>, message: string | Buffer) {
-        void sockets.message(socket.data.hostId, socket, message).catch(() => {
-          sockets.disconnect(socket.data.hostId, socket);
+        const generation = generations.get(socket);
+        const hostId = socket.data.hostId;
+        void sockets.message(hostId, socket, message).catch(() => {
+          if (!generation || generations.get(socket) !== generation) return;
+          generations.delete(socket);
+          sockets.disconnect(hostId, socket);
           socket.close(1011, "inventory failed");
         });
       },
       close(socket: ServerWebSocket<HostSocketData>) {
+        generations.delete(socket);
         sockets.disconnect(socket.data.hostId, socket);
       },
     },
