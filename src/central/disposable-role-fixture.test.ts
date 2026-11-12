@@ -21,6 +21,17 @@ test("disposable role rejects hostile ambient PGDATABASE before connecting", asy
   }
 });
 
+test("non-ambiguous cleanup failure currently masks an earlier test failure", async () => {
+  const startupError = new Error("startup failed");
+  const cleanupError = new Error("cleanup failed");
+  const fixture = { role: "cooperative_runtime_test", runtimeUrl: "", cleanup: async () => { throw cleanupError; } };
+  const run = async () => {
+    try { throw startupError; }
+    finally { await cleanupCooperativeRole(fixture, "cooperative_test_example", false); }
+  };
+  await expect(run()).rejects.toBe(cleanupError);
+});
+
 test("ambiguous fixture close failure does not replace startup failure", async () => {
   const startupError = new Error("startup failed");
   const messages: string[] = [];
