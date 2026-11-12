@@ -1,4 +1,5 @@
 import { SQL } from "bun";
+import { constants } from "node:fs";
 import { lstat, open, unlink } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { CentralAuth, type Credential } from "./auth.ts";
@@ -22,7 +23,8 @@ import type { CooperativeTransactionRunner } from "./incarnations.ts";
 // Set COOPERATIVE_DATABASE_URL to a trusted disposable local PostgreSQL database,
 // COOPERATIVE_RUNTIME_DATABASE_URL to a pre-created restricted disposable login,
 // COOPERATIVE_SCHEMA to cooperative_test_<32 lowercase hex>, and
-// COOPERATIVE_CREDENTIALS_FILE to a private JSON credentials array, and
+// COOPERATIVE_CREDENTIALS_FILE to an absolute path of a private (0600, current user, no
+// final symlink) JSON credentials array, and
 // COOPERATIVE_INCARNATION_FILE to an absolute path that does not exist yet. Exactly one
 // supervisor and at least one operator are required. The new incarnation secret is
 // written once to that file (exclusive create, mode 0600) and never printed.
@@ -58,6 +60,29 @@ function parseCredentials(text: string): Credential[] {
   return credentials;
 }
 
+// Same checks as the adapter config: absolute path, no final symlink, regular file owned by
+// this user with no group or other access, at most 1 MiB.
+async function readPrivateText(path: string): Promise<string> {
+  if (!isAbsolute(path)) throw new Error("credentials path must be absolute");
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    const limit = 1024 * 1024;
+    if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > limit) throw new Error("credentials file must be private");
+    const bytes = new Uint8Array(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error("credentials file too large");
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+  } finally {
+    await file.close();
+  }
+}
+
 async function missing(path: string) {
   try { await lstat(path); return false; }
   catch (error) { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
@@ -87,7 +112,7 @@ export async function startCooperative(env: Record<string, string | undefined> =
   // Checked early so no schema is provisioned; the exclusive create below is the real guard.
   if (!(await missing(config.incarnationFile))) throw new Error("incarnation file must not exist");
   let credentials: Credential[];
-  try { credentials = parseCredentials(await Bun.file(config.credentialsFile).text()); }
+  try { credentials = parseCredentials(await readPrivateText(config.credentialsFile)); }
   catch { throw new Error("invalid or unreadable cooperative credentials file"); }
   const auth = new CentralAuth(credentials);
   const supervisor = credentials.find((c) => c.principal.role === "supervisor")!.principal;

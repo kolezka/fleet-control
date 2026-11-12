@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cooperativeConfig, runCooperativeCli, startCooperative } from "./cooperative-main.ts";
@@ -69,10 +69,10 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
   const incarnationFile = join(dir, "incarnation.json");
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
   const operator = crypto.randomUUID(), supervisor = crypto.randomUUID();
-  await Bun.write(credentialsFile, JSON.stringify([
+  await writeFile(credentialsFile, JSON.stringify([
     { tokenHash: hash(operator), principal: { role: "operator", name: "operator" } },
     { tokenHash: hash(supervisor), principal: { role: "supervisor", name: "owner", principalId: "owner", hostId: "host", session: "session" } },
-  ]));
+  ]), { mode: 0o600 });
   let running: Awaited<ReturnType<typeof startCooperative>> | undefined;
   let fixture: Awaited<ReturnType<typeof disposableCooperativeRole>> | undefined;
   const admin = new SQL(databaseUrl!);
