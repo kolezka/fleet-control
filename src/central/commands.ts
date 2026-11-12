@@ -168,6 +168,7 @@ export class CentralCommands {
 
   async listScoped(status: CommandStatus | undefined, scope: SupervisorCommandScope, guard: SupervisorReadGuard, pagination: CommandListPagination = {}): Promise<CommandPage> {
     const { hostId, session } = scope;
+    if (!validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     const { limit, cursor } = pagination;
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
