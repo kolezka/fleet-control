@@ -2,14 +2,16 @@
 // adapter over loopback MCP, claims one synthetic command and reports its lifecycle.
 // Opt-in only: spends model tokens. Needs CENTRAL_TEST_DATABASE_URL for the disposable
 // test database (127.0.0.1:57507/fleet_control_test) and a logged-in \`claude\` CLI.
-// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--failure] [--replacement]
+// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--failure] [--real-work] [--replacement]
 // --failure has an agent refuse a task, retry a report, send an invalid transition and claim an empty queue.
 // --replacement then replaces the incarnation, checks that an agent on the old adapter
 // is fenced, that an agent on a new adapter claims and reports the next command, and that
 // the operator can settle only the claim of the inactive incarnation.
+// --real-work has an agent with only the Read tool answer a question about fixture files in a
+// separate workspace (no secrets there), and checks the answer and that the files are unchanged.
 import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { disposableCooperativeRole } from "../src/central/disposable-role-fixture.ts";
@@ -39,12 +41,16 @@ async function start(entry: string, env: Record<string, string>, children: Child
 
 type AgentRun = { exit: number; result: unknown; stdout: string; stderr: string };
 
-async function runAgent(claudeBin: string, model: string, directory: string, name: string, adapterUrl: string, local: string, prompt: string): Promise<AgentRun> {
+const fleetTools = ["mcp__fleet__cooperative_claim", "mcp__fleet__cooperative_report"];
+const writingTools = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task"];
+
+async function runAgent(claudeBin: string, model: string, directory: string, name: string, adapterUrl: string, local: string, prompt: string, extraTools: string[] = [], cwd = directory): Promise<AgentRun> {
   const mcpConfig = join(directory, `${name}-mcp.json`);
   await writeFile(mcpConfig, JSON.stringify({ mcpServers: { fleet: { type: "http", url: `${adapterUrl}/mcp`, headers: { Authorization: `Bearer ${local}` } } } }), { mode: 0o600, flag: "wx" });
   const agent = Bun.spawn([claudeBin, "-p", prompt, "--model", model, "--mcp-config", mcpConfig, "--strict-mcp-config",
-    "--allowedTools", "mcp__fleet__cooperative_claim,mcp__fleet__cooperative_report", "--output-format", "json", "--max-turns", "12"],
-    { cwd: directory, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", USER: process.env.USER ?? "", TERM: "dumb" }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    "--allowedTools", [...fleetTools, ...extraTools].join(","), "--disallowedTools", writingTools.join(","),
+    "--output-format", "json", "--max-turns", "12"],
+    { cwd, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", USER: process.env.USER ?? "", TERM: "dumb" }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const timer = setTimeout(() => agent.kill(), 180_000);
   const [stdout, stderr, exit] = await Promise.all([new Response(agent.stdout).text(), new Response(agent.stderr).text(), agent.exited]);
   clearTimeout(timer);
@@ -54,10 +60,28 @@ async function runAgent(claudeBin: string, model: string, directory: string, nam
   return { exit, result, stdout, stderr };
 }
 
-export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude", model = "haiku", replacement = false, failure = false) {
+// Fixture with random host names, so the answer cannot be guessed without reading the files.
+function realWorkFixture() {
+  const name = () => `host-${randomBytes(3).toString("hex")}`;
+  const rows = Array.from({ length: 8 }, (_, index) => ({ host: name(), status: index % 3 === 1 ? "DOWN" : "UP" }));
+  const files: Record<string, string> = {
+    "hosts.txt": rows.map((row) => `${row.host} ${row.status}`).join("\n") + "\n",
+    "README.md": "Inventory fixture for a local smoke test. Each line of hosts.txt is: <host> <UP|DOWN>.\n",
+  };
+  const down = rows.filter((row) => row.status === "DOWN").map((row) => row.host);
+  return { files, expected: `${down.length}: ${down.join(", ")}` };
+}
+
+const snapshot = async (directory: string) => {
+  const names = (await readdir(directory)).sort();
+  return Promise.all(names.map(async (name) => `${name}:${hash(await readFile(join(directory, name), "utf8"))}`));
+};
+
+export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude", model = "haiku", replacement = false, failure = false, realWork = false) {
   const schema = `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
   const directory = await mkdtemp(join(tmpdir(), "fleet-real-agent-"));
   const children: Child[] = [];
+  const workspaces: string[] = [];
   const operator = token(), supervisor = token(), local = token();
   const principal = { role: "supervisor" as const, name: "owner", principalId: "owner", hostId: "host", session: "session" };
   const admin = new SQL(databaseUrl);
@@ -139,6 +163,37 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
           && JSON.stringify(firstAfterFailure.events) === JSON.stringify(first.events),
       };
     }
+    let realWorkResult: Record<string, unknown> | null = null;
+    if (realWork) {
+      // The workspace is not inside the directory that holds tokens and configs.
+      const workspace = await mkdtemp(join(tmpdir(), "fleet-real-work-"));
+      workspaces.push(workspace);
+      const fixture = realWorkFixture();
+      for (const [name, content] of Object.entries(fixture.files)) await writeFile(join(workspace, name), content, { flag: "wx" });
+      const before = await snapshot(workspace);
+      const workSubmit = await fetch(`${central.url}/api/commands`, { method: "POST", headers: operatorHeaders, body: JSON.stringify({ hostId: "host", target: "session", text: "Read hosts.txt in your working directory. Report the number of hosts with status DOWN and their names in file order, formatted exactly as \"<count>: <name>, <name>\".", idempotencyKey: "real-agent-smoke-work" }) });
+      if (workSubmit.status !== 201) throw new Error(`submit failed: ${workSubmit.status}`);
+      const workId = ((await workSubmit.json()) as { command: { id: string } }).command.id;
+      const workPrompt = [
+        "You are a Fleet Control supervisor in a local test. Use the fleet MCP tools and the Read tool only.",
+        "1. Call cooperative_claim with requestId \"claim-w\".",
+        "2. If it returns a command, report requestId \"w-accepted\", status \"accepted\", detail \"accepted\".",
+        "3. Report requestId \"w-running\", status \"running\", detail \"running\".",
+        "4. Do the task in the command text using the Read tool on files in your working directory only, then report requestId \"w-completed\", status \"completed\", detail set to exactly the formatted answer.",
+        "If you cannot do the task, report requestId \"w-failed\", status \"failed\" with the reason instead.",
+        "Never claim again and never retry with a different requestId. Finish with one line: DONE <commandId>.",
+      ].join("\n");
+      const worker = await runAgent(claudeBin, model, directory, "work", adapter.url!, local, workPrompt, ["Read"], workspace);
+      outputs.push(worker.stdout, worker.stderr);
+      const work = await inspect(workId, central.incarnationId!);
+      const filesUnchanged = JSON.stringify(await snapshot(workspace)) === JSON.stringify(before);
+      const answer = work.events.find((event) => event.status === "completed")?.detail ?? null;
+      realWorkResult = {
+        agent: { exit: worker.exit, result: worker.result }, work, expected: fixture.expected, answer, filesUnchanged,
+        ok: work.claim?.requestId === "claim-w" && work.events.map((event) => event.status).join(",") === "accepted,running,completed"
+          && answer?.trim() === fixture.expected && filesUnchanged,
+      };
+    }
     let replacementResult: Record<string, unknown> | null = null;
     if (replacement) {
       const nextSubmit = await fetch(`${central.url}/api/commands`, { method: "POST", headers: operatorHeaders, body: JSON.stringify({ hostId: "host", target: "session", text: "Synthetic smoke task: compute 6 * 7 and report only the number.", idempotencyKey: "real-agent-smoke-next" }) });
@@ -190,7 +245,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       };
     }
     const leaked = secrets.some((secret) => outputs.some((text) => text.includes(secret)));
-    return { agentExit, agent: agentResult, agentStderr: redact(agentErr.slice(-1500)), leaked, ...first, failure: failureResult, replacement: replacementResult };
+    return { agentExit, agent: agentResult, agentStderr: redact(agentErr.slice(-1500)), leaked, ...first, failure: failureResult, realWork: realWorkResult, replacement: replacementResult };
   } finally {
     for (const child of children) child.process.kill("SIGTERM");
     await Promise.allSettled(children.map((child) => child.process.exited));
@@ -198,6 +253,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
     await admin.close();
     await fixture.cleanup();
     await rm(directory, { recursive: true, force: true });
+    for (const workspace of workspaces) await rm(workspace, { recursive: true, force: true });
   }
 }
 
@@ -208,10 +264,12 @@ if (import.meta.main) {
   }
   const replacement = process.argv.includes("--replacement");
   const failure = process.argv.includes("--failure");
-  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement, failure);
+  const realWork = process.argv.includes("--real-work");
+  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement, failure, realWork);
   console.log(JSON.stringify(result, null, 2));
   const statuses = result.events.map((event) => event.status).join(",");
   const replaced = !replacement || (result.replacement?.fenced === true && result.replacement?.freshCompleted === true && result.replacement?.settledOnlyInactive === true);
   const failed = !failure || result.failure?.ok === true;
-  process.exit(failed && result.claim && statuses === "accepted,running,completed" && !result.leaked && replaced ? 0 : 1);
+  const worked = !realWork || result.realWork?.ok === true;
+  process.exit(failed && worked && result.claim && statuses === "accepted,running,completed" && !result.leaked && replaced ? 0 : 1);
 }

@@ -1,6 +1,6 @@
 # Migration from the legacy central entry point
 
-Status: proposal only. Nothing here is implemented. The owner has to choose an option before any code is written.
+Status: decided 2026-11-12. The owner confirmed there is no legacy central data worth keeping, so option A applies: no migration. Nothing in this document will be implemented unless that changes.
 
 ## Current state
 
