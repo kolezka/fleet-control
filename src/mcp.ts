@@ -40,7 +40,7 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
   });
 
   server.registerTool("command_deliver", {
-    description: "Retry delivery of a queued command (fleet send refused it before pasting). Does nothing for any other status; delivery_unknown is never retried automatically.",
+    description: "Attempt delivery of a queued command. Other statuses are unchanged; investigate delivery_unknown rather than retrying it.",
     inputSchema: { id: z.string() },
   }, async ({ id }) => {
     try { const c = await deliverer.deliver(id); return json({ command: c, events: commands.events(id) }); } catch (e) { return failure(e); }

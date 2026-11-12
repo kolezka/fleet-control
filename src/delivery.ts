@@ -44,12 +44,10 @@ export function messageFor(c: Command): string {
   ].join("\n");
 }
 
-// Exit 0 means delivered. "not sent" or "no session" on stderr means fleet send stopped before pasting, so a retry is safe.
-// Anything else may have left text in the pane, so it is recorded as unknown and never retried by itself.
-export function classify(r: SendResult): { status: "delivered" | "queued" | "delivery_unknown"; detail: string } {
+// Sender output cannot prove no effect. Unconfirmed results are unknown and never retried automatically.
+export function classify(r: SendResult): { status: "delivered" | "delivery_unknown"; detail: string } {
   if (r.exitCode === 0 && /delivered/.test(r.stdout)) return { status: "delivered", detail: r.stdout };
   const detail = `fleet send exit ${r.exitCode}: ${r.stderr || r.stdout || "no output"}`;
-  if (r.exitCode !== 0 && /not sent|^no session /m.test(r.stderr)) return { status: "queued", detail };
   return { status: "delivery_unknown", detail };
 }
 
