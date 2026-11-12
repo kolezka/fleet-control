@@ -40,9 +40,18 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
     const path = env.COOPERATIVE_ADAPTER_CONFIG_FILE;
     if (!path) throw new Error("invalid configuration");
     const config = await readPrivateJson(path);
-    if (!exactObject(config, ["centralUrl", "localToken", "supervisorToken", "incarnationFile"])) throw new Error("invalid configuration");
+    const base = ["centralUrl", "localToken", "supervisorToken", "incarnationFile"] as const;
+    if (!exactObject(config, [...base]) && !exactObject(config, [...base, "centralCaFile"])) throw new Error("invalid configuration");
     const central = new URL(config.centralUrl);
     if (!(["127.0.0.1", "[::1]"].includes(central.hostname))) throw new Error("invalid configuration");
+    // Optional PEM CA for a self-signed loopback central. Public, so no mode rule; https only.
+    const caFile = (config as { centralCaFile?: string }).centralCaFile;
+    let ca: string | undefined;
+    if (caFile !== undefined) {
+      if (!isAbsolute(caFile) || central.protocol !== "https:") throw new Error("invalid configuration");
+      ca = await Bun.file(caFile).text();
+      if (!ca.includes("-----BEGIN CERTIFICATE-----")) throw new Error("invalid configuration");
+    }
     const incarnation = await readPrivateJson(config.incarnationFile);
     if (!exactObject(incarnation, ["incarnationId", "token"])) throw new Error("invalid configuration");
     const handler = createCooperativeAdapter({
@@ -51,7 +60,7 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
       supervisorToken: config.supervisorToken,
       incarnationId: incarnation.incarnationId,
       incarnationToken: incarnation.token,
-      centralFetch: (input, init) => fetch(input, init),
+      centralFetch: (input, init) => fetch(input, ca ? { ...init, tls: { ca } } as RequestInit : init),
       allowLoopbackHttpForTests: true,
       requestTimeoutMs,
     });

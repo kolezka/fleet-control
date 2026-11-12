@@ -26,6 +26,11 @@ test("adapter process configuration requires private files and a loopback centra
       { ...config, centralUrl: "http://127.0.0.1:4873/other" },
       { ...config, extra: true },
       { ...config, incarnationFile: "relative.json" },
+      // A CA file needs an https central and an absolute path holding a PEM certificate.
+      { ...config, centralCaFile: incarnationFile },
+      { ...config, centralUrl: "https://127.0.0.1:4873/mcp", centralCaFile: "relative.pem" },
+      { ...config, centralUrl: "https://127.0.0.1:4873/mcp", centralCaFile: incarnationFile },
+      { ...config, centralUrl: "https://127.0.0.1:4873/mcp", centralCaFile: join(dir, "missing.pem") },
     ]) {
       await saveConfig(invalid);
       await expect(startCooperativeAdapter(env)).rejects.toThrow("cooperative adapter startup failed");
