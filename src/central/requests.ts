@@ -8,6 +8,7 @@ export type RequestMutationGuard = (tx: SQL) => Promise<void>;
 
 type Event = { seq: string; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string };
 type CreateInput = { runId: string; origin: string; expectedRevision: number; kind: RequestKind; question: string; proposedAction?: string; scope?: string; evidence?: string[]; allowedResponses?: string[]; blocking?: boolean };
+const validEncoding = (value: unknown): value is string => typeof value === "string" && value.isWellFormed() && !value.includes("\0");
 const nonEmpty = (value: string, name: string) => {
   if (typeof value !== "string" || !value.trim()) throw new RequestError("invalid", `${name} is required`);
   return value.trim();
@@ -164,6 +165,7 @@ export class CentralRequests {
   }
 
   private async readGate(runId: string, phase: string, revision: number, scope?: { owner: string; guard: RequestMutationGuard }): Promise<{ approved: boolean; reason: string; requestId: string | null }> {
+    if (!validEncoding(runId) || !validEncoding(phase) || (scope && !validEncoding(scope.owner))) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, runId, true);
       if (scope && run.orchestrator !== scope.owner) throw new RequestError("forbidden", "access denied");
@@ -177,9 +179,15 @@ export class CentralRequests {
     }, scope?.guard);
   }
 
-  async run(id: string): Promise<Run> { return this.getRun(this.db, id); }
+  async run(id: string): Promise<Run> {
+    if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
+    return this.getRun(this.db, id);
+  }
   async runs(): Promise<Run[]> { return this.db<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs ORDER BY id`; }
-  async get(id: string): Promise<SupervisorRequest> { return this.getRequest(this.db, id); }
+  async get(id: string): Promise<SupervisorRequest> {
+    if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
+    return this.getRequest(this.db, id);
+  }
   async list(filter: { runId?: string; status?: RequestStatus; limit?: number; cursor?: string } = {}): Promise<{ requests: SupervisorRequest[]; nextCursor: string | null }> {
     const runId = filter.runId ?? null, status = filter.status ?? null, limit = filter.limit ?? 100;
     if ([runId, status].some((value) => value !== null && (typeof value !== "string" || !value.isWellFormed() || value.includes("\0")))) throw new RequestError("invalid", "invalid request filter encoding");
