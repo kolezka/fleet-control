@@ -94,10 +94,12 @@ export class Requests {
         return existing;
       }
       if (!orchestrator.isWellFormed()) throw new RequestError("invalid", "invalid orchestrator encoding");
+      const phase = input.phase;
+      if (!phase.isWellFormed()) throw new RequestError("invalid", "invalid phase encoding");
       const at = this.now().toISOString();
       this.db.query("INSERT INTO runs (id, orchestrator, phase, revision, phase_status, updated_at) VALUES (?, ?, ?, 1, 'planned', ?)")
-        .run(runId, orchestrator, nonEmpty(input.phase, "phase"), at);
-      this.event(null, runId, "run_registered", orchestrator, `phase ${input.phase} revision 1`, at);
+        .run(runId, orchestrator, nonEmpty(phase, "phase"), at);
+      this.event(null, runId, "run_registered", orchestrator, `phase ${phase} revision 1`, at);
       return this.run(runId);
     })();
   }
