@@ -63,6 +63,7 @@ export class CentralRequests {
   async registerRun(input: { runId: string; orchestrator: string; phase: string }, guard?: RequestMutationGuard): Promise<Run> {
     input = { runId: input.runId, orchestrator: input.orchestrator, phase: input.phase };
     const id = nonEmpty(input.runId, "runId"), actor = nonEmpty(input.orchestrator, "orchestrator");
+    if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const existing = await tx<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs WHERE id = ${id} FOR UPDATE`;
       if (existing[0]) {
@@ -78,6 +79,7 @@ export class CentralRequests {
 
   async updatePhase(input: { runId: string; actor: string; expectedRevision: number; phase?: string; phaseStatus: string; newRevision: boolean }, guard?: RequestMutationGuard): Promise<{ run: Run; staled: string[] }> {
     input = { runId: input.runId, actor: input.actor, expectedRevision: input.expectedRevision, phase: input.phase, phaseStatus: input.phaseStatus, newRevision: input.newRevision };
+    if (!validEncoding(input.runId)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, input.runId, true);
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
@@ -100,6 +102,7 @@ export class CentralRequests {
 
   async create(input: CreateInput, guard?: RequestMutationGuard): Promise<SupervisorRequest> {
     input = { runId: input.runId, origin: input.origin, expectedRevision: input.expectedRevision, kind: input.kind, question: input.question, proposedAction: input.proposedAction, scope: input.scope, evidence: input.evidence?.slice(), allowedResponses: input.allowedResponses?.slice(), blocking: input.blocking };
+    if (!validEncoding(input.runId)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const run = await this.getRun(tx, input.runId, true);
       if (input.origin !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.origin} is not the orchestrator of ${run.id}`);
@@ -115,6 +118,7 @@ export class CentralRequests {
 
   async resolve(input: { requestId: string; response: string; actor: string; expectedRevision: number; note?: string }): Promise<SupervisorRequest> {
     input = { requestId: input.requestId, response: input.response, actor: input.actor, expectedRevision: input.expectedRevision, note: input.note };
+    if (!validEncoding(input.requestId)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const r = await this.getRequest(tx, input.requestId, true), run = await this.getRun(tx, r.runId, true), actor = nonEmpty(input.actor, "actor"), note = input.note ?? "";
       if (input.expectedRevision !== r.revision || run.revision !== r.revision || run.phase !== r.phase) throw new RequestError("conflict", `${r.id} has a stale revision`);
@@ -141,6 +145,7 @@ export class CentralRequests {
 
   private async changeStatus(input: { requestId: string; actor: string }, status: "acknowledged" | "withdrawn", reason?: string, guard?: RequestMutationGuard): Promise<SupervisorRequest> {
     input = { requestId: input.requestId, actor: input.actor };
+    if (!validEncoding(input.requestId)) throw new RequestError("invalid", "invalid request encoding");
     return this.transaction(async (tx) => {
       const r = await this.getRequest(tx, input.requestId, true), run = await this.getRun(tx, r.runId, true);
       if (input.actor !== run.orchestrator) throw new RequestError("forbidden", guard ? "access denied" : `${input.actor} is not the orchestrator of ${run.id}`);
