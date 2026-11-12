@@ -110,13 +110,18 @@ export class Requests {
       if (input.expectedRevision !== run.revision) {
         throw new RequestError("conflict", `run ${run.id} is at revision ${run.revision}, not ${input.expectedRevision}`);
       }
-      const phase = input.phase?.trim() || run.phase;
+      const requestedPhase = input.phase;
+      const phaseStatus = input.phaseStatus;
+      if ((requestedPhase != null && !requestedPhase.isWellFormed()) || !phaseStatus.isWellFormed()) {
+        throw new RequestError("invalid", "invalid phase encoding");
+      }
+      const phase = requestedPhase?.trim() || run.phase;
       const changesWork = input.newRevision || phase !== run.phase;
       const revision = changesWork ? run.revision + 1 : run.revision;
       const at = this.now().toISOString();
       this.db.query("UPDATE runs SET phase = ?, revision = ?, phase_status = ?, updated_at = ? WHERE id = ?")
-        .run(phase, revision, nonEmpty(input.phaseStatus, "phaseStatus"), at, run.id);
-      this.event(null, run.id, "phase_updated", input.actor, `${phase} r${revision} ${input.phaseStatus}`, at);
+        .run(phase, revision, nonEmpty(phaseStatus, "phaseStatus"), at, run.id);
+      this.event(null, run.id, "phase_updated", input.actor, `${phase} r${revision} ${phaseStatus}`, at);
       const staled: string[] = [];
       if (changesWork) {
         for (const r of this.list({ runId: run.id, status: "open" })) {
