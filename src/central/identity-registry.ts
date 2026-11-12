@@ -48,6 +48,16 @@ export class SupervisorIdentityRegistry {
     return this.runner ? this.runner(query) : query(this.db);
   }
 
+  // The caller must retain this transaction until its protected work commits or rolls back.
+  async lockActive(tx: import("bun").TransactionSQL, identity: SupervisorIdentity): Promise<boolean> {
+    identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
+    if (!validIdentity(identity)) return false;
+    const rows = await tx`SELECT principal_id FROM central_supervisor_identities_v2
+      WHERE principal_id = ${identity.principalId} AND name = ${identity.name} AND host_id = ${identity.hostId}
+        AND session = ${identity.session} AND retired = FALSE FOR UPDATE`;
+    return rows.length === 1;
+  }
+
   async retire(identity: SupervisorIdentity): Promise<void> {
     identity = identity && { principalId: identity.principalId, name: identity.name, hostId: identity.hostId, session: identity.session };
     if (!validIdentity(identity)) throw new Error("invalid supervisor identity");
