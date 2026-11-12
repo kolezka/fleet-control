@@ -140,7 +140,7 @@ export class Commands {
 
   events(id?: string, afterSeq = 0): CommandEvent[] {
     const cols = "seq, command_id AS commandId, status, actor, detail, at";
-    return id
+    return id !== undefined
       ? this.db.query<CommandEvent, [string, number]>(`SELECT ${cols} FROM command_events WHERE command_id = ? AND seq > ? ORDER BY seq`).all(id, afterSeq)
       : this.db.query<CommandEvent, [number]>(`SELECT ${cols} FROM command_events WHERE seq > ? ORDER BY seq`).all(afterSeq);
   }
