@@ -94,7 +94,10 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
     await writeFile(untrustedFile, JSON.stringify(adapterConfig({})), { mode: 0o600 });
     untrusted = await startCooperativeAdapter({ COOPERATIVE_ADAPTER_CONFIG_FILE: untrustedFile });
     const refused = await claim(untrusted.url);
-    expect(await refused.text()).not.toContain(command.id);
+    expect(refused.status).toBe(502);
+    const refusedText = await refused.text();
+    expect(refusedText).toContain("outcome unknown");
+    expect(refusedText).not.toContain(command.id);
     expect(await state()).toBe("queued");
     const trustedFile = join(dir, "adapter-trusted.json");
     await writeFile(trustedFile, JSON.stringify(adapterConfig({ centralCaFile: cert })), { mode: 0o600 });
@@ -106,8 +109,7 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
     expect(await state()).not.toBe("queued");
   } finally {
     try {
-      await untrusted?.stop();
-      await trusted?.stop();
+      await Promise.allSettled([untrusted?.stop(), trusted?.stop()]);
       await running?.stop();
       if (owned) await admin`DROP SCHEMA IF EXISTS ${admin(name)} CASCADE`;
     } finally {

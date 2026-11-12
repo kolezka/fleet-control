@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -20,6 +21,27 @@ async function readPrivateJson(path: string): Promise<unknown> {
     }
     if (length > 64 * 1024) throw new Error("invalid configuration");
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
+  } finally {
+    await file.close();
+  }
+}
+
+// A CA is public, so no owner or mode rule, but it must be a small regular file and not a symlink.
+async function readPublicPem(path: string): Promise<string> {
+  const limit = 64 * 1024;
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > limit) throw new Error("invalid configuration");
+    const bytes = new Uint8Array(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error("invalid configuration");
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
   } finally {
     await file.close();
   }
@@ -49,8 +71,8 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
     let ca: string | undefined;
     if (caFile !== undefined) {
       if (!isAbsolute(caFile) || central.protocol !== "https:") throw new Error("invalid configuration");
-      ca = await Bun.file(caFile).text();
-      if (!ca.includes("-----BEGIN CERTIFICATE-----")) throw new Error("invalid configuration");
+      ca = await readPublicPem(caFile);
+      new X509Certificate(ca);
     }
     const incarnation = await readPrivateJson(config.incarnationFile);
     if (!exactObject(incarnation, ["incarnationId", "token"])) throw new Error("invalid configuration");
