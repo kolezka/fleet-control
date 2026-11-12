@@ -199,7 +199,7 @@ export class CentralCommands {
     if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
     const scopeHostId = scope?.hostId;
     const scopeTarget = scope?.target;
-    if ((scopeHostId !== undefined && !validScopeValue(scopeHostId)) || (scopeTarget !== undefined && !validScopeValue(scopeTarget))) throw new CommandError("invalid", "invalid scope");
+    if ((scopeHostId !== undefined && (!validScopeValue(scopeHostId) || !scopeHostId.isWellFormed())) || (scopeTarget !== undefined && (!validScopeValue(scopeTarget) || !scopeTarget.isWellFormed()))) throw new CommandError("invalid", "invalid scope");
     const limit = pagination.limit ?? 100;
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new CommandError("invalid", "limit must be an integer between 1 and 1000");
     const cursorValue = pagination.cursor;
@@ -238,7 +238,7 @@ export class CentralCommands {
     if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
     const scopeHostId = scope?.hostId;
     const scopeTarget = scope?.target;
-    if ((scopeHostId !== undefined && !validScopeValue(scopeHostId)) || (scopeTarget !== undefined && !validScopeValue(scopeTarget))) throw new CommandError("invalid", "invalid scope");
+    if ((scopeHostId !== undefined && (!validScopeValue(scopeHostId) || !scopeHostId.isWellFormed())) || (scopeTarget !== undefined && (!validScopeValue(scopeTarget) || !scopeTarget.isWellFormed()))) throw new CommandError("invalid", "invalid scope");
     const limit = pagination.limit ?? 4;
     if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new CommandError("invalid", "invalid limit");
     const cursorValue = pagination.cursor;
