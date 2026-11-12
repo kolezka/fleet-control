@@ -6,7 +6,7 @@ export const MAX_SESSION_LENGTH = 256;
 
 export function validInventorySessions(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= MAX_INVENTORY_SESSIONS &&
-    value.every((session) => nonempty(session) && session.length <= MAX_SESSION_LENGTH && !/[\x00-\x1f\x7f]/.test(session)) &&
+    value.every((session) => nonempty(session) && session.isWellFormed() && session.length <= MAX_SESSION_LENGTH && !/[\x00-\x1f\x7f]/.test(session)) &&
     new Set(value).size === value.length;
 }
 
