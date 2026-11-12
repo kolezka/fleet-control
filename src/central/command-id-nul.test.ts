@@ -61,7 +61,8 @@ for (const method of ["get", "getBounded", "events", "getScoped", "transitionSco
       await invoke(method, command.id);
       expect(queries.some(({ values }) => values.includes(command.id))).toBe(true);
       const scoped = method.endsWith("Scoped");
-      expect(counts()).toEqual({ guards: scoped ? 1 : 0, transactions: scoped ? 1 : 0, runners: useRunner && (method === "get" || method === "getBounded") ? 1 : 0 });
+      // With a runner, every operation runs inside it instead of its own transaction.
+      expect(counts()).toEqual({ guards: scoped ? 1 : 0, transactions: scoped && !useRunner ? 1 : 0, runners: useRunner ? 1 : 0 });
     });
   }
 }

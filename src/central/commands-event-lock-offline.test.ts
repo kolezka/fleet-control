@@ -47,12 +47,13 @@ for (const mode of ["submit", "submitBounded", "transition", "transitionScoped",
       if (!exists) {
         await expect(operation).rejects.toThrow("central command event lock row missing");
         expect(f.snapshot()).toEqual(before);
-        expect(f.calls).toEqual(mode === "submit" || mode === "submitBounded" || mode === "transitionScoped" ? ["guard", "lock"] : ["lock"]);
+        // The runner guards every mode; transitionScoped also runs its own guard.
+        expect(f.calls).toEqual(mode === "transitionScoped" ? ["guard", "guard", "lock"] : ["guard", "lock"]);
       } else {
         await operation;
         expect(f.calls).toContain("event");
         expect(f.snapshot().events).toBe(1);
-        if (mode === "submit" || mode === "submitBounded" || mode === "transitionScoped") expect(f.snapshot().guardWrites).toBe(1);
+        expect(f.snapshot().guardWrites).toBe(mode === "transitionScoped" ? 2 : 1);
         if (mode === "reconcileAfterRestart") expect(f.snapshot().commands[0]!.status).toBe("delivery_unknown");
       }
     });
