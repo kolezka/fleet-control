@@ -131,6 +131,30 @@ describe("isolated cooperative adapter", () => {
     expect(calls).toBe(1);
   });
 
+  test("rejects an escaped incarnation token in a nested response key", async () => {
+    const escapedKey = `\\u0063${incarnationToken.slice(1)}`;
+    const upstream = `{"jsonrpc":"2.0","id":1,"result":{"nested":{"${escapedKey}":true}}}`;
+    expect(upstream).not.toContain(incarnationToken);
+    expect(JSON.parse(upstream).result.nested).toEqual({ [incarnationToken]: true });
+    let calls = 0;
+    const { request } = fixture(async () => { calls++; return new Response(upstream, { headers: { "content-type": "application/json" } }); });
+    const response = await request();
+    const visible = `${JSON.stringify([...response.headers])} ${await response.text()}`;
+    expect(response.status).toBe(502);
+    expect(visible).toContain("outcome unknown");
+    for (const secret of [localToken, supervisorToken, incarnationToken, incarnationId]) expect(visible).not.toContain(secret);
+    expect(visible).not.toContain(escapedKey);
+    expect(calls).toBe(1);
+
+    let safeCalls = 0;
+    const safeResult = { nested: { safe_key: true } };
+    const safe = fixture(async () => { safeCalls++; return Response.json({ jsonrpc: "2.0", id: 1, result: safeResult }); });
+    const safeResponse = await safe.request();
+    expect(safeResponse.status).toBe(200);
+    expect(await safeResponse.json()).toEqual({ jsonrpc: "2.0", id: 1, result: safeResult });
+    expect(safeCalls).toBe(1);
+  });
+
   test("sanitizes upstream errors, headers and a JSON-escaped secret", async () => {
     for (const fetcher of [
       (async () => { throw new Error(`failure ${supervisorToken} ${incarnationToken}`); }),
