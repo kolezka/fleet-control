@@ -97,3 +97,16 @@ test("submitBounded replays an existing command with a previously accepted host"
   expect(f.commands).toEqual([]);
   expect(f.eventActors).toEqual([]);
 });
+
+test("submitBounded reports a conflicting old host before validating a new host", async () => {
+  const original = { ...input(), hostId: " old-host " };
+  const existing: CentralCommand = { ...original, text: original.text.trim(), id: "cmd-existing", status: "queued", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+  const f = fixture(existing);
+  const pending = f.store.submitBounded({ ...original, text: "different instruction" });
+  await f.waiting;
+  f.release();
+  const error = await pending.then(() => null, (reason: unknown) => reason);
+  expect(error).toMatchObject({ kind: "conflict" });
+  expect(f.commands).toEqual([]);
+  expect(f.eventActors).toEqual([]);
+});
