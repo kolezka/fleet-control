@@ -11,6 +11,8 @@ import type { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeInspectionRoute } from "./cooperative-inspection-route.ts";
 import { createCooperativeAssertionsRoute } from "./cooperative-assertions-route.ts";
 import type { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import type { CooperativeSettlement } from "./cooperative-settlement.ts";
+import { createCooperativeSettlementRoute } from "./cooperative-settlement-route.ts";
 
 const MAX_BODY = 32 * 1024;
 // Allow 65536 UTF-16 code units escaped as six JSON bytes each, plus envelope.
@@ -48,6 +50,7 @@ export function createCooperativeCentralApp(deps: {
   lifecycle: CooperativeLifecycle;
   inspection: Pick<CooperativeInspection, "inspectBounded">;
   reconciliation?: Pick<CooperativeReconciliation, "listBounded">;
+  settlement?: Pick<CooperativeSettlement, "get" | "settle">;
   requests?: never;
   allowedOrigins?: readonly string[];
 }) {
@@ -77,6 +80,7 @@ export function createCooperativeCentralApp(deps: {
   });
   app.route("/", createCooperativeInspectionRoute({ auth: deps.auth, inspection: deps.inspection }));
   if (deps.reconciliation) app.route("/", createCooperativeAssertionsRoute({ auth: deps.auth, reconciliation: deps.reconciliation }));
+  if (deps.settlement) app.route("/", createCooperativeSettlementRoute({ auth: deps.auth, settlement: deps.settlement }));
   app.post("/api/commands", async (c) => {
     const principal = deps.auth.authenticate(c.req.raw);
     if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);

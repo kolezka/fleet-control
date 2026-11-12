@@ -6,6 +6,7 @@ import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
@@ -25,7 +26,7 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     const claims = new CooperativeClaims(db, incarnations);
     const lifecycle = new CooperativeLifecycle(db, incarnations);
     const inspection = new CooperativeInspection(db);
-    await commands.initialize(); await new CentralAttempts(db).initialize(); await registry.initialize(); await incarnations.initialize(); await claims.initialize(); await lifecycle.initialize();
+    await commands.initialize(); await new CentralAttempts(db).initialize(); await registry.initialize(); await incarnations.initialize(); await claims.initialize(); await lifecycle.initialize(); await new CooperativeSettlement(db).initialize();
     await registry.enroll(principal);
     const credential = await incarnations.activate(principal);
     const command = (await commands.submit({ idempotencyKey: "one", hostId: "host", target: "session", actor: "operator", text: "work" })).command;
@@ -41,7 +42,7 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     await lifecycle.report(principal, credential, command.id, "done", "completed", "done detail");
     const page = await inspection.inspect(command.id, { limit: 2 });
     expect(page?.command.status).toBe("claimed");
-    expect(page?.claim).toEqual({ incarnationId: credential.incarnationId, incarnationActive: true, requestId: "claim-one", createdAt: page!.command.updatedAt });
+    expect(page?.claim).toEqual({ incarnationId: credential.incarnationId, incarnationActive: true, settled: false, requestId: "claim-one", createdAt: page!.command.updatedAt });
     expect(page?.events.map((event) => [event.seq, event.status])).toEqual([["9007199254740993", "accepted"], ["9007199254740994", "running"]]);
     expect(page?.nextCursor).toBe("9007199254740994");
     const last = await inspection.inspect(command.id, { limit: 2, cursor: page!.nextCursor! });
@@ -73,7 +74,7 @@ pgTest("inspection reads physical command, claim and ordered paginated lifecycle
     }) as unknown as TransactionSQL;
     const bounded = new CooperativeInspection(db, async (operation) => operation(capturingDb));
     const firstEvent = page!.events[0]!;
-    const rowFields = [...Object.values(page!.command), ...Object.values({ ...page!.claim!, incarnationActive: "" }), ...Object.values(firstEvent)];
+    const rowFields = [...Object.values(page!.command), ...Object.values({ ...page!.claim!, incarnationActive: "", settled: "" }), ...Object.values(firstEvent)];
     const baseBytes = rowFields.reduce((sum, value) => sum + Buffer.byteLength(String(value), "utf8"), 0) - Buffer.byteLength(firstEvent.detail, "utf8");
     const detailBytes = 270336 - baseBytes;
     const boundaryDetail = "é".repeat(Math.floor(detailBytes / 2)) + (detailBytes % 2 ? "x" : "");

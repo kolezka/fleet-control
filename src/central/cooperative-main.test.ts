@@ -140,6 +140,27 @@ const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
       await expect(runtime`INSERT INTO ${runtime(name)}.central_cooperative_reconciliations (request_id, command_id, actor, disposition, evidence, sequence, at) VALUES ('forbidden', ${command.id}, 'operator', 'unknown', 'evidence', 6, 'now')`).rejects.toThrow();
     } finally { await runtime.close(); }
 
+    // Settlement through the restricted runtime role: refused while the incarnation is live, accepted once after retirement.
+    const settlementUrl = `${base}/api/commands/${command.id}/cooperative/settlement`;
+    const [{ seq: lastSeq }] = await admin`SELECT max(seq)::text AS seq FROM ${admin(name)}.central_cooperative_lifecycle_events`;
+    const settle = (body: object, extra: Record<string, string> = {}) => fetch(settlementUrl, { method: "POST", headers: { ...operatorHeaders, "content-type": "application/json", ...extra }, body: JSON.stringify(body) });
+    const settlementBody = { requestId: "settle-one", disposition: "completed", evidence: "operator saw the report", expectedSequence: lastSeq };
+    expect((await fetch(settlementUrl, { method: "POST", headers: { authorization: `Bearer ${supervisor}`, "content-type": "application/json" }, body: JSON.stringify(settlementBody) })).status).toBe(403);
+    expect((await settle(settlementBody, { origin: "https://example.com" })).status).toBe(403);
+    expect((await settle({ ...settlementBody, extra: true })).status).toBe(400);
+    expect((await settle(settlementBody)).status).toBe(409);
+    expect((await fetch(settlementUrl, { headers: operatorHeaders })).status).toBe(404);
+    await admin`UPDATE ${admin(name)}.central_supervisor_identities_v2 SET retired = TRUE`;
+    const settled = await settle(settlementBody);
+    expect(settled.status).toBe(201);
+    expect(await settled.json()).toMatchObject({ commandId: command.id, disposition: "completed", actor: "operator" });
+    expect((await settle(settlementBody)).status).toBe(200);
+    expect((await settle({ ...settlementBody, requestId: "settle-two" })).status).toBe(409);
+    expect((await fetch(settlementUrl, { headers: operatorHeaders })).status).toBe(200);
+    const afterSettlement = await (await fetch(`${base}/api/commands/${command.id}/cooperative`, { headers: operatorHeaders })).json() as any;
+    expect(afterSettlement.claim).toMatchObject({ incarnationActive: false, settled: true });
+    expect(afterSettlement.command.status).toBe("claimed");
+
     // A second start refuses the existing credential file and never overwrites it.
     const before = await Bun.file(incarnationFile).text();
     await expect(startCooperative({ ...env, COOPERATIVE_SCHEMA: schema() })).rejects.toThrow("incarnation file must not exist");

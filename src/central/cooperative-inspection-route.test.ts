@@ -11,6 +11,7 @@ import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 import { CooperativeClaims } from "./cooperative-claims.ts";
 import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import { CooperativeSettlement } from "./cooperative-settlement.ts";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const auth = new CentralAuth([
@@ -124,7 +125,7 @@ const url = process.env.CENTRAL_TEST_DATABASE_URL;
     const incarnations = new SupervisorIncarnations(db);
     const claims = new CooperativeClaims(db, incarnations);
     const lifecycle = new CooperativeLifecycle(db, incarnations);
-    await commands.initialize(); await new CentralAttempts(db).initialize(); await registry.initialize(); await incarnations.initialize(); await claims.initialize(); await lifecycle.initialize();
+    await commands.initialize(); await new CentralAttempts(db).initialize(); await registry.initialize(); await incarnations.initialize(); await claims.initialize(); await lifecycle.initialize(); await new CooperativeSettlement(db).initialize();
     const principal = { role: "supervisor" as const, principalId: "owner", name: "owner", hostId: "host", session: "session" };
     await registry.enroll(principal);
     const credential = await incarnations.activate(principal);
