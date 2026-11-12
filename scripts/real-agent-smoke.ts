@@ -4,7 +4,8 @@
 // test database (127.0.0.1:57507/fleet_control_test) and a logged-in \`claude\` CLI.
 // Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--replacement]
 // --replacement then replaces the incarnation, checks that an agent on the old adapter
-// is fenced, and that an agent on a new adapter claims and reports the next command.
+// is fenced, that an agent on a new adapter claims and reports the next command, and that
+// the operator can settle only the claim of the inactive incarnation.
 import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -102,7 +103,8 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       }
       return {
         commandId: id, commandStatus: inspected.command.status as string,
-        claim: inspected.claim ? { incarnationMatches: inspected.claim.incarnationId === incarnationId, requestId: inspected.claim.requestId as string, incarnationActive: inspected.claim.incarnationActive as boolean } : null,
+        claim: inspected.claim ? { incarnationMatches: inspected.claim.incarnationId === incarnationId, requestId: inspected.claim.requestId as string, incarnationActive: inspected.claim.incarnationActive as boolean, settled: inspected.claim.settled as boolean } : null,
+        lastSeq: (events.at(-1)?.seq ?? null) as string | null,
         events: events.map((event) => ({ requestId: event.requestId as string, status: event.status as string, detail: event.detail as string })),
       };
     };
@@ -136,11 +138,25 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       outputs.push(next.stdout, next.stderr);
       const afterFirst = await inspect(commandId, central.incarnationId!);
       const afterNext = await inspect(nextId, fresh.incarnationId);
+      // Operator settlement: allowed only for the claim whose incarnation is inactive.
+      const settle = (id: string, requestId: string, expectedSequence: string | null) => fetch(`${central.url}/api/commands/${id}/cooperative/settlement`, { method: "POST", headers: operatorHeaders, body: JSON.stringify({ requestId, disposition: "completed", evidence: "real-agent smoke: agent reported completed before replacement", expectedSequence }) });
+      const activeSettle = await settle(nextId, "settle-active", afterNext.lastSeq);
+      const staleSettle = await settle(commandId, "settle-stale-seq", null);
+      const settled = await settle(commandId, "settle-1", afterFirst.lastSeq);
+      const settledAgain = await settle(commandId, "settle-1", afterFirst.lastSeq);
+      const afterSettle = await inspect(commandId, central.incarnationId!);
+      const settlement = {
+        activeStatus: activeSettle.status, staleSequenceStatus: staleSettle.status, createdStatus: settled.status, replayStatus: settledAgain.status,
+        settled: afterSettle.claim?.settled === true, commandStatus: afterSettle.commandStatus,
+        eventsUnchanged: JSON.stringify(afterSettle.events) === JSON.stringify(first.events),
+      };
       replacementResult = {
         staleAgent: { exit: stale.exit, result: stale.result },
         freshAgent: { exit: next.exit, result: next.result },
         firstAfter: afterFirst, next: afterNext,
         fenced: afterFirst.claim?.incarnationActive === false && JSON.stringify(afterFirst.events) === JSON.stringify(first.events),
+        settlement,
+        settledOnlyInactive: settlement.activeStatus === 409 && settlement.staleSequenceStatus === 409 && settlement.createdStatus === 201 && settlement.replayStatus === 200 && settlement.settled && settlement.eventsUnchanged,
         freshCompleted: !!afterNext.claim?.incarnationMatches && afterNext.claim.requestId === "claim-2" && afterNext.events.map((event) => event.status).join(",") === "accepted,running,completed",
       };
     }
@@ -165,6 +181,6 @@ if (import.meta.main) {
   const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement);
   console.log(JSON.stringify(result, null, 2));
   const statuses = result.events.map((event) => event.status).join(",");
-  const replaced = !replacement || (result.replacement?.fenced === true && result.replacement?.freshCompleted === true);
+  const replaced = !replacement || (result.replacement?.fenced === true && result.replacement?.freshCompleted === true && result.replacement?.settledOnlyInactive === true);
   process.exit(result.claim && statuses === "accepted,running,completed" && !result.leaked && replaced ? 0 : 1);
 }
