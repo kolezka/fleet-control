@@ -59,7 +59,7 @@ test("executor rejects malformed attempt before lookup or send", async () => {
     const journal = new DeliveryJournal(db);
     let lookups = 0, sends = 0;
     const executor = new DeliveryExecutor(journal, "host", async () => { lookups++; return "instance"; }, async () => { sends++; return { exitCode: 0, stdout: "target: delivered", stderr: "" }; });
-    await expect(executor.execute({ id: "attempt-\ud800", hostId: "host", target: "target", text: "text", instanceId: "instance" })).rejects.toBeInstanceOf(JournalError);
+    await expect(executor.execute({ id: "attempt-\ud800", hostId: "host", target: "target", text: "text", instanceId: "instance" })).rejects.toThrow("invalid offer encoding");
     expect(lookups).toBe(0);
     expect(sends).toBe(0);
     expect(db.query("SELECT id FROM host_delivery_attempts").all()).toEqual([]);

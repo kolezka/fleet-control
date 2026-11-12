@@ -22,6 +22,9 @@ export class DeliveryExecutor {
 
   async execute(offer: CommandOffer): Promise<DeliveryAttempt> {
     const intent = Object.freeze({ id: offer.id, hostId: offer.hostId, target: offer.target, text: offer.text, instanceId: offer.instanceId });
+    if (![intent.id, intent.hostId, intent.target, intent.text, intent.instanceId].every((value) => typeof value === "string" && value.isWellFormed())) {
+      throw new Error("invalid offer encoding");
+    }
     if (intent.hostId !== this.hostId) throw new Error("offer host does not match local host");
     const result = this.queue.then(() => this.executeSerialized(intent));
     this.queue = result.then(() => undefined, () => undefined);
