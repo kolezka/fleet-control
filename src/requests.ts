@@ -93,6 +93,7 @@ export class Requests {
         if (existing.orchestrator !== orchestrator) throw new RequestError("forbidden", `run ${runId} belongs to orchestrator ${existing.orchestrator}`);
         return existing;
       }
+      if (!orchestrator.isWellFormed()) throw new RequestError("invalid", "invalid orchestrator encoding");
       const at = this.now().toISOString();
       this.db.query("INSERT INTO runs (id, orchestrator, phase, revision, phase_status, updated_at) VALUES (?, ?, ?, 1, 'planned', ?)")
         .run(runId, orchestrator, nonEmpty(input.phase, "phase"), at);
@@ -231,9 +232,11 @@ export class Requests {
   }
 
   list(filter: { runId?: string; status?: RequestStatus } = {}): SupervisorRequest[] {
+    const runId = filter.runId;
+    if (runId != null && !runId.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
     return this.db.query<Row, [string | null, string | null]>(
       `${reqSelect} WHERE (?1 IS NULL OR run_id = ?1) AND (?2 IS NULL OR status = ?2) ORDER BY created_at, id`,
-    ).all(filter.runId ?? null, filter.status ?? null).map(decode);
+    ).all(runId ?? null, filter.status ?? null).map(decode);
   }
 
   events(afterSeq = 0) {
@@ -243,6 +246,7 @@ export class Requests {
   }
 
   private findRun(id: string): Run | null {
+    if (!id.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
     return this.db.query<Run, [string]>(`${runSelect} WHERE id = ?`).get(id) ?? null;
   }
 
