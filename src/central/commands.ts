@@ -129,6 +129,7 @@ export class CentralCommands {
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session} FOR UPDATE`;
       if (!current) throw new Error("access denied");
       if (!["accepted", "rejected", "running", "completed", "failed"].includes(to) || !allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
+      if ([actor, detail].some((value) => typeof value !== "string" || !value.isWellFormed() || value.includes("\0"))) throw new CommandError("invalid", "invalid event encoding");
       const at = this.now().toISOString();
       await tx`UPDATE central_commands SET status = ${to}, updated_at = ${at} WHERE id = ${id}`;
       await tx`INSERT INTO central_command_events (command_id, status, actor, detail, at) VALUES (${id}, ${to}, ${actor}, ${detail}, ${at})`;
