@@ -52,6 +52,59 @@ describe("agent sockets", () => {
     expect(replacement.sent).toHaveLength(1);
   });
 
+  test.each(["host-a", " "])("rejected socket for %s cannot be reused or closed twice", (hostId) => {
+    const { sockets, socket } = setup();
+    const rejected = new FakeSocket();
+    expect(sockets.connect(hostId, rejected)).toBe(false);
+    expect(rejected.closed).toEqual([[1008, "connection rejected"]]);
+    sockets.disconnect("host-a", socket);
+    expect(sockets.connect("host-b", rejected)).toBe(false);
+    expect(sockets.connect("host-a", rejected)).toBe(false);
+    expect(rejected.closed).toEqual([[1008, "connection rejected"]]);
+    expect(sockets.listHosts()).toEqual([]);
+  });
+
+  test.each(["host-a", " "])("marks rejected socket closing before reentrant close for %s", (hostId) => {
+    const { sockets } = setup();
+    let reentrant: boolean | undefined;
+    const rejected = new FakeSocket();
+    rejected.close = (code, reason) => {
+      rejected.closed.push([code, reason]);
+      if (rejected.closed.length === 1) reentrant = sockets.connect("host-b", rejected);
+    };
+    expect(sockets.connect(hostId, rejected)).toBe(false);
+    expect(reentrant).toBe(false);
+    expect(rejected.closed).toEqual([[1008, "connection rejected"]]);
+    expect(sockets.listHosts()).toEqual([{ hostId: "host-a", sessions: null }]);
+  });
+
+  test.each(["host-a", " "])("permanently rejects a socket when close throws for %s", (hostId) => {
+    const { sockets, socket } = setup();
+    const rejected = new FakeSocket();
+    const error = new Error("close failed");
+    rejected.close = (code, reason) => {
+      rejected.closed.push([code, reason]);
+      throw error;
+    };
+    expect(() => sockets.connect(hostId, rejected)).toThrow(error);
+    sockets.disconnect("host-a", socket);
+    expect(sockets.connect("host-b", rejected)).toBe(false);
+    expect(sockets.connect("host-a", rejected)).toBe(false);
+    expect(rejected.closed).toEqual([[1008, "connection rejected"]]);
+    expect(sockets.listHosts()).toEqual([]);
+  });
+
+  test("duplicate active socket remains usable without a close", async () => {
+    const { sockets, socket, inventories } = setup();
+    expect(sockets.connect("host-b", socket)).toBe(false);
+    expect(sockets.connect(" ", socket)).toBe(false);
+    expect(socket.closed).toEqual([]);
+    expect(sockets.dispatch(dispatch)).toBe(true);
+    await sockets.message("host-a", socket, JSON.stringify(inventory));
+    expect(inventories).toEqual([inventory]);
+    expect(sockets.listHosts()).toEqual([{ hostId: "host-a", sessions: ["supervisor"] }]);
+  });
+
   test.each([
     "{", "null", "[]", JSON.stringify({ ...receipt, version: 2 }),
     JSON.stringify({ ...receipt, hostId: "host-b" }), JSON.stringify({ ...receipt, status: "completed" }),

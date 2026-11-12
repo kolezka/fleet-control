@@ -118,11 +118,18 @@ test("accepted host identity survives mutation before message and close", () => 
   expect(adapter.listHosts()).toEqual([]);
 });
 
-test("failed reentrant open cannot overwrite an accepted generation", async () => {
+test("rejected reentrant open stays closed and preserves the accepted generation", async () => {
   let reject!: (error: Error) => void;
-  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: () => new Promise<void>((_, fail) => { reject = fail; }) });
-  const occupied = { data: { hostId: "host-a" }, send: () => 1, close: () => {} } as unknown as ServerWebSocket<HostSocketData>;
+  let calls = 0;
+  const adapter = createHostSocketServer({ auth: {} as CentralAuth, onInventory: () => {
+    calls++;
+    return new Promise<void>((_, fail) => { reject = fail; });
+  } });
+  const acceptedClosed: number[] = [];
+  const occupied = { data: { hostId: "host-a" }, send: () => 1, close: (code: number) => { acceptedClosed.push(code); } } as unknown as ServerWebSocket<HostSocketData>;
   adapter.websocket.open(occupied);
+  adapter.websocket.message(occupied, inventory("current"));
+  expect(calls).toBe(1);
   const closed: number[] = [];
   const socket = { data: { hostId: "host-a" }, send: () => 1, close: (code: number) => {
     closed.push(code);
@@ -130,12 +137,16 @@ test("failed reentrant open cannot overwrite an accepted generation", async () =
   } } as unknown as ServerWebSocket<HostSocketData>;
   adapter.websocket.open(socket);
   socket.data.hostId = "host-c";
-  adapter.websocket.message(socket, JSON.stringify({ version: 1, type: "inventory", hostId: "host-b", sessions: ["current"] }));
-  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: null }, { hostId: "host-b", sessions: ["current"] }]);
+  adapter.websocket.message(socket, JSON.stringify({ version: 1, type: "inventory", hostId: "host-b", sessions: ["ignored"] }));
+  adapter.websocket.close(socket);
+  expect(closed).toEqual([1008]);
+  expect(calls).toBe(1);
+  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: ["current"] }]);
   reject(new Error("current failure"));
   await Promise.resolve(); await Promise.resolve();
-  expect(closed).toEqual([1008, 1011]);
-  expect(adapter.listHosts()).toEqual([{ hostId: "host-a", sessions: null }]);
+  expect(acceptedClosed).toEqual([1011]);
+  expect(closed).toEqual([1008]);
+  expect(adapter.listHosts()).toEqual([]);
 });
 
 test("message and close without an accepted open are no-ops", () => {

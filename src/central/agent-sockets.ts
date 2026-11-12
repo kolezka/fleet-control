@@ -91,7 +91,9 @@ export class AgentSockets {
   // Call after authentication, with the authenticated host identity, from the socket open handler.
   connect(hostId: string, socket: AgentSocket): boolean {
     if ([...this.connections.values()].includes(socket)) return false;
-    if (!nonempty(hostId) || this.connections.has(hostId) || this.closing.has(socket)) {
+    if (this.closing.has(socket)) return false;
+    if (!nonempty(hostId) || this.connections.has(hostId)) {
+      this.closing.add(socket);
       socket.close(1008, "connection rejected");
       return false;
     }
