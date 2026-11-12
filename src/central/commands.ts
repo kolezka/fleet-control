@@ -119,6 +119,7 @@ export class CentralCommands {
   // in lockForClaim order before the event lock is acquired.
   async transitionScoped(id: string, to: "accepted" | "rejected" | "running" | "completed" | "failed", actor: string, detail: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard): Promise<CentralCommand> {
     const { hostId, session } = scope;
+    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;
@@ -158,6 +159,7 @@ export class CentralCommands {
   // must acquire slot, identity and incarnation locks in lockForClaim order.
   async getScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard): Promise<CentralCommand> {
     const { hostId, session } = scope;
+    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       const [command] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session}`;
@@ -178,6 +180,7 @@ export class CentralCommands {
 
   async eventsScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard, afterSeq = "0"): Promise<CentralCommandEvent[]> {
     const { hostId, session } = scope;
+    if (typeof id !== "string" || !id.isWellFormed() || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.db.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       const [command] = await tx`SELECT id FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session}`;
