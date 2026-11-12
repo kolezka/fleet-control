@@ -4,6 +4,55 @@ import { disposableCooperativeRole, cleanupCooperativeRole } from "./disposable-
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
 
+const offlineUrl = "postgres://postgres@127.0.0.1:57507/fleet_control_test";
+
+test("fixture reports each cleanup failure without exposing underlying errors", async () => {
+  for (const dropFails of [false, true]) for (const closeFails of [false, true]) {
+    const calls: string[] = [];
+    const admin = Object.assign(
+      (query: unknown) => { if (Array.isArray(query)) { calls.push("drop"); if (dropFails) throw new Error("secret drop"); } },
+      { unsafe: async () => { calls.push("create"); }, close: async () => { calls.push("close"); if (closeFails) throw new Error("secret close"); } },
+    ) as unknown as SQL;
+    const fixture = await disposableCooperativeRole(offlineUrl, () => admin);
+    let failure: unknown;
+    try { await fixture.cleanup(); } catch (error) { failure = error; }
+    expect(calls).toEqual(["create", "drop", "close"]);
+    if (!dropFails && !closeFails) expect(failure).toBeUndefined();
+    else {
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.message).toBe("disposable fixture cleanup failed");
+      expect(aggregate.errors.map((error: Error) => error.message)).toEqual([
+        ...(dropFails ? [`disposable role drop failed: ${fixture.role}`] : []),
+        ...(closeFails ? ["disposable admin close failed"] : []),
+      ]);
+      expect(JSON.stringify(aggregate, Object.getOwnPropertyNames(aggregate))).not.toContain("secret");
+    }
+  }
+});
+
+test("provisioning and cleanup failures retain safe distinct signals", async () => {
+  for (const closeFails of [false, true]) {
+    const calls: string[] = [];
+    const admin = Object.assign(
+      (..._args: unknown[]) => { calls.push("drop"); },
+      { unsafe: async () => { calls.push("create"); throw new Error("secret provisioning"); }, close: async () => { calls.push("close"); if (closeFails) throw new Error("secret close"); } },
+    ) as unknown as SQL;
+    let failure: unknown;
+    try { await disposableCooperativeRole(offlineUrl, () => admin); } catch (error) { failure = error; }
+    expect(calls).toEqual(["create", "close"]);
+    expect(failure).toBeInstanceOf(closeFails ? AggregateError : Error);
+    if (closeFails) {
+      const aggregate = failure as AggregateError;
+      expect(aggregate.message).toBe("disposable fixture provisioning and cleanup failed");
+      expect(aggregate.errors[0].message).toMatch(/^disposable fixture provisioning failed; role creation outcome may be unknown: cooperative_runtime_[0-9a-f]{32}$/);
+      expect(aggregate.errors[1].message).toBe("disposable fixture cleanup failed");
+      expect(aggregate.errors[1].errors.map((error: Error) => error.message)).toEqual(["disposable admin close failed"]);
+    } else expect((failure as Error).message).toMatch(/^disposable fixture provisioning failed; role creation outcome may be unknown: cooperative_runtime_[0-9a-f]{32}$/);
+    expect(JSON.stringify(failure, Object.getOwnPropertyNames(failure))).not.toContain("secret");
+  }
+});
+
 test("disposable role rejects non-local URLs before connecting", async () => {
   await expect(disposableCooperativeRole("postgres://postgres@localhost:57507/fleet_control_test")).rejects.toThrow("refusing non-disposable");
   await expect(disposableCooperativeRole("postgres://postgres@127.0.0.1:57507/fleet_control_test?host=example.com")).rejects.toThrow("refusing non-disposable");

@@ -12,7 +12,7 @@ export async function cleanupCooperativeRole(
 }
 
 // This helper is for the trusted, disposable local test cluster only.
-export async function disposableCooperativeRole(adminUrl: string) {
+export async function disposableCooperativeRole(adminUrl: string, createAdmin: (url: string) => SQL = (url) => new SQL(url)) {
   rejectAmbientPostgresEnvironment(process.env);
   let url: URL;
   try { url = new URL(adminUrl); } catch { throw new Error("invalid disposable database URL"); }
@@ -21,12 +21,16 @@ export async function disposableCooperativeRole(adminUrl: string) {
   }
   const role = `cooperative_runtime_` + randomBytes(16).toString("hex");
   const password = randomBytes(32).toString("hex");
-  const admin = new SQL(adminUrl);
+  const admin = createAdmin(adminUrl);
   let roleOwned = false;
   const cleanup = async (options?: { preserveRole?: boolean }) => {
+    const failures: Error[] = [];
     try {
       if (roleOwned && !options?.preserveRole) { await admin`DROP ROLE ${admin(role)}`; roleOwned = false; }
-    } finally { await admin.close(); }
+    } catch { failures.push(new Error(`disposable role drop failed: ${role}`)); }
+    try { await admin.close(); }
+    catch { failures.push(new Error("disposable admin close failed")); }
+    if (failures.length) throw new AggregateError(failures, "disposable fixture cleanup failed");
   };
   try {
     // Both interpolated literals contain only generated lowercase hexadecimal.
@@ -36,7 +40,11 @@ export async function disposableCooperativeRole(adminUrl: string) {
     url.password = password;
     return { role, runtimeUrl: url.toString(), cleanup };
   } catch {
-    try { await cleanup(); } catch { throw new Error("disposable fixture cleanup failed"); }
-    throw new Error("disposable fixture provisioning failed");
+    const provisioningFailure = new Error(`disposable fixture provisioning failed; role creation outcome may be unknown: ${role}`);
+    try { await cleanup(); }
+    catch (cleanupFailure) {
+      throw new AggregateError([provisioningFailure, cleanupFailure], "disposable fixture provisioning and cleanup failed");
+    }
+    throw provisioningFailure;
   }
 }
