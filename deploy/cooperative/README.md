@@ -87,9 +87,34 @@ restoring over a live installation needs a stopped stack and a human decision.
 - **During `activate`**: an empty `client/incarnation.json` may remain, and the previous incarnation
   may already be fenced. Delete the empty file, run `activate` again and restart the host adapter.
 
+### Persistent adapters and tailnet access
+
+The adapter always listens on `127.0.0.1`. Set `COOPERATIVE_ADAPTER_PORT=4882` for a stable MCP URL;
+omitting it retains the disposable random port. The private adapter config accepts an HTTPS central
+URL with normal certificate verification, or HTTP to numeric loopback only. No redirects are followed.
+
+On Linux, include `adapter.compose.yaml` after `compose.yaml` and explicitly start the `adapter`
+profile. It uses host networking to bind host loopback, mounts only the adapter config and incarnation,
+and gets 40 seconds to drain. It does not run an agent. On macOS, substitute `__BUN__`, `__CODE__` and
+`__STATE__` in `adapter.launchd.plist` with absolute paths before installing it in LaunchAgents. Use a
+stable code directory, not a temporary worktree. Keep the private config and incarnation mode 0600.
+Restarting either adapter reuses its incarnation; it does not activate a replacement.
+
+For Tailscale Serve, keep central published on host loopback. Set `COOPERATIVE_EXTERNAL_HOST` to the
+exact verified tailnet DNS name and port, then recreate only central. Serve terminates HTTPS and
+preserves Host; central must explicitly allow that authority. No forwarded header grants access and
+bearer authentication remains required. Never use Funnel. Add only the new Serve port and verify
+other configuration is unchanged; rollback removes only that port.
+
+Each host needs its own supervisor principal, bearer, local bearer and incarnation. Do not run init,
+provision or setup again to add a host. Extend the hashed credentials file with the new principal,
+activate explicitly for that host/session into a new private incarnation file, and restart central to
+load the new credentials. Never reuse or move another host's incarnation file. Do not rotate an
+incarnation merely to restart an adapter.
+
 ### Limits
 
-- HTTP only, loopback only. LAN access and TLS are not set up yet.
+- Central remains HTTP on host loopback behind the optional tailnet HTTPS proxy.
 - Backups are manual (`backup.sh`, above) and not scheduled. `scripts/central-backup.ts` expects
   a TLS connection and does not fit this database.
 - The listener joins the `published` network only for its port mapping; it has outbound access it

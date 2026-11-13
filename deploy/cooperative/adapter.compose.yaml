@@ -1,0 +1,22 @@
+# Linux host adapter. Host networking keeps the MCP listener on host loopback.
+# Include after compose.yaml; explicitly opt in with --profile adapter.
+services:
+  adapter:
+    image: fleet-cooperative-central:local
+    user: "${COOPERATIVE_UID:?}:${COOPERATIVE_GID:?}"
+    init: true
+    profiles: [adapter]
+    entrypoint: [bun, src/host-agent/cooperative-main.ts]
+    command: []
+    network_mode: host
+    environment:
+      COOPERATIVE_ADAPTER_CONFIG_FILE: "${COOPERATIVE_STATE_DIR:?}/client/adapter.json"
+      COOPERATIVE_ADAPTER_PORT: "${COOPERATIVE_ADAPTER_PORT:-4882}"
+    volumes:
+      - "${COOPERATIVE_STATE_DIR:?}/client/adapter.json:${COOPERATIVE_STATE_DIR:?}/client/adapter.json:ro"
+      - "${COOPERATIVE_STATE_DIR:?}/client/incarnation.json:${COOPERATIVE_STATE_DIR:?}/client/incarnation.json:ro"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 40s
+    restart: unless-stopped

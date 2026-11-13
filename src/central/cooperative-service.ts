@@ -46,11 +46,16 @@ export function serviceConfig(env: Record<string, string | undefined>) {
   if (host !== "127.0.0.1" && host !== "0.0.0.0") throw new Error("listener must bind to 127.0.0.1 or, inside a container, 0.0.0.0");
   const port = env.COOPERATIVE_PORT ?? "";
   if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("explicit port required");
+  const externalHost = env.COOPERATIVE_EXTERNAL_HOST || undefined;
+  if (externalHost !== undefined) {
+    const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*):([1-9][0-9]{0,4})$/.exec(externalHost);
+    if (!match || match[0] !== externalHost || match[1]!.length > 253 || Number(match[2]) > 65535) throw new Error("external Host must be an exact lowercase hostname:port");
+  }
   const tls = tlsFilesFromEnv(env.COOPERATIVE_TLS_CERT_FILE, env.COOPERATIVE_TLS_KEY_FILE, "cooperative");
   return {
     runtimeUrlFile: absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file"),
     credentialsFile: absolute(env.COOPERATIVE_CREDENTIALS_FILE, "credentials file"),
-    host: host as "127.0.0.1" | "0.0.0.0", port: Number(port), ...(tls ? { tls } : {}),
+    externalHost, host: host as "127.0.0.1" | "0.0.0.0", port: Number(port), ...(tls ? { tls } : {}),
   };
 }
 
@@ -146,10 +151,15 @@ export async function provisionService(env: Record<string, string | undefined>) 
 export async function activateService(env: Record<string, string | undefined>) {
   rejectAmbientPostgresEnvironment(process.env);
   const runtimeUrl = databaseUrl(await readPrivateText(absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file")), SERVICE_RUNTIME_ROLE);
-  const credentials = parseCredentials(await readPrivateText(absolute(env.COOPERATIVE_CREDENTIALS_FILE, "credentials file")));
+  const credentials = parseCredentials(await readPrivateText(absolute(env.COOPERATIVE_CREDENTIALS_FILE, "credentials file")), { allowMultipleSupervisors: true });
   const incarnationFile = absolute(env.COOPERATIVE_INCARNATION_FILE, "incarnation file");
-  const supervisor = credentials.find((c) => c.principal.role === "supervisor")!.principal;
-  if (supervisor.role !== "supervisor") throw new Error("supervisor required");
+  const supervisors = credentials.map((c) => c.principal).filter((p) => p.role === "supervisor");
+  const host = env.COOPERATIVE_SUPERVISOR_HOST, session = env.COOPERATIVE_SUPERVISOR_SESSION;
+  const selected = host === undefined && session === undefined && supervisors.length === 1
+    ? supervisors
+    : supervisors.filter((p) => p.hostId === host && p.session === session);
+  if (selected.length !== 1) throw new Error("supervisor selection requires an explicit matching COOPERATIVE_SUPERVISOR_HOST and COOPERATIVE_SUPERVISOR_SESSION");
+  const supervisor = selected[0]!;
   // Reserve the file before fencing, so a write failure cannot leave only an unknown secret.
   const handle = await open(incarnationFile, "wx", 0o600);
   const db = new SQL(runtimeUrl);
@@ -175,9 +185,9 @@ export async function startService(env: Record<string, string | undefined>, opti
   if (!Number.isSafeInteger(shutdownGraceMs) || shutdownGraceMs < 1 || shutdownGraceMs > 2_147_483_647) throw new Error("invalid shutdown grace");
   rejectAmbientPostgresEnvironment(process.env);
   const runtimeUrl = databaseUrl(await readPrivateText(config.runtimeUrlFile), SERVICE_RUNTIME_ROLE);
-  const credentials = parseCredentials(await readPrivateText(config.credentialsFile));
+  const credentials = parseCredentials(await readPrivateText(config.credentialsFile), { allowMultipleSupervisors: true });
   const tls = config.tls ? await loadTlsFiles(config.tls, "cooperative") : undefined;
-  return serveCooperative({ runtimeDatabaseUrl: runtimeUrl, schema: SERVICE_SCHEMA, credentials, tls, hostname: config.host, port: config.port, shutdownGraceMs });
+  return serveCooperative({ runtimeDatabaseUrl: runtimeUrl, schema: SERVICE_SCHEMA, credentials, tls, hostname: config.host, port: config.port, shutdownGraceMs, allowedHosts: config.externalHost ? [config.externalHost] : undefined });
 }
 
 if (import.meta.main) {
