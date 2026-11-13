@@ -1,0 +1,82 @@
+## Persistent cooperative central (docker compose)
+
+This runs the cooperative central with its own PostgreSQL 17. It serves the operator API and MCP
+endpoint on host loopback only. Supervisors pull work through the host adapter
+(`src/host-agent/cooperative-main.ts`). Nothing here sends input to a terminal, and nothing retries
+or requeues work.
+
+### Setup (once per host)
+
+```bash
+deploy/cooperative/setup.sh /home/me/.local/state/fleet-cooperative 4881 <host id>
+```
+
+Steps, each skipped when its output already exists:
+
+1. Writes `deploy/cooperative/.env` (state directory, port, your uid and gid, supervisor host id).
+   A rerun with other settings stops.
+2. `init` writes secrets into the state directory, each file exclusive and mode 0600, never printed:
+   - `pg/password` and `pg/data`: only the PostgreSQL container mounts `pg/`.
+   - `admin/admin-url`: superuser URL, mounted only by the one-shot `admin` service.
+   - `service/credentials.json` (token hashes only) and, after provision, `service/runtime-url`:
+     the only files the listener sees, mounted read-only.
+   - `client/`: operator and local tokens, `adapter.json` and, after activate, `incarnation.json`.
+     These stay on the host for the operator and the host adapter.
+3. Starts PostgreSQL. It has no published port and sits on an internal network.
+4. `provision` creates schema `fleet_cooperative_v1` and the restricted role
+   `fleet_cooperative_runtime` in one transaction and writes `service/runtime-url` before it commits.
+5. `activate` enrolls the supervisor and writes `client/incarnation.json`.
+6. Starts central on `127.0.0.1:<port>`.
+
+If a step fails, the script names it. Fix the cause and run the same command again.
+
+The state directory must be visible to the Docker daemon. On Colima (macOS) that means somewhere
+under your home directory, not `/tmp`.
+
+### Day to day
+
+- `docker compose -f deploy/cooperative/compose.yaml restart`: a restart keeps the incarnation, so
+  claims made before it stay reportable. Central gets 30 s to drain before Docker kills it.
+- Run the host adapter with
+  `COOPERATIVE_ADAPTER_CONFIG_FILE=<state>/client/adapter.json bun src/host-agent/cooperative-main.ts`.
+  The adapter accepts plain HTTP only to loopback (its option is still named
+  `allowLoopbackHttpForTests`); this deployment relies on that.
+- Check the installation with `bun scripts/cooperative-compose-smoke.ts <state> [--restart]`. It
+  submits synthetic commands and claims them as the real supervisor. It refuses to start while that
+  supervisor has queued commands. Do not run it while the supervisor's own adapter is live: both
+  would race for the same claims.
+
+### Replacing the supervisor incarnation
+
+Run this only when the old supervisor process is gone or must be fenced:
+
+```bash
+mv <state>/client/incarnation.json <state>/client/incarnation.old.json
+docker compose -f deploy/cooperative/compose.yaml run --rm admin activate
+```
+
+Then restart the host adapter: it reads the incarnation only at startup. The old incarnation can no
+longer claim or report. Its claimed commands stay claimed. An operator settles them through
+`POST /api/commands/:id/cooperative/settlement`; nothing requeues them.
+
+### Recovery after a crash
+
+- **During `init`**: nothing is in the database yet. Remove `pg/`, `admin/`, `service/` and
+  `client/` and run setup again.
+- **During `provision`**: `runtime-url` is written before COMMIT. If it exists but the role does not
+  (crash between the write and COMMIT), delete `service/runtime-url` and run setup again. If the role
+  exists without the file, set a new password as the superuser
+  (`ALTER ROLE fleet_cooperative_runtime PASSWORD ...`) and write the matching URL to
+  `service/runtime-url` with mode 0600.
+- **During `activate`**: an empty `client/incarnation.json` may remain, and the previous incarnation
+  may already be fenced. Delete the empty file, run `activate` again and restart the host adapter.
+
+### Limits
+
+- HTTP only, loopback only. LAN access and TLS are not set up yet.
+- Backups are not automated. `scripts/central-backup.ts` expects a TLS connection and does not fit
+  this database as is.
+- The listener joins the `published` network only for its port mapping; it has outbound access it
+  does not need.
+- This is cooperative fencing between trusted processes, not a security boundary against the
+  database owner.

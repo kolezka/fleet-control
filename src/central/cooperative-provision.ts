@@ -1,15 +1,36 @@
 import type { SQL } from "bun";
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
+
+// PostgreSQL SCRAM-SHA-256 verifier, so the cleartext password never reaches the server or its logs.
+export function scramVerifier(password: string, salt = randomBytes(16), iterations = 4096): string {
+  const salted = pbkdf2Sync(password, salt, iterations, 32, "sha256");
+  const stored = createHash("sha256").update(createHmac("sha256", salted).update("Client Key").digest()).digest();
+  const server = createHmac("sha256", salted).update("Server Key").digest();
+  return `SCRAM-SHA-256$${iterations}:${salt.toString("base64")}$${stored.toString("base64")}:${server.toString("base64")}`;
+}
 
 // Trusted administration only: the caller supplies a disposable local database,
 // controls its roles and stops all writers that do not participate in this lock.
 // The marker records installation, not the integrity of the installed objects.
-export async function provisionCooperative(db: SQL, options: { testSchema?: string; runtimeRole?: string; beforeCommit?: () => void | Promise<void> } = {}): Promise<void> {
+export const SERVICE_RUNTIME_ROLE = "fleet_cooperative_runtime";
+
+// Without testSchema this installs the persistent schema fleet_cooperative_v1. A
+// runtimePassword then creates SERVICE_RUNTIME_ROLE in the same transaction, so a
+// failed install leaves neither role nor schema. Both creates fail if they exist.
+// beforeCommit runs last inside the transaction (the service writes its URL file there).
+export async function provisionCooperative(db: SQL, options: { testSchema?: string; runtimeRole?: string; runtimePassword?: string; beforeCommit?: () => void | Promise<void> } = {}): Promise<void> {
   const schema = options.testSchema ?? "fleet_cooperative_v1";
   if (options.testSchema !== undefined && !/^cooperative_test_[a-f0-9]{32}$/.test(schema)) throw new Error("invalid disposable test schema");
-  if ((options.beforeCommit || options.runtimeRole) && !options.testSchema) throw new Error("test options require a disposable test schema");
+  if ((options.beforeCommit && !options.testSchema && !options.runtimePassword) || (options.runtimeRole && !options.testSchema)) throw new Error("test options require a disposable test schema");
   if (options.runtimeRole && !/^cooperative_runtime_[a-f0-9]{32}$/.test(options.runtimeRole)) throw new Error("invalid disposable runtime role");
+  if (options.runtimePassword !== undefined && (options.testSchema || !/^[A-Za-z0-9_-]{32,256}$/.test(options.runtimePassword))) throw new Error("invalid service runtime password");
   await db.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`fleet-cooperative-provision:${schema}`}, 0))`;
+    if (options.runtimePassword) {
+      // The verifier holds only base64, digits, "$" and ":", so it needs no quoting.
+      await tx.unsafe(`CREATE ROLE "${SERVICE_RUNTIME_ROLE}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`);
+      await tx.unsafe(`ALTER ROLE "${SERVICE_RUNTIME_ROLE}" PASSWORD '${scramVerifier(options.runtimePassword)}'`);
+    }
     await tx`CREATE SCHEMA ${tx(schema)}`;
     await tx`CREATE TABLE ${tx(schema)}.central_commands (id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, host_id TEXT NOT NULL, target TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`;
     await tx`CREATE TABLE ${tx(schema)}.central_command_events (seq BIGSERIAL PRIMARY KEY, command_id TEXT NOT NULL REFERENCES ${tx(schema)}.central_commands(id), status TEXT NOT NULL, actor TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL)`;
@@ -40,8 +61,8 @@ export async function provisionCooperative(db: SQL, options: { testSchema?: stri
     await tx`CREATE TRIGGER central_block_settlement_mutation BEFORE UPDATE OR DELETE ON ${tx(schema)}.central_cooperative_settlements FOR EACH ROW EXECUTE FUNCTION ${tx(schema)}.central_block_settlement_mutation()`;
     await tx`CREATE TABLE ${tx(schema)}.central_cooperative_schema_marker (version TEXT PRIMARY KEY CHECK (version = 'fleet_cooperative_v1'))`;
     await tx`INSERT INTO ${tx(schema)}.central_cooperative_schema_marker (version) VALUES ('fleet_cooperative_v1')`;
-    if (options.runtimeRole) {
-      const role = options.runtimeRole;
+    const role = options.runtimeRole ?? (options.runtimePassword ? SERVICE_RUNTIME_ROLE : undefined);
+    if (role) {
       await tx`GRANT USAGE ON SCHEMA ${tx(schema)} TO ${tx(role)}`;
       await tx`GRANT SELECT ON ${tx(schema)}.central_cooperative_schema_marker, ${tx(schema)}.central_delivery_attempts, ${tx(schema)}.central_cooperative_reconciliations TO ${tx(role)}`;
       await tx`GRANT SELECT, INSERT ON ${tx(schema)}.central_commands, ${tx(schema)}.central_supervisor_identities_v2, ${tx(schema)}.central_supervisor_slots_v2, ${tx(schema)}.central_supervisor_incarnations_v2 TO ${tx(role)}`;
