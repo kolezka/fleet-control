@@ -10,7 +10,7 @@ export interface CooperativeAdapterOptions {
   incarnationId: string;
   incarnationToken: string;
   centralFetch: (input: string, init: RequestInit) => Promise<Response>;
-  allowLoopbackHttpForTests?: boolean;
+  allowLoopbackHttp?: boolean;
   requestTimeoutMs?: number;
   maxConcurrentRequests?: number;
 }
@@ -67,7 +67,7 @@ export function createCooperativeAdapter(options: CooperativeAdapterOptions): (r
   const { localToken, supervisorToken, incarnationId, incarnationToken, centralFetch } = options;
   const timeout = options.requestTimeoutMs ?? 30_000;
   const maxConcurrent = options.maxConcurrentRequests ?? 16;
-  if (!(central.protocol === "https:" || (central.protocol === "http:" && options.allowLoopbackHttpForTests === true && loopbacks.has(central.hostname))) ||
+  if (!(central.protocol === "https:" || (central.protocol === "http:" && options.allowLoopbackHttp === true && loopbacks.has(central.hostname))) ||
       central.username || central.password || central.pathname !== "/mcp" || central.search || central.hash ||
       !/^[A-Za-z0-9_-]{43}$/.test(localToken) || !/^[A-Za-z0-9_-]{43}$/.test(incarnationToken) ||
       !/^[\x21-\x7e]{32,512}$/.test(supervisorToken) || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(incarnationId) ||

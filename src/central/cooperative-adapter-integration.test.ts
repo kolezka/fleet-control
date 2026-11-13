@@ -56,7 +56,7 @@ pgTest("local adapter reaches loopback central and fences replaced incarnations"
     const adapter = createCooperativeAdapter({
       centralUrl: `${base}/mcp`, localToken, supervisorToken,
       incarnationId: credential.incarnationId, incarnationToken: credential.token,
-      centralFetch: fetch, allowLoopbackHttpForTests: true,
+      centralFetch: fetch, allowLoopbackHttp: true,
     });
     const secrets = [localToken, operatorToken, supervisorToken, credential.token];
     const visible = async (response: Response) => {
