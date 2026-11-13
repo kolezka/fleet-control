@@ -11,7 +11,7 @@ As of 2026-11-13, [PR #58](https://github.com/kolezka/fleet-control/pull/58) and
 - Persistent cooperative adapters run on `.15` (Compose) and `.4` (launchd), each listening on `127.0.0.1:4882` with its own supervisor identity and incarnation. Supervisors claim work and report through MCP; there is no tmux paste fallback or idle-agent wakeup.
 - Synthetic submit, claim, accepted/running/completed reports and operator inspection passed through both adapters, then passed again after central and both adapters restarted. Incarnations stayed unchanged. No real agents or production fleet sessions were used for those checks.
 - The legacy `.4` host service and Terminal Deck UI remain separate and unchanged. The UI is not wired to the cooperative backend.
-- A real DSH run on `.15` is in progress, with prerequisites currently absent. No successful real DSH test on `.15` is claimed.
+- A lead-verified real DSH run on `.15` completed through the persistent desktop adapter and tailnet central in about 13 seconds: accepted/running/completed, exact fixture answer `2: host-b, host-d`, unchanged file and no token leak. This was read-only scratch work, not a UI, idle-wakeup or production-session test; see [the run evidence](docs/central-server-status.md#real-dsh-on-15-2026-11-13).
 
 See [cooperative deployment](deploy/cooperative/README.md), [persistent adapter setup](deploy/cooperative/README.md#persistent-adapters-and-tailnet-access), [central backend status](docs/central-server-status.md) and [session handoff](docs/HANDOFF.md). The host-service instructions below describe the separate SQLite-backed UI path, not the cooperative deployment.
 
@@ -189,7 +189,7 @@ The tests start their own private tmux servers and never touch your sessions.
 - The pinned agent-fleet includes the viewer/send fix; the real-shell regression passes. Overrides pointing to older checkouts may still have that bug. This is not production-agent verification.
 - Model detection works for Claude Code only, on the same host as the service.
 - phased-delivery does not yet write its phase record through MCP. Typing into a terminal (input leases) does not exist.
-- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. Real DSH verification on `.15` remains pending; synthetic lifecycle and restart checks are not real-agent proof.
+- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. One read-only real DSH fixture task on `.15` passed; production sessions and idle-agent wakeup remain unverified.
 
 ## More
 
