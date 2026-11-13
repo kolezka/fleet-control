@@ -45,6 +45,18 @@ FLEET_CONTROL_CLIENT_CONFIG="$HOME/.config/fleet-control/client.json" \
 
 Open `http://127.0.0.1:4870/`. The client only binds loopback. `PORT` changes its port. It does not need `FLEET_CONF`, tmux, host runtime credentials or a local supervisor. Stop it with Ctrl+C. Anyone with access to this local service as an authorized local user can operate the configured hosts; loopback is not protection against hostile local processes.
 
+## Optional cooperative central commands
+
+The local gateway can route a configured host's command panel to cooperative central while keeping its sessions and read-only terminal connection on the legacy host service. This is opt-in; configurations without `central` and `supervisor` keep the legacy behavior. This does not upgrade or deploy either service.
+
+Add a top-level `central` object with `url` and `tokenFile`. Add `supervisor: { "hostId": "registered-central-host", "session": "registered-supervisor-session" }` to each mapped host. These are explicit registered central identities, not gateway IDs, display names or the selected terminal. Both values are limited to 256 characters; session names use letters, digits, dot, underscore and hyphen only. The token must be a separate central **operator** credential in an owned regular file with mode 600, not a symlink or a host credential. Relative paths resolve beside the configuration. Remote central URLs require verified HTTPS; HTTP is allowed only for loopback fixtures. Never put token contents in the configuration or browser.
+
+Mapped command reads and submissions use only central. They never fall back to the legacy command queue. The browser cannot choose another central host or supervisor. Legacy sessions can be unavailable while the central command panel is available, and the reverse is also possible.
+
+The command list is a bounded oldest-first page, not a recent-activity feed or a snapshot. Use explicit continuation to read more. Cooperative inspection displays the stored reservation and supervisor reports separately: `claimed` means reserved, not executed; an inactive incarnation does not prove failure, and settlement does not prove completion. Failed inspection leaves the outcome unknown. A newly submitted command can be inspected even when it is outside the first list page.
+
+Approvals, workflow phase changes and legacy MCP operations are unavailable through a mapped panel. No automatic retry, requeue, successor command or idle-agent wakeup is introduced. An uncertain submit must retain its original destination, payload and idempotency key for any manual retry. Local users who can call the gateway still hold its configured authority; it is not a human-approval boundary.
+
 ## Navigation and decisions
 
 - Select a host to view its terminal panes and supervisor panel. Select a nested session to emphasize its pane.
@@ -101,4 +113,4 @@ Create the state directory before starting, then validate with `systemd-analyze 
 
 ## Proof boundary
 
-Two local host services can prove routing, identity isolation, terminal relay and failure handling. They do not prove operation on Linux, host reboot recovery or production-agent compatibility. Deployment to 192.168.50.15 remains on hold. No Tailscale listener is required or enabled by this design.
+Two local host services can prove routing, identity isolation, terminal relay and failure handling. They do not prove operation on Linux, host reboot recovery or production-agent compatibility. The cooperative central deployment and real-agent evidence are separate from this legacy gateway proof; see [central backend status](central-server-status.md). The opt-in gateway integration does not deploy or reconfigure those services.

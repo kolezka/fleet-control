@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand,
   beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
   type Fleet, type HostInfo, type Session,
@@ -213,4 +214,86 @@ test("host list refresh keeps state for unchanged hosts and drops removed ones",
   expect(g.hosts.b).toBeUndefined();
   expect(g.selectedHost).toBe("a"); // selected host vanished: fall back to the first
   expect(g.hosts.c!.sessionsRead.status).toBe("loading");
+});
+
+const mapped = (id = "a", session = "supervisor"): HostInfo => ({ ...info(id), supervisor: { hostId: "central-" + id, session } });
+const command = (id = "cmd-1") => ({ id, hostId: "central-a", target: "supervisor", actor: "operator", text: "task", status: "claimed", response: null, createdAt: "t", updatedAt: "t" });
+const inspection = (id = "cmd-1", seq = "1", nextCursor: string | null = null) => ({ command: command(id), claim: { incarnationId: "inc", incarnationActive: false, settled: true, requestId: "claim", createdAt: "t" }, events: [{ seq, requestId: "report", status: "completed", detail: "done", at: "t" }], nextCursor });
+function commandRead(f: Fleet, ids = ["cmd-1", "cmd-2"], nextCursor: string | null = "next"): Fleet {
+  const b = beginPageRead(f, "a", "commands");
+  return finishPageRead(b.fleet, b.handle!, parseCommandPage({ commands: ids.map(id => command(id)), nextCursor }, mapped()), "t");
+}
+test("explicit mapping targets cooperative supervisor despite unavailable legacy sessions and approvals", () => {
+  let f = setHosts(emptyFleet(), [mapped()]);
+  f = read(f, "a", "sessions", down);
+  f = read(f, "a", "coord", down);
+  expect(composerTarget(f.hosts.a!)).toBe("supervisor");
+  expect(sendGate(f.hosts.a!, "supervisor", "hi")).toEqual({ ok: true });
+  expect(sendGate(f.hosts.a!, "main", "hi")).toEqual({ ok: false, reason: "no-target" });
+  expect(beginAnswer(f, "a", "req", 1).handle).toBeNull();
+  f = read(f, "a", "sessions", ok([sess("legacy")]));
+  expect(composerTarget(selectSession(f, "a", "legacy").hosts.a!)).toBe("supervisor");
+});
+test("mapped unknown send keeps key; mapping changes reset intents and reject late reads and writes", () => {
+  let f = setHosts(emptyFleet(), [mapped()]);
+  const b = beginSend(f, "a", "supervisor", "hi", () => "key");
+  f = finishSend(b.fleet, b.intent!, "uncertain", "unknown");
+  expect(beginSend(f, "a", "supervisor", "hi", () => "wrong").intent?.key).toBe("key");
+  const read = beginPageRead(f, "a", "commands");
+  f = setHosts(read.fleet, [mapped("a", "replacement")]);
+  expect(f.hosts.a!.intent).toBeNull();
+  expect(f.hosts.a!.commands).toEqual([]);
+  expect(f.hosts.a!.gen).not.toBe(b.intent!.gen);
+  expect(finishSend(f, b.intent!, "queued", "old")).toBe(f);
+  expect(finishPageRead(f, read.handle!, parseCommandPage({ commands: [command()], nextCursor: null }, mapped()), "t")).toBe(f);
+  const same = setHosts(f, [mapped("a", "replacement")]);
+  expect(same.hosts.a!.gen).toBe(f.hosts.a!.gen);
+  expect(setHosts(same, [info("a")]).hosts.a!.gen).not.toBe(f.hosts.a!.gen);
+});
+test("mapped discovery fails closed on malformed explicit mapping", () => {
+  expect(parseHostList({ hosts: [mapped()] })?.hosts[0]?.supervisor).toEqual(mapped().supervisor);
+  for (const supervisor of [null, {}, { hostId: "a", session: "" }, { hostId: 2, session: "main" }]) expect(parseHostList({ hosts: [{ ...info("a"), supervisor }] })).toBeNull();
+});
+test("cooperative pages reject malformed or out-of-scope commands and events", () => {
+  for (const body of [null, {}, { commands: [null], nextCursor: null }, { commands: [command()] }, { commands: Array(5).fill(command()), nextCursor: null }, { commands: [{ ...command(), hostId: "other" }], nextCursor: null }, { commands: [{ ...command(), text: {} }], nextCursor: null }]) expect(parseCommandPage(body, mapped()).ok).toBe(false);
+  expect(parseCommandPage({ commands: [command("z"), command("a")], nextCursor: null }, mapped()).ok).toBe(false);
+  expect(parseCommandPage({ commands: [command()], nextCursor: "same" }, mapped(), "same").ok).toBe(false);
+  const good = inspection();
+  expect(parseInspection(good, mapped(), "cmd-1", null).ok).toBe(true);
+  for (const bad of [{ ...good, claim: {} }, { ...good, command: command("other") }, { ...good, nextCursor: "7" }, { ...good, events: [...good.events, ...good.events] }, { ...good, events: [{ ...good.events[0], detail: null }] }]) expect(parseInspection(bad, mapped(), "cmd-1", null).ok).toBe(false);
+  expect(parseInspection(good, mapped(), "cmd-1", "1").ok).toBe(false);
+});
+test("command pagination is explicit, host scoped, single flight and replay resistant", () => {
+  let f = commandRead(setHosts(emptyFleet(), [mapped(), mapped("b")]));
+  const b = beginPageRead(f, "a", "commands", true);
+  expect(b.handle?.cursor).toBe("next");
+  expect(beginPageRead(b.fleet, "a", "commands", true).handle).toBeNull();
+  f = selectHost(b.fleet, "b");
+  f = finishPageRead(f, b.handle!, parseCommandPage({ commands: [command("cmd-3")], nextCursor: null }, mapped()), "t");
+  expect(f.hosts.a!.commands.map(c => c.id)).toEqual(["cmd-1", "cmd-2", "cmd-3"]);
+  expect(f.hosts.b!.commands).toEqual([]);
+  expect(f.selectedHost).toBe("b");
+  expect(finishPageRead(f, b.handle!, down, "t")).toBe(f);
+  expect(beginPageRead(f, "a", "commands", true).handle).toBeNull();
+});
+test("inspection selection and cursor scope reject stale completions and failed reads erase current inspection", () => {
+  let f = commandRead(setHosts(emptyFleet(), [mapped()]));
+  f = selectCommand(f, "a", "cmd-1");
+  const old = beginPageRead(f, "a", "inspection");
+  f = selectCommand(old.fleet, "a", "cmd-2");
+  expect(finishPageRead(f, old.handle!, parseInspection(inspection(), mapped(), "cmd-1", null), "t")).toBe(f);
+  f = selectCommand(f, "a", "cmd-1");
+  const b = beginPageRead(f, "a", "inspection");
+  f = finishPageRead(b.fleet, b.handle!, parseInspection(inspection("cmd-1", "1", "1"), mapped(), "cmd-1", null), "t");
+  expect(f.hosts.a!.inspection?.command.status).toBe("claimed");
+  expect(f.hosts.a!.inspection?.events[0]?.status).toBe("completed");
+  expect(f.hosts.a!.inspection?.claim).toMatchObject({ incarnationActive: false, settled: true });
+  const more = beginPageRead(f, "a", "inspection", true);
+  expect(more.handle?.cursor).toBe("1");
+  f = finishPageRead(more.fleet, more.handle!, parseInspection(inspection("cmd-1", "2"), mapped(), "cmd-1", "1"), "t");
+  expect(f.hosts.a!.inspection?.events.map(e => e.seq)).toEqual(["1", "2"]);
+  const fail = beginPageRead(f, "a", "inspection");
+  f = finishPageRead(fail.fleet, fail.handle!, down, "t");
+  expect(f.hosts.a!.inspectionRead.status).toBe("unknown");
+  expect(f.hosts.a!.inspection).toBeNull();
 });

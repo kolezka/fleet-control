@@ -6,6 +6,7 @@
 import { init, Terminal } from "ghostty-web";
 import {
   type Command, type CommandIntent, type Fleet, type HostInfo, type HostState, type Model, type Outcome, type Peer, type ReadKind, type Req, type Session,
+  beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand, isCommand,
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
@@ -246,6 +247,7 @@ document.addEventListener("keydown", (e) => {
 // how far a step got; nothing here claims execution that the supervisor has not reported.
 export const commandLabel: Record<string, string> = {
   queued: "Queued, not delivered",
+  claimed: "Claimed: reservation only, not acceptance or execution",
   delivering: "Delivering",
   delivered: "Delivered, not acknowledged",
   delivery_unknown: "Delivery unknown",
@@ -265,6 +267,7 @@ const verb = (r: string) => (r === "approve" ? "Approve" : r === "decline" ? "De
 function renderRequests(h: HostState | undefined) {
   const box = $("requests");
   if (!h) { setHtml(box, `<div class="sectionheading"><h3>Requests</h3></div><p class="phase-note">No host selected.</p>`); return; }
+  if (h.info.supervisor) { setHtml(box, '<div class="sectionheading"><h3>Requests</h3></div><p class="phase-note">Approvals unavailable in cooperative mode.</p>'); return; }
   const r = h.coordRead;
   if (r.status !== "ready") {
     // Last-read requests are not shown as current: they may have been answered or gone stale since.
@@ -294,6 +297,13 @@ function renderRequests(h: HostState | undefined) {
 
 function renderWorkflow(h: HostState | undefined) {
   const steps = $("workflowSteps");
+  if (h?.info.supervisor) {
+    $("coordContext").textContent = h.info.name + " · Cooperative supervisor";
+    $("runName").textContent = "";
+    $("phaseState").textContent = "Workflow unavailable in cooperative mode.";
+    setHtml(steps, "");
+    return;
+  }
   const known = h?.coordRead.status === "ready";
   const run = known ? h!.coord.runs.at(-1) : undefined;
   const name = h ? h.info.name : "";
@@ -318,6 +328,7 @@ function renderWorkflow(h: HostState | undefined) {
 }
 
 function renderExchange(h: HostState | undefined) {
+  if (h?.info.supervisor) { renderCooperativeExchange(h); return; }
   const cmds: Command[] = h ? h.coord.commands.slice(-6) : [];
   setHtml($("exchangeRows"), cmds.map((c) =>
     `<li><div class="exchangemeta"><strong>${esc(c.actor)} → ${esc(c.target)}</strong><time>${esc(time(c.updatedAt))}</time></div><p>${esc(c.text)}</p>` +
@@ -328,6 +339,33 @@ function renderExchange(h: HostState | undefined) {
     : h.coordRead.status === "unknown" ? `Unreachable${h.coordRead.at ? ` since ${clock(h.coordRead.at)}` : ""}. ${cmds.length ? "These are the last known commands; their status may have changed." : "Command history unknown."}`
     : h.coordRead.status === "loading" ? "Reading commands."
     : cmds.length ? "" : `No commands yet on ${h.info.name}.`;
+}
+
+function renderCooperativeExchange(h: HostState) {
+  const button = (label: string, action: string, disabled = false, command = "") =>
+    '<button type="button" data-fk="' + esc(action + command) + '" data-host="' + esc(h.info.id) + '" data-page="' + action + '" data-command="' + esc(command) + '"' + (disabled ? ' disabled' : '') + '>' + label + '</button>';
+  const rows = h.commands.map(c => '<li><div class="exchangemeta"><strong>' + esc(c.actor) + ' → ' + esc(c.target) + '</strong><time>' + esc(time(c.updatedAt)) + '</time></div><p>' + esc(c.text) + '</p><span class="receipt">' + esc(c.id + ' · ' + (commandLabel[c.status] ?? c.status)) + '</span>' + button('Inspect command', 'select', false, c.id) + '</li>').join('');
+  let detail = '';
+  if (h.selectedCommand) {
+    const r = h.inspectionRead;
+    detail = '<li><strong>Inspection: ' + esc(h.selectedCommand) + '</strong>';
+    if (r.status === 'unknown') detail += '<p>Inspection unknown: ' + esc(r.error ?? 'Read failed') + '. Previous inspection is not current.</p>';
+    else if (!h.inspection) detail += '<p>Reading inspection.</p>';
+    else {
+      const d = h.inspection;
+      detail += '<p>Command row: ' + esc(commandLabel[d.command.status] ?? d.command.status) + '</p>';
+      detail += d.claim ? '<p>Claim incarnation: ' + esc(d.claim.incarnationId) + ' · incarnationActive: ' + d.claim.incarnationActive + ' · settled: ' + d.claim.settled + '. Settlement is an operator record, not execution.</p>' : '<p>No claim recorded.</p>';
+      detail += '<p>Lifecycle reports, separate from command row:</p><ol>' + d.events.map(e => '<li>' + esc(e.seq + ' · ' + e.status + ' · ' + e.detail + ' · ' + e.at) + '</li>').join('') + '</ol>';
+      detail += '<p>' + (h.inspectionCursor ? 'More lifecycle events available; shown reports are not complete.' : 'End of events at this read, not a live snapshot.') + '</p>';
+      if (h.inspectionCursor) detail += button('Load more events', 'events', !!r.inFlight);
+      detail += '<p>Read ' + esc(clock(r.at)) + '</p>';
+    }
+    detail += button('Refresh inspection', 'inspect', !!r.inFlight) + '</li>';
+  }
+  setHtml($("exchangeRows"), rows + '<li>' + button('Refresh commands', 'refresh', !!h.commandsRead.inFlight) + (h.commandsCursor ? button('Load more commands', 'commands', !!h.commandsRead.inFlight || h.commandsRead.status !== 'ready') : '') + '</li>' + detail);
+  $("eventText").textContent = h.commandsRead.status === 'unknown' ? 'Command history unknown. Last-read rows may have changed. ' + (h.commandsRead.error ?? '')
+    : h.commandsRead.status === 'loading' ? 'Reading commands.'
+    : h.commandsCursor ? 'Oldest-first page. More commands available; this is not complete history.' : 'End of command history at this read. Pages are live reads, not a snapshot.';
 }
 
 const SEND_REASON: Record<string, string> = {
@@ -353,7 +391,7 @@ function renderComposer(h: HostState | undefined) {
   const target = composerTarget(h);
   const gate = sendGate(h, target, box.value);
   $("composerTarget").textContent = gate.ok || gate.reason === "empty"
-    ? `To ${target} on ${h.info.name} · fleet send`
+    ? `To ${target} on ${h.info.name} · ${h.info.supervisor ? "cooperative pull, no wakeup" : "fleet send"}`
     : gate.reason === "no-target" ? `No running session selected on ${h.info.name}`
     : gate.reason === "sending" ? `Sending to ${h.intent?.target ?? target} on ${h.info.name}`
     : `${h.info.name}: ${SEND_REASON[gate.reason]}`;
@@ -372,10 +410,10 @@ function renderChrome(h: HostState | undefined) {
   const msgs: string[] = [];
   if (hostListError) msgs.push(hostListError);
   if (h?.sessionsRead.status === "unknown") msgs.push(`Cannot read ${h.info.name}: ${h.sessionsRead.error ?? "unreachable"}. Its execution state is unknown, not stopped. Other hosts are unaffected.`);
-  else if (h?.coordRead.status === "unknown") msgs.push(`Cannot read supervisor state on ${h.info.name}: ${h.coordRead.error ?? "unreachable"}. Request state is unknown.`);
+  else if (!h?.info.supervisor && h?.coordRead.status === "unknown") msgs.push(`Cannot read supervisor state on ${h.info.name}: ${h.coordRead.error ?? "unreachable"}. Request state is unknown.`);
   alert.hidden = msgs.length === 0;
   alert.textContent = msgs.join(" ");
-  $("status").textContent = !h ? "Read-only terminals" : h.coordRead.status === "ready" ? `${h.info.name} · read-only terminals · supervisor panel live` : `${h.info.name} · state unknown or loading`;
+  $("status").textContent = !h ? "Read-only terminals" : (h.info.supervisor ? h.commandsRead.status : h.coordRead.status) === "ready" ? `${h.info.name} · read-only terminals · ${h.info.supervisor ? "cooperative commands, explicit refresh" : "supervisor panel live"}` : `${h.info.name} · state unknown or loading`;
 }
 
 function render() {
@@ -393,6 +431,11 @@ function render() {
 
 // Each read is tied to the host that started it; finishRead drops it if that read is no longer current.
 async function refresh(hostId: string, kind: ReadKind) {
+  const current = fleet.hosts[hostId];
+  if (kind === "coord" && current?.info.supervisor) {
+    if (current.commandsRead.status === "loading") await readCooperativePage(hostId, "commands");
+    return;
+  }
   const begun = beginRead(fleet, hostId, kind);
   if (!begun.token) return;
   apply(begun.fleet);
@@ -406,6 +449,20 @@ async function refresh(hostId: string, kind: ReadKind) {
     result = parseCoord(rq.outcome, cm.outcome);
   }
   apply(finishRead(fleet, hostId, kind, begun.token, result, new Date().toISOString()));
+  render();
+}
+async function readCooperativePage(hostId: string, kind: "commands" | "inspection", more = false) {
+  const begun = beginPageRead(fleet, hostId, kind, more);
+  if (!begun.handle) return;
+  apply(begun.fleet);
+  const a = begun.handle;
+  const host = fleet.hosts[hostId]!.info;
+  render();
+  const query = a.cursor ? '?cursor=' + encodeURIComponent(a.cursor) : '';
+  const path = kind === 'commands' ? '/commands' : '/commands/' + encodeURIComponent(a.commandId) + '/cooperative';
+  const { outcome } = await hostCall(host, path + query);
+  const result = outcome.ok ? kind === 'commands' ? parseCommandPage(outcome.data, host, a.cursor) : parseInspection(outcome.data, host, a.commandId, a.cursor) : outcome;
+  apply(finishPageRead(fleet, a, result, new Date().toISOString()));
   render();
 }
 const refreshAll = (kind: ReadKind) => Promise.all(fleet.order.map((id) => refresh(id, kind)));
@@ -440,6 +497,12 @@ async function loadHostList() {
 document.addEventListener("click", (e) => {
   const b = (e.target as Element).closest("button");
   if (!b) return;
+  if (b.dataset.page) {
+    const hostId = b.dataset.host!;
+    if (b.dataset.page === "select") { apply(selectCommand(fleet, hostId, b.dataset.command!)); void readCooperativePage(hostId, "inspection"); }
+    else void readCooperativePage(hostId, b.dataset.page === "inspect" || b.dataset.page === "events" ? "inspection" : "commands", b.dataset.page === "events" || b.dataset.page === "commands");
+    return;
+  }
   if (b.dataset.answer) { void answer(b.dataset.host!, b.dataset.request!, b.dataset.answer, Number(b.dataset.revision)); return; }
   if (b.id === "inspectorToggle") { setInspector(!inspectorOpen); return; }
   if (b.dataset.host && b.dataset.session) {
@@ -494,19 +557,24 @@ $("instructionForm").addEventListener("submit", async (e) => {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ idempotencyKey: intent.key, target: intent.target, text: intent.text }),
   }, WRITE_TIMEOUT_MS);
-  const kind = classifySend(status);
+  const submitted = outcome.ok && isCommand((outcome.data as { command?: unknown }).command) ? (outcome.data as { command: Command }).command : null;
+  const kind = host.supervisor && status !== null && status >= 200 && status <= 299 && (!submitted || submitted.target !== intent.target || submitted.hostId !== host.supervisor.hostId || submitted.text !== intent.text || (submitted as Command & { idempotencyKey?: unknown }).idempotencyKey !== intent.key) ? "uncertain" : classifySend(status);
   let notice: string;
   if (kind === "queued") {
-    const cmd = outcome.ok ? (outcome.data as { command?: Command }).command : undefined;
+    const cmd = submitted;
     notice = cmd ? `${host.name} · ${cmd.id.slice(0, 12)}: ${commandLabel[cmd.status] ?? cmd.status}.` : `${host.name}: accepted.`;
   } else if (kind === "rejected") {
     notice = `${host.name}: not queued: ${outcome.ok ? "refused" : outcome.message}`;
   } else {
     notice = `${host.name} did not answer clearly. Unknown whether the instruction to ${intent.target} was queued; sending the same text again reuses the same key.`;
   }
-  apply(finishSend(fleet, intent, kind, notice));
+  apply(finishSend(fleet, intent, kind, notice, submitted ?? undefined));
   render();
-  void refresh(host.id, "coord");
+  if (host.supervisor && fleet.hosts[host.id]?.gen === intent.gen) {
+    void readCooperativePage(host.id, "commands");
+    if (kind === "queued" && submitted) void readCooperativePage(host.id, "inspection");
+  }
+  else void refresh(host.id, "coord");
 });
 
 await init();

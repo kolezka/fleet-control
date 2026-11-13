@@ -15,6 +15,7 @@ import type { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { createCooperativeSettlementRoute } from "./cooperative-settlement-route.ts";
 
 const MAX_BODY = 32 * 1024;
+const MAX_COMMAND_LIST_BODY = 2 * 1024 * 1024;
 // Allow 65536 UTF-16 code units escaped as six JSON bytes each, plus envelope.
 const MAX_MCP_BODY = 512 * 1024;
 
@@ -81,6 +82,31 @@ export function createCooperativeCentralApp(deps: {
   app.route("/", createCooperativeInspectionRoute({ auth: deps.auth, inspection: deps.inspection }));
   if (deps.reconciliation) app.route("/", createCooperativeAssertionsRoute({ auth: deps.auth, reconciliation: deps.reconciliation }));
   if (deps.settlement) app.route("/", createCooperativeSettlementRoute({ auth: deps.auth, settlement: deps.settlement }));
+  app.get("/api/commands", async (c) => {
+    const principal = deps.auth.authenticate(c.req.raw);
+    if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
+    const query = new URL(c.req.url).searchParams;
+    const allowed = new Set(["hostId", "target", "limit", "cursor"]);
+    for (const key of query.keys()) {
+      if (!allowed.has(key) || query.getAll(key).length !== 1) return c.json({ error: "invalid query" }, 400);
+    }
+    const hostId = query.get("hostId");
+    const target = query.get("target");
+    if ([hostId, target].some((value) => value === null || !value.trim() || value.length > 256 || !value.isWellFormed() || value.includes("\0"))) return c.json({ error: "invalid scope" }, 400);
+    const limitText = query.get("limit");
+    if (limitText !== null && !/^[1-4]$/.test(limitText)) return c.json({ error: "invalid limit" }, 400);
+    const cursor = query.get("cursor") ?? undefined;
+    if (cursor !== undefined && (cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(cursor))) return c.json({ error: "invalid cursor" }, 400);
+    const page = await deps.commands.listBounded(undefined, { hostId: hostId!, target: target! }, { limit: limitText === null ? 4 : Number(limitText), cursor });
+    const body = JSON.stringify(page);
+    if (Buffer.byteLength(body, "utf8") > MAX_COMMAND_LIST_BODY) throw new Error("command list too large");
+    return c.body(body, 200, { "Content-Type": "application/json" });
+  });
+  app.get("/api/commands/:id", async (c) => {
+    const principal = deps.auth.authenticate(c.req.raw);
+    if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
+    return c.json({ command: await deps.commands.getBounded(c.req.param("id")) });
+  });
   app.post("/api/commands", async (c) => {
     const principal = deps.auth.authenticate(c.req.raw);
     if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
