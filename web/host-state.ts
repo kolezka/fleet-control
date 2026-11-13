@@ -1,3 +1,5 @@
+import type { CooperativeInspectionResult } from "../src/central/cooperative-inspection.ts";
+
 // Pure per-host state for the multi-host deck. No DOM, no fetch, no terminal library: web/app.ts wires
 // this to the browser. Every host keeps its own sessions, selection, supervisor data, draft and
 // pending command intent. Nothing here is shared between hosts, so one host's delayed read, failure
@@ -14,11 +16,11 @@ export type Req = {
   id: string; runId: string; phase: string; revision: number; kind: string; question: string; proposedAction: string; scope: string;
   evidence: string[]; allowedResponses: string[]; status: string; response: string | null; resolvedBy: string | null; resolutionNote: string | null;
 };
-export type Command = { id: string; target: string; actor: string; text: string; status: string; response: string | null; updatedAt: string; createdAt: string };
+export type Command = { hostId?: string; id: string; target: string; actor: string; text: string; status: string; response: string | null; updatedAt: string; createdAt: string };
 export type Peer = { name: string; url: string };
 
 /** `direct`: this page talks to one host service itself, so a 401 there means "sign in here". */
-export type HostInfo = { id: string; name: string; apiBase: string; direct: boolean };
+export type HostInfo = { id: string; name: string; apiBase: string; direct: boolean; supervisor?: { hostId: string; session: string } };
 
 // ---------------------------------------------------------------------------------------------
 // Host list and response parsing
@@ -43,7 +45,10 @@ export function parseHostList(body: unknown): HostList | null {
       const r = h as Record<string, unknown>;
       if (typeof r.id !== "string" || !r.id || !validGatewayBase(r.apiBase)) continue;
       if (hosts.some((x) => x.id === r.id)) continue;
-      hosts.push({ id: r.id, name: typeof r.name === "string" && r.name ? r.name : r.id, apiBase: r.apiBase, direct: false });
+      const m = r.supervisor as Record<string, unknown> | null;
+      if (r.supervisor !== undefined && (!m || typeof m !== "object" || ![m.hostId, m.session].every(v => typeof v === "string" && !!v && v.length <= 256 && v.trim() === v && !/[\x00-\x1f\x7f]/.test(v)))) return null;
+      const supervisor = m ? { hostId: m.hostId as string, session: m.session as string } : undefined;
+      hosts.push({ ...(supervisor ? { supervisor } : {}), id: r.id, name: typeof r.name === "string" && r.name ? r.name : r.id, apiBase: r.apiBase, direct: false });
     }
     return { mode: "gateway", hosts, peers: [] };
   }
@@ -130,12 +135,20 @@ export type HostState = {
   sending: boolean;
   notice: string;
   answering: string[];
+  commands: Command[];
+  commandsRead: ReadMeta;
+  commandsCursor: string | null;
+  selectedCommand: string;
+  inspection: CooperativeInspectionResult | null;
+  inspectionRead: ReadMeta;
+  inspectionCursor: string | null;
 };
 export type Fleet = { hosts: Record<string, HostState>; order: string[]; selectedHost: string; nextGen: number };
 
 const meta = (): ReadMeta => ({ status: "loading", inFlight: null, n: 0, error: null, at: null });
 const freshHost = (info: HostInfo, gen: number): HostState => ({
   info, gen, sessions: [], sessionsRead: meta(), coord: { runs: [], requests: [], commands: [] }, coordRead: meta(),
+  commands: [], commandsRead: meta(), commandsCursor: null, selectedCommand: "", inspection: null, inspectionRead: meta(), inspectionCursor: null,
   selectedSession: "", draft: "", intent: null, sending: false, notice: "", answering: [],
 });
 
@@ -153,7 +166,7 @@ export function setHosts(f: Fleet, infos: HostInfo[]): Fleet {
   let nextGen = f.nextGen;
   for (const info of infos) {
     const old = f.hosts[info.id];
-    hosts[info.id] = old && old.info.apiBase === info.apiBase && old.info.direct === info.direct ? { ...old, info } : freshHost(info, nextGen++);
+    hosts[info.id] = old && old.info.apiBase === info.apiBase && old.info.direct === info.direct && old.info.supervisor?.hostId === info.supervisor?.hostId && old.info.supervisor?.session === info.supervisor?.session ? { ...old, info } : freshHost(info, nextGen++);
   }
   const order = infos.map((i) => i.id);
   return { hosts, order, selectedHost: hosts[f.selectedHost] ? f.selectedHost : (order[0] ?? ""), nextGen };
@@ -244,6 +257,7 @@ export function describeSessions(h: HostState): SessionsView {
 
 /** The session an instruction goes to: the run's orchestrator when it is running, else the selected one. */
 export function composerTarget(h: HostState): string {
+  if (h.info.supervisor) return h.info.supervisor.session;
   const orch = h.coord.runs.at(-1)?.orchestrator;
   if (orch && h.sessions.some((s) => s.name === orch && s.running)) return orch;
   return h.sessions.find((s) => s.name === h.selectedSession && s.running)?.name ?? "";
@@ -254,6 +268,10 @@ export type SendGate = { ok: true } | { ok: false; reason: "sending" | "loading"
 /** Sending needs fresh knowledge of this host: both reads must have succeeded most recently. */
 export function sendGate(h: HostState, target: string, text: string): SendGate {
   if (h.sending) return { ok: false, reason: "sending" };
+  if (h.info.supervisor) {
+    if (target !== h.info.supervisor.session) return { ok: false, reason: "no-target" };
+    return text.trim() ? { ok: true } : { ok: false, reason: "empty" };
+  }
   if (h.sessionsRead.status === "unknown" || h.coordRead.status === "unknown") return { ok: false, reason: "unknown" };
   if (h.sessionsRead.status === "loading" || h.coordRead.status === "loading") return { ok: false, reason: "loading" };
   if (!target) return { ok: false, reason: "no-target" };
@@ -287,13 +305,14 @@ export function beginSend(
  * Settles the send on the host that sent it. Queued and rejected end the intent; uncertain keeps it so
  * the same send repeats the same key. The draft is cleared only if it still is the text that was sent.
  */
-export function finishSend(f: Fleet, intent: CommandIntent, outcome: SendOutcome, notice: string): Fleet {
+export function finishSend(f: Fleet, intent: CommandIntent, outcome: SendOutcome, notice: string, submitted?: Command): Fleet {
   const h = f.hosts[intent.hostId];
   if (!h || h.gen !== intent.gen) return f;
   const base: Partial<HostState> = { sending: false, notice };
   if (outcome === "uncertain") return patch(f, intent.hostId, base);
   return patch(f, intent.hostId, {
     ...base,
+    ...(outcome === "queued" && h.info.supervisor && submitted ? { selectedCommand: submitted.id, inspection: null, inspectionCursor: null, inspectionRead: { ...meta(), n: h.inspectionRead.n } } : {}),
     intent: h.intent?.key === intent.key ? null : h.intent,
     draft: outcome === "queued" && h.draft.trim() === intent.text ? "" : h.draft,
   });
@@ -307,7 +326,7 @@ export const answerKey = (requestId: string, revision: number): string => `${req
 export function beginAnswer(f: Fleet, hostId: string, requestId: string, revision: number): { fleet: Fleet; handle: AnswerHandle | null } {
   const h = f.hosts[hostId];
   const key = answerKey(requestId, revision);
-  if (!h || h.answering.includes(key)) return { fleet: f, handle: null };
+  if (!h || h.info.supervisor || h.answering.includes(key)) return { fleet: f, handle: null };
   return { fleet: patch(f, hostId, { answering: [...h.answering, key] }), handle: Object.freeze({ hostId, gen: h.gen, requestId, revision }) };
 }
 
@@ -316,4 +335,69 @@ export function finishAnswer(f: Fleet, a: AnswerHandle, notice: string): Fleet {
   if (!h || h.gen !== a.gen) return f;
   const key = answerKey(a.requestId, a.revision);
   return patch(f, a.hostId, { answering: h.answering.filter((k) => k !== key), notice });
+}
+
+export type CommandPage = { commands: Command[]; nextCursor: string | null };
+const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const validCursor = (v: unknown): v is string | null => v === null || (typeof v === "string" && !!v && v.length <= 8192);
+const commandStatuses = ["queued", "claimed", "delivering", "delivered", "delivery_unknown", "accepted", "rejected", "running", "completed", "failed"];
+export function isCommand(v: unknown): v is Command {
+  return record(v) && ["id", "target", "actor", "text", "updatedAt", "createdAt"].every(k => typeof v[k] === "string") && !!v.id && commandStatuses.includes(v.status as string) && (v.response === undefined || v.response === null || typeof v.response === "string");
+}
+const invalidPage = (): Failure => ({ ok: false, kind: "invalid", message: "Cooperative page was malformed or out of scope" });
+export function parseCommandPage(body: unknown, host: HostInfo, cursor: string | null = null): Outcome<CommandPage> {
+  if (!host.supervisor || !record(body) || !Array.isArray(body.commands) || body.commands.length > 4 || !validCursor(body.nextCursor) || (cursor !== null && body.nextCursor === cursor)) return invalidPage();
+  if (!body.commands.every(c => isCommand(c) && c.target === host.supervisor!.session && record(c) && c.hostId === host.supervisor!.hostId) || new Set(body.commands.map(c => c.id)).size !== body.commands.length || (body.nextCursor !== null && !body.commands.length)) return invalidPage();
+  for (let i = 1; i < body.commands.length; i++) {
+    const previous = body.commands[i - 1] as Command;
+    const current = body.commands[i] as Command;
+    if (current.createdAt < previous.createdAt || (current.createdAt === previous.createdAt && current.id <= previous.id)) return invalidPage();
+  }
+  return { ok: true, data: body as CommandPage };
+}
+export function parseInspection(body: unknown, host: HostInfo, commandId: string, cursor: string | null): Outcome<CooperativeInspectionResult> {
+  if (!host.supervisor || !record(body) || !isCommand(body.command) || !record(body.command) || body.command.id !== commandId || body.command.hostId !== host.supervisor.hostId || body.command.target !== host.supervisor.session || !Array.isArray(body.events) || body.events.length > 4 || !validCursor(body.nextCursor)) return invalidPage();
+  const c = body.claim;
+  if (c !== null && (!record(c) || !["incarnationId", "requestId", "createdAt"].every(k => typeof c[k] === "string") || typeof c.incarnationActive !== "boolean" || typeof c.settled !== "boolean")) return invalidPage();
+  let previous = cursor ?? "0";
+  for (const event of body.events) {
+    if (!record(event) || typeof event.seq !== "string" || !/^[1-9][0-9]{0,18}$/.test(event.seq) || BigInt(event.seq) <= BigInt(previous) || !["accepted", "rejected", "running", "completed", "failed"].includes(event.status as string) || !["requestId", "detail", "at"].every(k => typeof event[k] === "string")) return invalidPage();
+    previous = event.seq;
+  }
+  if (body.nextCursor !== null && (!body.events.length || body.nextCursor !== previous)) return invalidPage();
+  return { ok: true, data: body as CooperativeInspectionResult };
+}
+export type PageHandle = Readonly<{ hostId: string; gen: number; token: string; kind: "commands" | "inspection"; commandId: string; cursor: string | null }>;
+export function selectCommand(f: Fleet, hostId: string, commandId: string): Fleet {
+  const h = f.hosts[hostId];
+  if (!h?.info.supervisor || !h.commands.some(c => c.id === commandId)) return f;
+  return patch(f, hostId, { selectedCommand: commandId, inspection: null, inspectionCursor: null, inspectionRead: { ...meta(), n: h.inspectionRead.n } });
+}
+// One read per host generation and resource. Selection changes invalidate inspection tokens.
+export function beginPageRead(f: Fleet, hostId: string, kind: PageHandle["kind"], more = false): { fleet: Fleet; handle: PageHandle | null } {
+  const h = f.hosts[hostId];
+  if (!h?.info.supervisor || (kind === "inspection" && !h.selectedCommand)) return { fleet: f, handle: null };
+  const m = kind === "commands" ? h.commandsRead : h.inspectionRead;
+  const cursor = more ? (kind === "commands" ? h.commandsCursor : h.inspectionCursor) : null;
+  if (m.inFlight || (more && (!cursor || m.status !== "ready"))) return { fleet: f, handle: null };
+  const token = [h.gen, kind, m.n + 1].join(".");
+  const next = { ...m, n: m.n + 1, inFlight: token };
+  const handle = Object.freeze({ hostId, gen: h.gen, token, kind, commandId: h.selectedCommand, cursor });
+  return { fleet: patch(f, hostId, kind === "commands" ? { commandsRead: next } : { inspectionRead: next }), handle };
+}
+export function finishPageRead(f: Fleet, a: PageHandle, result: Outcome<CommandPage | CooperativeInspectionResult>, at: string): Fleet {
+  const h = f.hosts[a.hostId];
+  if (!h || h.gen !== a.gen || (a.kind === "inspection" && h.selectedCommand !== a.commandId)) return f;
+  const m = a.kind === "commands" ? h.commandsRead : h.inspectionRead;
+  if (m.inFlight !== a.token) return f;
+  const next: ReadMeta = { ...m, inFlight: null, status: result.ok ? "ready" : "unknown", error: result.ok ? null : result.message, at: result.ok ? at : m.at };
+  if (!result.ok) return patch(f, a.hostId, a.kind === "commands" ? { commandsRead: next } : { inspectionRead: next, inspection: null, inspectionCursor: null });
+  if (a.kind === "commands") {
+    const d = result.data as CommandPage;
+    const commands = a.cursor ? [...h.commands, ...d.commands.filter(c => !h.commands.some(old => old.id === c.id))] : d.commands;
+    return patch(f, a.hostId, { commands, commandsCursor: d.nextCursor, commandsRead: next });
+  }
+  const d = result.data as CooperativeInspectionResult;
+  const events = a.cursor && h.inspection ? [...h.inspection.events, ...d.events] : d.events;
+  return patch(f, a.hostId, { inspection: { ...d, events }, inspectionCursor: d.nextCursor, inspectionRead: next });
 }

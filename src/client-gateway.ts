@@ -5,6 +5,8 @@
 // Trust model: the gateway has no login of its own. It is reachable only on 127.0.0.1, defends
 // against DNS rebinding with an exact Host check, and refuses browser requests from other origins.
 // Local processes, including other local users, can call it despite token file permissions.
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 const frameHeaders = { "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'" };
@@ -26,12 +28,13 @@ function buildPage() {
 
 export class GatewayConfigError extends Error {}
 
-export type HostInfo = { id: string; name: string; origin: string };
+export type SupervisorMapping = { hostId: string; session: string };
+export type HostInfo = { id: string; name: string; origin: string; supervisor?: SupervisorMapping };
 
 const ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const TOKEN = /^[A-Za-z0-9._~+\/=-]{1,512}$/;
 const SEGMENT = /^[A-Za-z0-9._-]{1,128}$/; // session names, command ids, request ids
-const KEYS = new Set(["id", "name", "url", "tokenFile"]);
+const KEYS = new Set(["id", "name", "url", "tokenFile", "supervisor"]);
 
 // Holds the tokens so they cannot end up in JSON output or logs by accident.
 export class Credentials {
@@ -50,19 +53,77 @@ export class Credentials {
   }
 }
 
-export type GatewayConfig = { hosts: HostInfo[]; credentials: Credentials };
+export type GatewayConfig = { hosts: HostInfo[]; credentials: Credentials; central?: { origin: string; credentials: Credentials } };
 export type RawHost = HostInfo & { tokenFile: string };
 
 function isLoopbackHostname(h: string): boolean {
   return h === "127.0.0.1" || h === "localhost" || h === "[::1]";
 }
 
+function parseOrigin(url: unknown, at: string): string {
+  if (typeof url !== "string") throw new GatewayConfigError(`${at}: url must be a string`);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new GatewayConfigError(`${at}: url is not a valid URL`);
+  }
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHostname(u.hostname))) {
+    throw new GatewayConfigError(`${at}: url must be https (http is allowed only for loopback)`);
+  }
+  if (u.username || u.password || u.search || u.hash || u.pathname !== "/" || url !== u.href && url !== u.origin) {
+    throw new GatewayConfigError(`${at}: url must be an origin only (scheme, host, port)`);
+  }
+  return u.origin;
+}
+
+function parseSupervisor(raw: unknown): SupervisorMapping {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new GatewayConfigError("supervisor must be an object");
+  const mapping = raw as Record<string, unknown>;
+  if (Object.keys(mapping).some((key) => key !== "hostId" && key !== "session")) throw new GatewayConfigError("supervisor: unknown key");
+  for (const key of ["hostId", "session"]) {
+    const value = mapping[key];
+    if (typeof value !== "string" || !value.isWellFormed() || !value.length || value.length > 256 || value.trim() !== value || /[\x00-\x1f\x7f]/.test(value)) throw new GatewayConfigError("supervisor: invalid hostId or session");
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(mapping.session as string)) throw new GatewayConfigError("supervisor: invalid session");
+  return { hostId: mapping.hostId as string, session: mapping.session as string };
+}
+
+export function parseGatewayCentralConfig(input: unknown, baseDir: string): { origin: string; tokenFile: string } | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new GatewayConfigError("config must be a JSON object");
+  const raw = (input as Record<string, unknown>).central;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new GatewayConfigError("central must be an object");
+  const central = raw as Record<string, unknown>;
+  if (Object.keys(central).some((key) => key !== "url" && key !== "tokenFile")) throw new GatewayConfigError("central: unknown key");
+  const origin = parseOrigin(central.url, "central");
+  if (typeof central.tokenFile !== "string" || !central.tokenFile.trim()) throw new GatewayConfigError("central: tokenFile must be a non-empty string");
+  return { origin, tokenFile: resolve(baseDir, central.tokenFile) };
+}
+
+async function readCentralToken(path: string): Promise<string> {
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o600 || stat.size > 1024) throw new Error();
+    const token = (await file.readFile("utf8")).trim();
+    if (!TOKEN.test(token)) throw new Error();
+    return token;
+  } catch {
+    throw new GatewayConfigError("central: tokenFile must be an owned private regular nonsymlink 0600 file holding one valid token");
+  } finally {
+    await file?.close();
+  }
+}
+
 // Pure validation. Token files are read separately so this can be tested without a disk.
 export function parseGatewayConfig(input: unknown, baseDir: string): RawHost[] {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new GatewayConfigError("config must be a JSON object");
   const top = input as Record<string, unknown>;
-  for (const k of Object.keys(top)) if (k !== "hosts") throw new GatewayConfigError(`config: unknown key "${k}"`);
+  for (const k of Object.keys(top)) if (k !== "hosts" && k !== "central") throw new GatewayConfigError(`config: unknown key "${k}"`);
   if (!Array.isArray(top.hosts) || top.hosts.length === 0) throw new GatewayConfigError("config: hosts must be a non-empty array");
+  const central = parseGatewayCentralConfig(input, baseDir);
   const seen = new Set<string>();
   return top.hosts.map((raw, i): RawHost => {
     const at = `hosts[${i}]`;
@@ -76,22 +137,12 @@ export function parseGatewayConfig(input: unknown, baseDir: string): RawHost[] {
     if (typeof h.name !== "string" || h.name.trim().length === 0 || h.name.length > 80 || /[\u0000-\u001f\u007f]/.test(h.name)) {
       throw new GatewayConfigError(`${at}: name must be 1-80 printable characters`);
     }
-    if (typeof h.url !== "string") throw new GatewayConfigError(`${at}: url must be a string`);
-    let u: URL;
-    try {
-      u = new URL(h.url);
-    } catch {
-      throw new GatewayConfigError(`${at}: url is not a valid URL`);
-    }
-    if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHostname(u.hostname))) {
-      throw new GatewayConfigError(`${at}: url must be https (http is allowed only for loopback)`);
-    }
-    if (u.username || u.password || u.search || u.hash || u.pathname !== "/" || h.url !== u.href && h.url !== u.origin) {
-      throw new GatewayConfigError(`${at}: url must be an origin only (scheme, host, port)`);
-    }
+    const origin = parseOrigin(h.url, at);
     if (typeof h.tokenFile !== "string" || h.tokenFile.length === 0) throw new GatewayConfigError(`${at}: tokenFile must be a non-empty string`);
     const tokenFile = isAbsolute(h.tokenFile) ? h.tokenFile : resolve(baseDir, h.tokenFile);
-    return { id: h.id, name: h.name.trim(), origin: u.origin, tokenFile };
+    const supervisor = h.supervisor === undefined ? undefined : parseSupervisor(h.supervisor);
+    if (supervisor && !central) throw new GatewayConfigError(`${at}: supervisor requires central`);
+    return { id: h.id, name: h.name.trim(), origin, tokenFile, ...(supervisor ? { supervisor } : {}) };
   });
 }
 
@@ -121,7 +172,14 @@ export async function loadGatewayConfig(path: string): Promise<GatewayConfig> {
     owners.set(token, h.id);
     tokens.set(h.id, token);
   }
-  return { hosts: raw.map(({ id, name, origin }) => ({ id, name, origin })), credentials: new Credentials(tokens) };
+  const central = parseGatewayCentralConfig(json, dirname(abs));
+  let centralConfig: GatewayConfig["central"];
+  if (central) {
+    const token = await readCentralToken(central.tokenFile);
+    if (owners.has(token)) throw new GatewayConfigError("central and host credentials must not share one token");
+    centralConfig = { origin: central.origin, credentials: new Credentials(new Map([["operator", token]])) };
+  }
+  return { hosts: raw.map(({ tokenFile, ...host }) => host), credentials: new Credentials(tokens), ...(centralConfig ? { central: centralConfig } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -154,6 +212,7 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "terminal") return { kind: "ws", upstream: `/api/sessions/${b}/terminal`, query: { cols: NUM, rows: NUM } };
   if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"]);
+  if (seg.length === 3 && a === "commands" && ok(b) && c === "cooperative") return http(`/api/commands/${b}/cooperative`, ["GET"]);
   if (seg.length === 2 && a === "commands" && ok(b)) return http(`/api/commands/${b}`, ["GET"]);
   if (seg.length === 1 && a === "requests") return http("/api/requests", ["GET"]);
   if (seg.length === 3 && a === "requests" && ok(b) && c === "resolve") return http(`/api/requests/${b}/resolve`, ["POST"]);
@@ -217,11 +276,12 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   let allowedHosts = new Set<string>();
 
   // Every outcome here is for one request on one host; nothing is shared between hosts.
-  async function proxyHttp(req: Request, host: HostInfo, route: Extract<Target, { kind: "http" }> | { kind: "mcp" }, url: URL): Promise<Response> {
+  async function proxyHttp(req: Request, host: HostInfo, route: Extract<Target, { kind: "http" }> | { kind: "mcp" }, url: URL, central = false): Promise<Response> {
     const write = req.method !== "GET";
     const mcp = route.kind === "mcp";
-    const token = config.credentials.bearer(host.id);
-    if (!token) return fail(502, "upstream_unconfigured", "host has no credentials", { host: host.id });
+    const upstreamOrigin = central ? config.central?.origin : host.origin;
+    const token = central ? config.central?.credentials.bearer("operator") : config.credentials.bearer(host.id);
+    if (!token || !upstreamOrigin) return fail(502, "upstream_unconfigured", "host has no credentials", { host: host.id });
 
     // Build the upstream URL from validated parts only.
     let path = mcp ? "/mcp" : route.upstream;
@@ -236,7 +296,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (q.size) path += `?${q}`;
     }
 
-    const headers = new Headers({ authorization: `Bearer ${token}`, origin: host.origin });
+    const headers = new Headers({ authorization: `Bearer ${token}`, ...(!central ? { origin: host.origin } : {}) });
     let body: Uint8Array | undefined;
     if (write) {
       const ctype = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
@@ -260,7 +320,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
     let res: Response;
     let bytes: Uint8Array | null;
     try {
-      res = await fetch(host.origin + path, {
+      res = await fetch(upstreamOrigin + path, {
         method: req.method,
         headers,
         body,
@@ -268,7 +328,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
         signal: AbortSignal.timeout(timeoutMs),
         // A write must never be replayed by the HTTP client on a stale pooled connection.
         ...(write ? { keepalive: false } : {}),
-        ...(host.origin.startsWith("https:") ? { tls: { rejectUnauthorized: true } } : {}),
+        ...(upstreamOrigin.startsWith("https:") ? { tls: { rejectUnauthorized: true } } : {}),
       } as RequestInit);
       bytes = await readBounded(res.body, maxRes);
     } catch (e) {
@@ -282,6 +342,15 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
     }
     if (!bytes) return fail(502, "upstream_too_large", "host response too large", { host: host.id, ...(write ? { outcome: "unknown" as const } : {}) });
 
+    if (central) {
+      const text = new TextDecoder().decode(bytes);
+      let decoded = "";
+      try { decoded = JSON.stringify(JSON.parse(text)); } catch {
+        if (res.ok) return fail(502, "upstream_malformed", "invalid central JSON", { host: host.id, ...(write ? { outcome: "unknown" as const } : {}) });
+      }
+      const secrets = [token, ...config.hosts.map((h) => config.credentials.bearer(h.id)).filter((value): value is string => !!value)];
+      if (secrets.some((secret) => text.includes(secret) || decoded.includes(secret))) return fail(502, "upstream_malformed", "unsafe central response", { host: host.id, ...(write ? { outcome: "unknown" as const } : {}) });
+    }
     const st = res.status;
     const ctype = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     const unknownIfWrite: ErrExtra = { host: host.id, upstreamStatus: st, ...(write ? { outcome: "unknown" as const } : {}) };
@@ -298,6 +367,8 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (mcp && sid && HEADER_VALUE.test(sid)) out["mcp-session-id"] = sid;
       return new Response(bytes as unknown as BodyInit, { status: st, headers: out });
     }
+    if (central) return fail(PASS_STATUS.has(st) ? st : 502, "upstream_rejected", "central rejected the request", { host: host.id, upstreamStatus: st });
+
     // 4xx the host meant for the caller: keep the status and the error kind, drop everything else.
     if (PASS_STATUS.has(st) && ctype === "application/json") {
       try {
@@ -313,6 +384,86 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       }
     }
     return fail(502, "upstream_rejected", "host rejected the request", { host: host.id, upstreamStatus: st });
+  }
+
+  async function proxyCentral(req: Request, host: HostInfo, route: Extract<Target, { kind: "http" }>, url: URL): Promise<Response> {
+    const mapping = host.supervisor!;
+    const list = route.upstream === "/api/commands" && req.method === "GET";
+    const inspection = route.upstream.endsWith("/cooperative");
+    const query = new URLSearchParams();
+    for (const [key, value] of url.searchParams) {
+      if ((!list && !inspection) || (key !== "limit" && key !== "cursor") || url.searchParams.getAll(key).length !== 1) return fail(400, "invalid", "unknown or duplicate query parameter");
+      if (key === "limit" && !/^[1-4]$/.test(value) || key === "cursor" && (!value.length || value.length > 8192)) return fail(400, "invalid", "invalid query parameter");
+      if (inspection && key === "cursor" && (!/^(0|[1-9][0-9]{0,18})$/.test(value) || BigInt(value) > 9223372036854775807n)) return fail(400, "invalid", "invalid inspection cursor");
+      query.set(key, value);
+    }
+    if (list) {
+      query.set("hostId", mapping.hostId);
+      query.set("target", mapping.session);
+      if (!query.has("limit")) query.set("limit", "4");
+    }
+    let forwarded = req;
+    let submitted: { text: string; idempotencyKey: string } | undefined;
+    if (req.method === "POST") {
+      if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) return fail(415, "unsupported_media_type", "content-type must be application/json");
+      if (Number(req.headers.get("content-length") ?? 0) > maxReq) return fail(413, "too_large", "request body too large");
+      const bytes = await readBounded(req.body, maxReq);
+      if (!bytes) return fail(413, "too_large", "request body too large");
+      let input: unknown;
+      try { input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+      catch { return fail(400, "invalid", "invalid command JSON"); }
+      if (!input || typeof input !== "object" || Array.isArray(input)) return fail(400, "invalid", "invalid command");
+      const body = input as Record<string, unknown>;
+      if (Object.keys(body).some((key) => !["target", "text", "idempotencyKey"].includes(key)) || body.target !== mapping.session || typeof body.text !== "string" || !body.text.trim() || body.text.length > 4000 || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 200) return fail(400, "invalid", "invalid command");
+      submitted = { text: body.text, idempotencyKey: body.idempotencyKey };
+      forwarded = new Request(req.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, hostId: mapping.hostId }) });
+    }
+    const centralUrl = new URL(url);
+    centralUrl.search = query.toString();
+    const centralRoute = { ...route, query: Object.fromEntries([...query.keys()].map((key) => [key, /^[\s\S]*$/])) };
+    const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+    const scoped = (command: unknown): command is Record<string, unknown> => record(command) && command.hostId === mapping.hostId && command.target === mapping.session;
+    const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.isWellFormed() && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
+    const decimal = (value: unknown): value is string => typeof value === "string" && /^(0|[1-9][0-9]{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n;
+    const timestamp = (value: unknown): boolean => typeof value === "string" && value.length <= 32 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value));
+    const commandId = route.upstream.replace(/\/cooperative$/, "").split("/").at(-1);
+    if (inspection || route.upstream !== "/api/commands") {
+      // The ownership read is not an event page and must not receive its cursor.
+      const getRoute = { ...centralRoute, upstream: route.upstream.replace(/\/cooperative$/, ""), query: {} };
+      const ownershipUrl = new URL(centralUrl);
+      ownershipUrl.search = "";
+      const response = await proxyHttp(new Request(req.url), host, getRoute, ownershipUrl, true);
+      if (!response.ok) return response;
+      let body: unknown;
+      try { body = await response.clone().json(); } catch { return fail(502, "upstream_malformed", "invalid central command"); }
+      if (!body || typeof body !== "object" || !scoped((body as Record<string, unknown>).command)) return fail(403, "forbidden", "command is outside configured supervisor scope");
+      const command = (body as Record<string, unknown>).command as Record<string, unknown>;
+      if (command.id !== commandId) return fail(502, "upstream_malformed", "central command ID mismatch", { host: host.id });
+      if (!inspection) return response;
+    }
+    const response = await proxyHttp(forwarded, host, centralRoute, centralUrl, true);
+    if (response.ok) {
+      const body = await response.clone().json();
+      const malformed = () => fail(502, "upstream_malformed", "invalid central response", { host: host.id, ...(submitted ? { outcome: "unknown" as const } : {}) });
+      if (list) {
+        if (!Array.isArray(body?.commands) || body.commands.length > Number(query.get("limit")) || !body.commands.every(scoped) || !(body.nextCursor === null || typeof body.nextCursor === "string" && body.nextCursor.length <= 8192)) return malformed();
+      } else {
+        if (!scoped(body?.command) || !validId(body.command.id)) return malformed();
+        if (submitted && (body.command.text !== submitted.text || body.command.idempotencyKey !== submitted.idempotencyKey)) return malformed();
+        if (inspection) {
+          if (body.command.id !== commandId || !Array.isArray(body.events) || body.events.length > Number(query.get("limit") ?? 4)) return malformed();
+          const claim = body.claim;
+          if (claim !== null && (!record(claim) || !validId(claim.incarnationId) || !validId(claim.requestId) || typeof claim.incarnationActive !== "boolean" || typeof claim.settled !== "boolean" || !timestamp(claim.createdAt))) return malformed();
+          let previous = BigInt(query.get("cursor") ?? "0");
+          for (const event of body.events) {
+            if (!record(event) || !decimal(event.seq) || BigInt(event.seq) <= previous || !validId(event.requestId) || !["accepted", "rejected", "running", "completed", "failed"].includes(event.status as string) || typeof event.detail !== "string" || event.detail.length > 65536 || !event.detail.isWellFormed() || event.detail.includes("\0") || !timestamp(event.at)) return malformed();
+            previous = BigInt(event.seq);
+          }
+          if (body.nextCursor !== null && (!decimal(body.nextCursor) || body.events.length !== Number(query.get("limit") ?? 4) || body.nextCursor !== body.events.at(-1)?.seq)) return malformed();
+        }
+      }
+    }
+    return response;
   }
 
   // Opens the upstream terminal socket. Resolves null on any failure; never throws.
@@ -416,7 +567,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}` })) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
       }
@@ -426,6 +577,9 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       const route = matchRoute(m[2]!.split("/"));
       const host = hosts.get(m[1]!);
       if (!route || !host) return fail(404, "not_found", "not found");
+
+      if (host.supervisor && (route.kind === "mcp" || m[2]!.startsWith("requests"))) return fail(501, "unsupported", "legacy requests and MCP are unsupported for central supervisors");
+      if (!host.supervisor && m[2]!.endsWith("/cooperative")) return fail(404, "not_found", "not found");
 
       if (route.kind === "ws") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
@@ -460,6 +614,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (!route.methods.includes(req.method)) return fail(405, "method_not_allowed", "method not allowed", {}, { allow: route.methods.join(", ") });
       // Browser writes must come from the page this gateway served.
       if (req.method !== "GET" && origin === null) return fail(403, "forbidden", "Origin required for writes");
+      if (host.supervisor && route.upstream.startsWith("/api/commands")) return proxyCentral(req, host, route, url);
       return proxyHttp(req, host, route, url);
     },
   });
