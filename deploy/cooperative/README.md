@@ -59,6 +59,22 @@ Then restart the host adapter: it reads the incarnation only at startup. The old
 longer claim or report. Its claimed commands stay claimed. An operator settles them through
 `POST /api/commands/:id/cooperative/settlement`; nothing requeues them.
 
+### Backups
+
+```bash
+deploy/cooperative/backup.sh <new archive path> --check-restore
+```
+
+It dumps database `fleet` from the postgres container (custom format, mode 0600, never
+overwrites) and lists the archive with `pg_restore`. With `--check-restore` it restores the archive
+into a throwaway database on the same server, compares table names and row counts of
+`fleet_cooperative_v1` with the live database and drops the throwaway database. Exit code 3 means
+the counts differ, usually because commands arrived after the dump; run it again when idle.
+
+The check does not compare grants or row contents, and the archive is not a backup until a
+second copy sits on another machine. Nothing schedules this script. There is no restore script:
+restoring over a live installation needs a stopped stack and a human decision.
+
 ### Recovery after a crash
 
 - **During `init`**: nothing is in the database yet. Remove `pg/`, `admin/`, `service/` and
@@ -74,8 +90,8 @@ longer claim or report. Its claimed commands stay claimed. An operator settles t
 ### Limits
 
 - HTTP only, loopback only. LAN access and TLS are not set up yet.
-- Backups are not automated. `scripts/central-backup.ts` expects a TLS connection and does not fit
-  this database as is.
+- Backups are manual (`backup.sh`, above) and not scheduled. `scripts/central-backup.ts` expects
+  a TLS connection and does not fit this database.
 - The listener joins the `published` network only for its port mapping; it has outbound access it
   does not need.
 - This is cooperative fencing between trusted processes, not a security boundary against the
