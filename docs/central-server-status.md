@@ -6,7 +6,7 @@ The central backend is **not production ready**. This page describes the code in
 
 Lead-verified execution used DSH `0.2.2-rc.1` with isolated Node `24.22.3` in private `/mnt/data/fleet-control-smoke`; the system runtime was unchanged. The model connection was CLIProxyAPI `http://127.0.0.1:8317/v1`. Cooperative calls used the persistent desktop adapter `127.0.0.1:4882` and central `https://local-arch.tail4a51cb.ts.net:4881`.
 
-Command `cmd-2e328ebb-bbc1-411c-8f8c-136a5681ef65` reported `accepted`, `running` and `completed` on the active incarnation. Its exact detail was `2: host-b, host-d`, matching the fixture file. The file was unchanged, the process exited 0, final status was `completed` and no token leaked. The run took about 13 seconds.
+Command `cmd-2e328ebb-bbc1-411c-8f8c-136a5681ef65` reported `accepted`, `running` and `completed` on the active incarnation. Its exact detail was `2: host-b, host-d`, matching the fixture file. The file was unchanged, the process exited 0, final status was `completed` and a scan of stdout/stderr found none of the known proxy, operator or local-adapter tokens. The run took about 13 seconds.
 
 The agent was read-only; shell, write, search, subagents and web were disabled. The lead removed temporary proxy-key and run-patch copies after the run. No production `tv-*` sessions were touched. This verifies one scratch fixture task through the deployed cooperative path, not UI integration, agent-fleet idle wakeup or production sessions.
 

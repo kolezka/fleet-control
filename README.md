@@ -189,7 +189,7 @@ The tests start their own private tmux servers and never touch your sessions.
 - The pinned agent-fleet includes the viewer/send fix; the real-shell regression passes. Overrides pointing to older checkouts may still have that bug. This is not production-agent verification.
 - Model detection works for Claude Code only, on the same host as the service.
 - phased-delivery does not yet write its phase record through MCP. Typing into a terminal (input leases) does not exist.
-- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. Real DSH verification on `.15` remains pending; synthetic lifecycle and restart checks are not real-agent proof.
+- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. One read-only real DSH fixture task on `.15` passed; production sessions and idle-agent wakeup remain unverified.
 
 ## More
 
