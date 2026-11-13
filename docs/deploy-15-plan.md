@@ -1,6 +1,6 @@
 # Deployment plan for 192.168.50.15
 
-Status: in progress. On 2026-11-13 the owner approved the persistent cooperative entry point and PostgreSQL on `.15`, and asked for docker compose. Steps 2 and 4 are now [deploy/cooperative](../deploy/cooperative/README.md).
+Status: deployed on loopback, 2026-11-13. On 2026-11-13 the owner approved the persistent cooperative entry point and PostgreSQL on `.15`, and asked for docker compose. Steps 2, 4 and 6 are [deploy/cooperative](../deploy/cooperative/README.md); open items are listed under Deployment below.
 
 ## What exists today
 
@@ -29,5 +29,13 @@ Collected over SSH as `me` (port 27022) on 2026-11-12, when `root` still refused
 5. **Certificates (owner).** Proposal: the same as `.4`. The owner's mkcert CA on the MacBook issues a certificate for `IP:192.168.50.15`; the key is copied to `.15` once, mode 0600, owned by the service user. Not needed if step 3 stays on an SSH tunnel.
 6. **Service.** Docker compose with `restart: unless-stopped`, no systemd unit; both containers run as `me`'s uid, secrets in private 0600 files, each container mounting only its part of the state directory. Separate from the production fleet's tmux sessions.
 7. **Verification.** Operator submit, a synthetic supervisor claim and reports, operator inspection and a stale-incarnation rejection against `.15`, then one real-agent run as in `scripts/real-agent-smoke.ts` on a scratch session, never on `tv-*`.
+
+## Deployment (2026-11-13)
+
+- Code: `main` at `22d0dd5` copied with `git archive` to `/home/me/fleet-cooperative` (commit in its `REVISION` file). It is not a git checkout. Update by copying a newer archive and running `docker compose build` and `up -d` in `deploy/cooperative`.
+- State: `/home/me/.local/state/fleet-cooperative`, port 4881, supervisor host id `me-desktop`, session `supervisor`. `setup.sh` ran every step without errors.
+- Listener on `127.0.0.1:4881` only. The central container sees only `/state/service` (credential hashes, runtime URL).
+- Verified on `.15`: `scripts/cooperative-compose-smoke.ts --restart` passed both cycles (submit, claim, accepted/running/completed, inspection, container restart, same incarnation claims again). Then the incarnation was replaced with `activate`: an adapter on the old incarnation could not claim, the new one claimed and reported a synthetic command, and inspection showed the active claim with all three events. The old incarnation file is kept as `client/incarnation.old.json`.
+- Open: no persistent host adapter yet (only test runs started one), no real-agent run on a scratch session, no automated backup, listener exposure (step 3) and certificates (step 5) await the owner.
 
 Rollback at every step: `docker compose down` in `deploy/cooperative` stops both containers and keeps the state directory (a bind mount, not a volume). Delete the state directory only after a checked backup. Nothing in this plan changes the production fleet.
