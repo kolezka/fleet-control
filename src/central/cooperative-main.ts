@@ -57,11 +57,12 @@ export function cooperativeConfig(env: Record<string, string | undefined>) {
   return { databaseUrl: raw!, runtimeDatabaseUrl: runtimeRaw!, runtimeRole: runtimeUrl.username, schema, credentialsFile, incarnationFile, port: Number(port), ...(tls ? { tls } : {}) };
 }
 
-export function parseCredentials(text: string): Credential[] {
+export function parseCredentials(text: string, options: { allowMultipleSupervisors?: boolean } = {}): Credential[] {
   const credentials: unknown = JSON.parse(text);
   if (!Array.isArray(credentials) || credentials.some((c) => !c || typeof c !== "object" || Array.isArray(c) || Object.keys(c).some((k) => !["tokenHash", "principal"].includes(k)) || !c.principal || typeof c.principal !== "object" || Array.isArray(c.principal) || Object.keys(c.principal).some((k) => !["name", "role", "principalId", "hostId", "session"].includes(k)))) throw new Error("invalid credentials");
   new CentralAuth(credentials);
-  if (credentials.filter((c) => c.principal.role === "supervisor").length !== 1 || !credentials.some((c) => c.principal.role === "operator") || credentials.some((c) => c.principal.role === "host")) throw new Error("one supervisor and at least one operator required");
+  const count = credentials.filter((c) => c.principal.role === "supervisor").length;
+  if ((options.allowMultipleSupervisors ? count < 1 : count !== 1) || !credentials.some((c) => c.principal.role === "operator") || credentials.some((c) => c.principal.role === "host")) throw new Error(options.allowMultipleSupervisors ? "at least one supervisor and operator required; host credentials forbidden" : "one supervisor and at least one operator required");
   return credentials;
 }
 
@@ -141,18 +142,20 @@ export async function startCooperative(env: Record<string, string | undefined> =
 }
 
 // Shared by the disposable entry point and the persistent service. Opens the runtime pool on an
-// already provisioned schema and enrolls the supervisor. With persist it also activates a new
+// already provisioned schema and enrolls all supervisors. With persist it requires exactly one and activates a new
 // incarnation (fencing the previous one) and hands its secret to persist after the listener is
 // up. Without persist no incarnation changes, so a service restart fences nothing. Never provisions.
 export async function serveCooperative(options: {
   runtimeDatabaseUrl: string; schema: string; credentials: Credential[]; tls?: Awaited<ReturnType<typeof loadTlsFiles>>;
   hostname: "127.0.0.1" | "0.0.0.0"; port: number; shutdownGraceMs: number; incarnationFile?: string;
   persist?: (credential: { incarnationId: string; token: string }) => Promise<void>;
+  allowedHosts?: string[];
 }) {
   const { schema, tls, port, shutdownGraceMs } = options;
   const auth = new CentralAuth(options.credentials);
-  const supervisor = options.credentials.find((c) => c.principal.role === "supervisor")!.principal;
-  if (supervisor.role !== "supervisor") throw new Error("supervisor required");
+  const supervisors = options.credentials.map((c) => c.principal).filter((p) => p.role === "supervisor");
+  if (!supervisors.length) throw new Error("supervisor required");
+  if (options.persist && supervisors.length !== 1) throw new Error("persist requires exactly one supervisor");
   let db: SQL | undefined;
   try {
     rejectAmbientPostgresEnvironment(process.env);
@@ -162,13 +165,13 @@ export async function serveCooperative(options: {
     await runner(async () => undefined);
     const identities = new SupervisorIdentityRegistry(db, runner);
     const incarnations = new SupervisorIncarnations(db, runner);
-    await identities.enroll(supervisor);
-    const credential = options.persist ? await incarnations.activate(supervisor) : undefined;
+    for (const supervisor of supervisors) await identities.enroll(supervisor);
+    const credential = options.persist ? await incarnations.activate(supervisors[0]!) : undefined;
     const commands = new CentralCommands(db, undefined, runner);
     const app = createCooperativeCentralApp({ auth, identities, commands, claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner), reconciliation: new CooperativeReconciliation(db, undefined, runner), settlement: new CooperativeSettlement(db, undefined, runner) });
     const pending = new Set<Promise<Response>>();
     const server = Bun.serve({ hostname: options.hostname, port, ...(tls ? { tls } : {}), fetch(request, server) {
-      if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}`) return new Response("invalid host", { status: 403 });
+      if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}` && !options.allowedHosts?.includes(request.headers.get("host") ?? "")) return new Response("invalid host", { status: 403 });
       const task = Promise.resolve(app.fetch(request));
       pending.add(task);
       void task.then(() => pending.delete(task), () => pending.delete(task));

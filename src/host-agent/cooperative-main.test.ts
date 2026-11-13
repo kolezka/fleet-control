@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startCooperativeAdapter } from "./cooperative-main.ts";
 
-test("adapter process configuration requires private files and a loopback central", async () => {
+test("adapter process configuration requires private files and HTTPS outside numeric loopback", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fleet-adapter-config-"));
   const configFile = join(dir, "config.json");
   const incarnationFile = join(dir, "incarnation.json");
@@ -22,7 +22,7 @@ test("adapter process configuration requires private files and a loopback centra
     const pem = await Bun.file(caFile).text();
     await writeFile(corruptCa, pem.replace(/[A-Za-z0-9+/]{20}/, "A".repeat(20)));
     await writeFile(bigCa, pem + "\n".repeat(64 * 1024));
-    for (const valid of [config, { ...https, centralCaFile: caFile }]) {
+    for (const valid of [config, { ...https, centralCaFile: caFile }, { ...config, centralUrl: "https://central.example.com:4881/mcp" }]) {
       await saveConfig(valid);
       const running = await startCooperativeAdapter(env);
       try {
@@ -50,6 +50,14 @@ test("adapter process configuration requires private files and a loopback centra
       await expect(startCooperativeAdapter(env)).rejects.toThrow("cooperative adapter startup failed");
     }
     await saveConfig(config);
+    const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+    const port = reservation.port!;
+    await reservation.stop(true);
+    const fixed = await startCooperativeAdapter({ ...env, COOPERATIVE_ADAPTER_PORT: String(port) });
+    try { expect(new URL(fixed.url).port).toBe(String(port)); } finally { await fixed.stop(); }
+    for (const invalidPort of ["", "-1", "65536", "1.2", "4882x"]) {
+      await expect(startCooperativeAdapter({ ...env, COOPERATIVE_ADAPTER_PORT: invalidPort })).rejects.toThrow("cooperative adapter startup failed");
+    }
     await chmod(configFile, 0o644);
     await expect(startCooperativeAdapter(env)).rejects.toThrow("cooperative adapter startup failed");
     await chmod(configFile, 0o600);

@@ -38,6 +38,7 @@ services:
     <<: *central
     environment:
       COOPERATIVE_HOST: 0.0.0.0
+      COOPERATIVE_EXTERNAL_HOST: "${COOPERATIVE_EXTERNAL_HOST:-}"
       COOPERATIVE_PORT: "${COOPERATIVE_PORT:?}"
       COOPERATIVE_RUNTIME_URL_FILE: /state/service/runtime-url
       COOPERATIVE_CREDENTIALS_FILE: /state/service/credentials.json
@@ -64,6 +65,7 @@ services:
       COOPERATIVE_STATE_DIR: /state
       COOPERATIVE_HOST_STATE_DIR: "${COOPERATIVE_STATE_DIR:?}"
       COOPERATIVE_SUPERVISOR_HOST: "${COOPERATIVE_SUPERVISOR_HOST:-local}"
+      COOPERATIVE_SUPERVISOR_SESSION: "${COOPERATIVE_SUPERVISOR_SESSION:-supervisor}"
       COOPERATIVE_ADMIN_URL_FILE: /state/admin/admin-url
       COOPERATIVE_RUNTIME_URL_FILE: /state/service/runtime-url
       COOPERATIVE_CREDENTIALS_FILE: /state/service/credentials.json

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>pl.raqz.fleet-cooperative-adapter</string>
+  <key>ProgramArguments</key><array>
+    <string>__BUN__</string>
+    <string>__CODE__/src/host-agent/cooperative-main.ts</string>
+  </array>
+  <key>WorkingDirectory</key><string>__CODE__</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>COOPERATIVE_ADAPTER_CONFIG_FILE</key><string>__STATE__/adapter.json</string>
+    <key>COOPERATIVE_ADAPTER_PORT</key><string>4882</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>40</integer>
+  <key>StandardOutPath</key><string>__STATE__/stdout.log</string>
+  <key>StandardErrorPath</key><string>__STATE__/stderr.log</string>
+</dict></plist>

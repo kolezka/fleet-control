@@ -45,7 +45,7 @@ Trust auth is acceptable only because the port binds to loopback and the data is
 
 **Progress and remaining work, in priority order.**
 
-Deployment target chosen by the owner on 2026-11-12: `.15`. The plan and open decisions are in [deploy-15-plan.md](deploy-15-plan.md); nothing has been deployed. The Mac mini can reach `me@.15` over SSH; a read-only inventory found the root disk full (0 bytes free), which blocks any deployment until the owner frees space.
+Deployment target chosen by the owner: `.15`. The persistent cooperative central and PostgreSQL are deployed on host loopback; see [deploy-15-plan.md](deploy-15-plan.md). The earlier disk-full blocker was cleared. On 2026-11-13 the owner approved Tailscale Serve and persistent adapters on both fleet hosts (`.4` and `.15`); that rollout is in progress. Other remote work still needs its own authorization.
 
 1. Done locally: `src/host-agent/cooperative-main.ts` runs the adapter and listener as a disposable loopback process. `src/central/cooperative-process.test.ts` exercises it against a separate cooperative central process with synthetic clients, including replacement fencing. This is not a real agent integration. The listener waits up to five seconds for connections and accepted handler promises, then force-closes; upstream work can still continue and unknown outcomes must not be retried automatically.
 2. Done locally: `scripts/real-agent-smoke.ts` runs Claude Code (owner-approved, default `~/.claude` login, Haiku) against the cooperative adapter over loopback. Two runs claimed one synthetic command and reported accepted, running and completed; see [central-server-status.md](central-server-status.md). With `--replacement` it also showed a real agent on the old incarnation being fenced and one on the new incarnation completing the next command, and the operator settling only the inactive incarnation's claim. With `--failure` a real agent refused a task, retried a report, sent rejected transitions and claimed an empty queue without extra records. With `--real-work` (owner-approved 2026-11-12) an agent with only the Read tool answered a question about fixture files in a separate workspace, with the correct answer and the files unchanged. The same script runs DSH instead with `--agent=dsh`; all modes passed once on 2026-11-13 (see status page).
@@ -72,7 +72,7 @@ Read [multi-host setup](multi-host.md), [completed implementation plan](decentra
 
 Verified locally: 161 tests passed, 3 skipped, 0 failed; typecheck clean; design handler check PASS. Actual independent services/SQLite/private tmux fleets and desktop/narrow browser renders were exercised. The skip is the separate agent-fleet viewer/send compatibility regression. No Linux deployment or paid agent test is claimed.
 
-Next: review/merge the branch, then separately authorize Linux host access and per-host deployment/configuration. Do not contact `.15` while its hold stands, do not start a Tailscale listener, and do not upgrade the installed `.4` service or push without permission. Existing remote deployment remains unchanged.
+Historical next step at that point: review/merge and obtain remote authorization. The later owner approvals for `.15` deployment, Tailscale Serve and cooperative adapters supersede that hold only for those scopes (see current section above). The installed legacy `.4` service remains separate and must not be upgraded without permission.
 
 ## Selected design baseline
 
