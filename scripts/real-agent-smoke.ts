@@ -2,7 +2,9 @@
 // adapter over loopback MCP, claims one synthetic command and reports its lifecycle.
 // Opt-in only: spends model tokens. Needs CENTRAL_TEST_DATABASE_URL for the disposable
 // test database (127.0.0.1:57507/fleet_control_test) and a logged-in \`claude\` CLI.
-// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--failure] [--real-work] [--replacement]
+// Usage: REAL_AGENT_SMOKE=1 CENTRAL_TEST_DATABASE_URL=... bun scripts/real-agent-smoke.ts [--agent=dsh] [--failure] [--real-work] [--replacement]
+// --agent=dsh runs `dsh --profile headless` instead of Claude Code: a read-only sandbox, the fleet adapter as its only
+// MCP server, shell, web, subagents and the profile's other MCP servers switched off. Needs CLIPROXYAPI_API_KEY.
 // --failure has an agent refuse a task, retry a report, send an invalid transition and claim an empty queue.
 // --replacement then replaces the incarnation, checks that an agent on the old adapter
 // is fenced, that an agent on a new adapter claims and reports the next command, and that
@@ -44,7 +46,48 @@ type AgentRun = { exit: number; result: unknown; stdout: string; stderr: string 
 const fleetTools = ["mcp__fleet__cooperative_claim", "mcp__fleet__cooperative_report"];
 const writingTools = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task"];
 
-async function runAgent(claudeBin: string, model: string, directory: string, name: string, adapterUrl: string, local: string, prompt: string, extraTools: string[] = [], cwd = directory): Promise<AgentRun> {
+export type AgentKind = "claude" | "dsh";
+
+// DSH plugins to switch off for the agent: shell, web, subagents, skills and every MCP server
+// from the owner's profile, so the only remote tools left are the fleet adapter's.
+const dshDisabled = ["tool-bash", "tool-pwsh", "tool-jobs", "tool-web", "tool-subagent", "tool-subagent-fork", "tool-subagent-control",
+  "tool-workflow", "tool-skill", "tool-goal", "tool-todo", "tool-working-directory", "mcp-resources", "mcp-slack", "mcp-slack2", "mcp-clickhouse",
+  "mcp-vulcan", "mcp-hindsight-inkitt", "mcp-outline", "hindsight", "claude-compat-block-docs", "claude-compat-self-improvement-loop",
+  "claude-compat-worklog-persist", "claude-compat-worklog-persist-outline", "claude-compat-repo-intel", "claude-compat-agents-def",
+  "claude-compat-kolezka-bootstrap", "claude-compat-performance-analyzer", "claude-compat-performance-analyzer-mcp", "claude-compat-phased-delivery",
+  "claude-compat-agent-fleet", "claude-compat-design-studio", "claude-compat-docify", "claude-compat-docify-mcp", "claude-compat-stealth-search"];
+
+// Patch layer for `dsh --profile headless`. JSON is valid YAML, so no YAML writer is needed.
+export function dshPatch(model: string, adapterUrl: string, local: string, read: boolean) {
+  return [
+    ...dshDisabled.map((id) => ({ id, disabled: true })),
+    ...(read ? [] : [{ id: "tool-fs-search", disabled: true }]),
+    { id: "tool-fs", name: "@deepseek-ai/dsh-tool-fs", config: { read, readImage: false, write: false, edit: false, applyPatch: false } },
+    { id: "agent-default-model", name: "@deepseek-ai/dsh-agent-default-model", config: { provider: "cliproxyapi", model } },
+    // A new entry must be inserted; a plain id entry only patches an existing one.
+    { insert: [{ id: "mcp-fleet", name: "@deepseek-ai/dsh-mcp-client", config: { serverName: "fleet", transport: "streamable-http", url: `${adapterUrl}/mcp`, headers: { Authorization: `Bearer ${local}` }, failOnStartupError: true } }] },
+  ];
+}
+
+async function runDsh(model: string, directory: string, name: string, adapterUrl: string, local: string, prompt: string, read: boolean, cwd: string): Promise<AgentRun> {
+  const patch = join(directory, `${name}-dsh.yml`);
+  await writeFile(patch, JSON.stringify(dshPatch(model, adapterUrl, local, read)), { mode: 0o600, flag: "wx" });
+  // read-only sandbox with approval "ask" and no answerer: anything wider fails closed.
+  const agent = Bun.spawn(["dsh", "--profile", "headless", "--patch", patch, "--json", "--permission-mode", "read-only", prompt],
+    { cwd, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", USER: process.env.USER ?? "", TERM: "dumb", CLIPROXYAPI_API_KEY: process.env.CLIPROXYAPI_API_KEY ?? "" }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => agent.kill(), 180_000);
+  const [stdout, stderr, exit] = await Promise.all([new Response(agent.stdout).text(), new Response(agent.stderr).text(), agent.exited]);
+  clearTimeout(timer);
+  const events = stdout.split("\n").filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+  const final = events.find((event) => event.type === "final");
+  const turns = events.filter((event) => event.type === "status" && event.phase === "step_start").length;
+  const result = final ? { is_error: final.reason?.kind !== "completed" && final.reason?.kind !== "stop" ? final.reason?.kind : false, num_turns: turns, result: final.text } : { unparsed: true };
+  return { exit, result, stdout, stderr };
+}
+
+async function runAgent(agentKind: AgentKind, model: string, directory: string, name: string, adapterUrl: string, local: string, prompt: string, extraTools: string[] = [], cwd = directory): Promise<AgentRun> {
+  if (agentKind === "dsh") return runDsh(model, directory, name, adapterUrl, local, prompt, extraTools.includes("Read"), cwd);
+  const claudeBin = "claude";
   const mcpConfig = join(directory, `${name}-mcp.json`);
   await writeFile(mcpConfig, JSON.stringify({ mcpServers: { fleet: { type: "http", url: `${adapterUrl}/mcp`, headers: { Authorization: `Bearer ${local}` } } } }), { mode: 0o600, flag: "wx" });
   const agent = Bun.spawn([claudeBin, "-p", prompt, "--model", model, "--mcp-config", mcpConfig, "--strict-mcp-config",
@@ -77,7 +120,7 @@ const snapshot = async (directory: string) => {
   return Promise.all(names.map(async (name) => `${name}:${hash(await readFile(join(directory, name), "utf8"))}`));
 };
 
-export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude", model = "haiku", replacement = false, failure = false, realWork = false) {
+export async function runRealAgentSmoke(databaseUrl: string, agentKind: AgentKind = "claude", model = "haiku", replacement = false, failure = false, realWork = false) {
   const schema = `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
   const directory = await mkdtemp(join(tmpdir(), "fleet-real-agent-"));
   const children: Child[] = [];
@@ -86,7 +129,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
   const principal = { role: "supervisor" as const, name: "owner", principalId: "owner", hostId: "host", session: "session" };
   const admin = new SQL(databaseUrl);
   const fixture = await disposableCooperativeRole(databaseUrl);
-  const secrets = [operator, supervisor, local, fixture.runtimeUrl];
+  const secrets = [operator, supervisor, local, fixture.runtimeUrl, ...(process.env.CLIPROXYAPI_API_KEY ? [process.env.CLIPROXYAPI_API_KEY] : [])];
   const redact = (text: string) => secrets.reduce((acc, secret) => acc.replaceAll(secret, "<redacted>"), text);
   try {
     const credentialsFile = join(directory, "credentials.json");
@@ -115,7 +158,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       "4. Do the task in the command text yourself (no tools needed), then report requestId \"r-completed\", status \"completed\", detail set to your answer.",
       "Never claim again and never retry with a different requestId. Finish with one line: DONE <commandId>.",
     ].join("\n");
-    const run = await runAgent(claudeBin, model, directory, "agent", adapter.url!, local, prompt);
+    const run = await runAgent(agentKind, model, directory, "agent", adapter.url!, local, prompt);
     const agentOut = run.stdout, agentErr = run.stderr, agentExit = run.exit, agentResult = run.result;
 
     const inspect = async (id: string, incarnationId: string) => {
@@ -152,7 +195,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
         "6. Call cooperative_claim with requestId \"claim-empty\".",
         "Never retry beyond these steps. Finish with one line per step: STEP <n> <outcome>.",
       ].join("\n");
-      const failed = await runAgent(claudeBin, model, directory, "failure", adapter.url!, local, failurePrompt);
+      const failed = await runAgent(agentKind, model, directory, "failure", adapter.url!, local, failurePrompt);
       outputs.push(failed.stdout, failed.stderr);
       const refused = await inspect(refusedId, central.incarnationId!);
       const firstAfterFailure = await inspect(commandId, central.incarnationId!);
@@ -183,7 +226,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
         "If you cannot do the task, report requestId \"w-failed\", status \"failed\" with the reason instead.",
         "Never claim again and never retry with a different requestId. Finish with one line: DONE <commandId>.",
       ].join("\n");
-      const worker = await runAgent(claudeBin, model, directory, "work", adapter.url!, local, workPrompt, ["Read"], workspace);
+      const worker = await runAgent(agentKind, model, directory, "work", adapter.url!, local, workPrompt, ["Read"], workspace);
       outputs.push(worker.stdout, worker.stderr);
       const work = await inspect(workId, central.incarnationId!);
       const filesUnchanged = JSON.stringify(await snapshot(workspace)) === JSON.stringify(before);
@@ -210,7 +253,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
         `2. Call cooperative_report once with commandId \"${commandId}\", requestId \"stale-report\", status \"failed\", detail \"stale\".`,
         "Do not retry any call and do not use other requestIds. Finish with one line: RESULTS <claim outcome>; <report outcome>.",
       ].join("\n");
-      const stale = await runAgent(claudeBin, model, directory, "stale", adapter.url!, local, stalePrompt);
+      const stale = await runAgent(agentKind, model, directory, "stale", adapter.url!, local, stalePrompt);
       outputs.push(stale.stdout, stale.stderr);
       const replacementFile = join(directory, "replacement-incarnation.json");
       await writeFile(replacementFile, JSON.stringify(fresh), { mode: 0o600, flag: "wx" });
@@ -218,7 +261,7 @@ export async function runRealAgentSmoke(databaseUrl: string, claudeBin = "claude
       await writeFile(replacementConfig, JSON.stringify({ centralUrl: `${central.url}/mcp`, localToken: local, supervisorToken: supervisor, incarnationFile: replacementFile }), { mode: 0o600, flag: "wx" });
       const freshAdapter = await start("src/host-agent/cooperative-main.ts", { COOPERATIVE_ADAPTER_CONFIG_FILE: replacementConfig }, children);
       const freshPrompt = prompt.replace("\"claim-1\"", "\"claim-2\"").replaceAll("\"r-", "\"n-");
-      const next = await runAgent(claudeBin, model, directory, "fresh", freshAdapter.url!, local, freshPrompt);
+      const next = await runAgent(agentKind, model, directory, "fresh", freshAdapter.url!, local, freshPrompt);
       outputs.push(next.stdout, next.stderr);
       const afterFirst = await inspect(commandId, central.incarnationId!);
       const afterNext = await inspect(nextId, fresh.incarnationId);
@@ -265,7 +308,12 @@ if (import.meta.main) {
   const replacement = process.argv.includes("--replacement");
   const failure = process.argv.includes("--failure");
   const realWork = process.argv.includes("--real-work");
-  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, "claude", "haiku", replacement, failure, realWork);
+  const dsh = process.argv.includes("--agent=dsh");
+  if (dsh && !process.env.CLIPROXYAPI_API_KEY) {
+    console.error("--agent=dsh needs CLIPROXYAPI_API_KEY for the DSH cliproxyapi provider");
+    process.exit(2);
+  }
+  const result = await runRealAgentSmoke(process.env.CENTRAL_TEST_DATABASE_URL, dsh ? "dsh" : "claude", dsh ? "claude-haiku-5-5" : "haiku", replacement, failure, realWork);
   console.log(JSON.stringify(result, null, 2));
   const statuses = result.events.map((event) => event.status).join(",");
   const replaced = !replacement || (result.replacement?.fenced === true && result.replacement?.freshCompleted === true && result.replacement?.settledOnlyInactive === true);
