@@ -1,6 +1,19 @@
 # Fleet Control
 
-A web page and a small service for watching and steering a fleet of Claude Code agents that run in tmux.
+A web page and backend services for watching and steering a fleet of agents that run in tmux.
+
+## Current backend deployment
+
+As of 2026-11-13, [PR #58](https://github.com/kolezka/fleet-control/pull/58) and [PR #59](https://github.com/kolezka/fleet-control/pull/59) are merged. The deployment evidence is in [the two-host rollout record](docs/deploy-15-plan.md#deployment-2026-11-13).
+
+- The persistent cooperative central service and PostgreSQL 17 run on `.15` with Docker Compose. PostgreSQL has no published port; the central application listens on host loopback.
+- Central is reachable only inside the private tailnet at [https://local-arch.tail4a51cb.ts.net:4881](https://local-arch.tail4a51cb.ts.net:4881). Tailscale Serve terminates HTTPS and forwards to loopback; this is not a public endpoint or a web UI.
+- Persistent cooperative adapters run on `.15` (Compose) and `.4` (launchd), each listening on `127.0.0.1:4882` with its own supervisor identity and incarnation. Supervisors claim work and report through MCP; there is no tmux paste fallback or idle-agent wakeup.
+- Synthetic submit, claim, accepted/running/completed reports and operator inspection passed through both adapters, then passed again after central and both adapters restarted. Incarnations stayed unchanged. No real agents or production fleet sessions were used for those checks.
+- The legacy `.4` host service and Terminal Deck UI remain separate and unchanged. The UI is not wired to the cooperative backend.
+- A real DSH run on `.15` is in progress, with prerequisites currently absent. No successful real DSH test on `.15` is claimed.
+
+See [cooperative deployment](deploy/cooperative/README.md), [persistent adapter setup](deploy/cooperative/README.md#persistent-adapters-and-tailnet-access), [central backend status](docs/central-server-status.md) and [session handoff](docs/HANDOFF.md). The host-service instructions below describe the separate SQLite-backed UI path, not the cooperative deployment.
 
 ## What is what
 
@@ -11,11 +24,11 @@ There are two repositories. This one calls the other.
 | What it is | A Claude Code plugin with the `fleet` command and a watchdog | A service with a web page, an API and MCP |
 | What it does | Starts agents in tmux, pastes messages into them, reads their screens, answers dialogs, nudges stuck agents | Shows the agents' terminals (read-only), the model each one uses, supervisor requests, approvals and commands, and keeps all of that in a database |
 | How it talks to tmux | Directly | Only through the `fleet` command. It never runs tmux or SSH itself |
-| State | Files in the fleet directory | SQLite database on the host |
+| State | Files in the fleet directory | PostgreSQL for cooperative control; SQLite for the separate host service |
 
 In short: agent-fleet runs the agents; Fleet Control is the control panel on top of it.
 
-## How it fits together
+## How the separate host UI fits together
 
 ```
  MacBook (client, may go offline)            Host, e.g. 192.168.50.4 (does the work)
@@ -176,7 +189,7 @@ The tests start their own private tmux servers and never touch your sessions.
 - The pinned agent-fleet includes the viewer/send fix; the real-shell regression passes. Overrides pointing to older checkouts may still have that bug. This is not production-agent verification.
 - Model detection works for Claude Code only, on the same host as the service.
 - phased-delivery does not yet write its phase record through MCP. Typing into a terminal (input leases) does not exist.
-- 192.168.50.15 is not set up.
+- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. Real DSH verification on `.15` remains pending; synthetic lifecycle and restart checks are not real-agent proof.
 
 ## More
 
