@@ -39,8 +39,8 @@ under your home directory, not `/tmp`.
   claims made before it stay reportable. Central gets 30 s to drain before Docker kills it.
 - Run the host adapter with
   `COOPERATIVE_ADAPTER_CONFIG_FILE=<state>/client/adapter.json bun src/host-agent/cooperative-main.ts`.
-  The adapter accepts plain HTTP only to loopback (its option is still named
-  `allowLoopbackHttpForTests`); this deployment relies on that.
+  The adapter accepts plain HTTP only to loopback. The
+  deployment relies on that: central is published on host loopback only.
 - Check the installation with `bun scripts/cooperative-compose-smoke.ts <state> [--restart]`. It
   submits synthetic commands and claims them as the real supervisor. It refuses to start while that
   supervisor has queued commands. Do not run it while the supervisor's own adapter is live: both

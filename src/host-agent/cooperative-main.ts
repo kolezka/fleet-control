@@ -83,7 +83,7 @@ export async function startCooperativeAdapter(env: Record<string, string | undef
       incarnationId: incarnation.incarnationId,
       incarnationToken: incarnation.token,
       centralFetch: (input, init) => fetch(input, ca ? { ...init, tls: { ca } } as RequestInit : init),
-      allowLoopbackHttpForTests: true,
+      allowLoopbackHttp: true,
       requestTimeoutMs,
     });
     const listener = createCooperativeListener({ handler, port: 0, shutdownTimeoutMs: requestTimeoutMs + shutdownMarginMs });

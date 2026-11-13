@@ -68,7 +68,7 @@ pgTest("claim response containing the local token remains unreadable after a com
     const adapter = createCooperativeAdapter({
       centralUrl: `${base}/mcp`, localToken, supervisorToken,
       incarnationId: credential.incarnationId, incarnationToken: credential.token,
-      centralFetch: fetch, allowLoopbackHttpForTests: true,
+      centralFetch: fetch, allowLoopbackHttp: true,
     });
     const submitted = await fetch(`${base}/api/commands`, {
       method: "POST", headers: { authorization: `Bearer ${operatorToken}`, "content-type": "application/json" },

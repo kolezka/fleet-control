@@ -363,7 +363,7 @@ describe("isolated cooperative adapter", () => {
   test("enforces transport and separate credentials at construction", () => {
     const { options } = fixture();
     for (const centralUrl of ["http://central.example/mcp", "http://127.0.0.1/mcp", "https://central.example/other", "https://central.example/mcp?x=1", "https://user:pass@central.example/mcp"]) expect(() => createCooperativeAdapter({ ...options, centralUrl })).toThrow("invalid adapter configuration");
-    expect(() => createCooperativeAdapter({ ...options, centralUrl: "http://127.0.0.1/mcp", allowLoopbackHttpForTests: true })).not.toThrow();
+    expect(() => createCooperativeAdapter({ ...options, centralUrl: "http://127.0.0.1/mcp", allowLoopbackHttp: true })).not.toThrow();
     expect(() => createCooperativeAdapter({ ...options, localToken: incarnationToken })).toThrow();
     for (const requestTimeoutMs of [0, -1, NaN, Infinity, 1.5, 2_147_483_648]) expect(() => createCooperativeAdapter({ ...options, requestTimeoutMs })).toThrow();
     for (const maxConcurrentRequests of [0, -1, NaN, Infinity, 1.5, 1025]) expect(() => createCooperativeAdapter({ ...options, maxConcurrentRequests })).toThrow();
