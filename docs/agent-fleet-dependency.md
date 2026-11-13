@@ -1,6 +1,6 @@
 # Pinned agent-fleet dependency
 
-Fleet Control references [agent-fleet](https://github.com/kolezka/agent-fleet) as a Git submodule at `vendor/agent-fleet`. The Git tree records the exact commit, not a floating branch. Initial pin: `5871fa5306ab5f547b9b012018c27fe99ad008a0`, including read-only attach and the paste-keys fix merged in PR #7.
+Fleet Control references [agent-fleet](https://github.com/kolezka/agent-fleet) as a Git submodule at `vendor/agent-fleet`. The Git tree records the exact commit, not a floating branch. Initial pin: `5871fa5306ab5f547b9b012018c27fe99ad008a0`, including read-only attach and the paste-keys fix merged in PR #7. Current pin: `3bd26d8acfa5a7a7ab20021cf8dbadee9d321b04` (agent-fleet 0.4.0, PR #10), which adds `AGENT_KIND=dsh`: fleet agents can run in DeepSeek Harness through `scripts/dsh-agent.mjs`, a terminal front end that runs each message as one `dsh --profile headless` turn in the same DSH session. The Claude Code path is unchanged.
 
 ## Install and update
 

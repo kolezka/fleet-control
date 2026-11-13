@@ -32,7 +32,7 @@ What stays open: [bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fle
 
 ## Latest: pinned CLI dependency (2026-11-09)
 
-`vendor/agent-fleet` is a Git submodule pinned to `5871fa5306ab5f547b9b012018c27fe99ad008a0`. Host service, demos and integration tests share a repository-relative CLI resolver; explicit environment overrides remain. Initialize the submodule when cloning/updating. See [dependency maintenance](agent-fleet-dependency.md).
+`vendor/agent-fleet` is a Git submodule pinned to `3bd26d8acfa5a7a7ab20021cf8dbadee9d321b04` (agent-fleet 0.4.0; earlier pin `5871fa5`). The new pin adds `AGENT_KIND=dsh` for DeepSeek Harness fleet agents; Fleet Control does not use it yet, and the Claude Code path is unchanged. Host service, demos and integration tests share a repository-relative CLI resolver; explicit environment overrides remain. Initialize the submodule when cloning/updating. See [dependency maintenance](agent-fleet-dependency.md).
 
 With overrides unset: **164 pass, 0 skip, 0 fail**, 1076 assertions; typecheck clean; design handler check PASS. The former viewer/send compatibility skip now executes against the merged paste-keys fix and passes. Installed remote services were not changed; earlier evidence sections remain historical.
 
