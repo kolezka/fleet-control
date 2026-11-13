@@ -1,0 +1,78 @@
+# Persistent cooperative central with its own PostgreSQL 17. See README.md in this directory.
+# Required in .env next to this file: COOPERATIVE_STATE_DIR (absolute host path, created by
+# setup.sh), COOPERATIVE_PORT, COOPERATIVE_UID, COOPERATIVE_GID. Both containers run as that
+# user so the private 0600 files in the state directory stay readable only by it.
+# Each container mounts only its part of the state directory (layout in cooperative-service.ts).
+name: fleet-cooperative
+
+x-central: &central
+  build:
+    context: ../..
+    dockerfile: deploy/cooperative/Dockerfile
+  image: fleet-cooperative-central:local
+  user: "${COOPERATIVE_UID:?}:${COOPERATIVE_GID:?}"
+  init: true
+
+services:
+  postgres:
+    # Pinned minor: the data directory outlives the container.
+    image: postgres:17.11
+    user: "${COOPERATIVE_UID:?}:${COOPERATIVE_GID:?}"
+    environment:
+      POSTGRES_DB: fleet
+      POSTGRES_PASSWORD_FILE: /pg/password
+      PGDATA: /pg/data
+    volumes:
+      - "${COOPERATIVE_STATE_DIR:?}/pg:/pg"
+    networks: [internal]
+    # No published port: only the central containers reach the database.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "fleet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # The long-running listener sees only the runtime URL and credential hashes, read-only.
+  central:
+    <<: *central
+    environment:
+      COOPERATIVE_HOST: 0.0.0.0
+      COOPERATIVE_PORT: "${COOPERATIVE_PORT:?}"
+      COOPERATIVE_RUNTIME_URL_FILE: /state/service/runtime-url
+      COOPERATIVE_CREDENTIALS_FILE: /state/service/credentials.json
+    volumes:
+      - "${COOPERATIVE_STATE_DIR:?}/service:/state/service:ro"
+    # "published" exists only for the port mapping; the listener has no other reason for egress.
+    networks: [internal, published]
+    # Host loopback only. Container and host port must match: the server checks the Host header.
+    ports:
+      - "127.0.0.1:${COOPERATIVE_PORT:?}:${COOPERATIVE_PORT:?}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Longer than the 10 s drain inside the server, so in-flight claims and reports finish.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # One-shot commands (init, provision, activate). Only these see the admin URL and client files.
+  admin:
+    <<: *central
+    profiles: [admin]
+    environment:
+      COOPERATIVE_PORT: "${COOPERATIVE_PORT:?}"
+      COOPERATIVE_STATE_DIR: /state
+      COOPERATIVE_HOST_STATE_DIR: "${COOPERATIVE_STATE_DIR:?}"
+      COOPERATIVE_SUPERVISOR_HOST: "${COOPERATIVE_SUPERVISOR_HOST:-local}"
+      COOPERATIVE_ADMIN_URL_FILE: /state/admin/admin-url
+      COOPERATIVE_RUNTIME_URL_FILE: /state/service/runtime-url
+      COOPERATIVE_CREDENTIALS_FILE: /state/service/credentials.json
+      COOPERATIVE_INCARNATION_FILE: /state/client/incarnation.json
+    volumes:
+      - "${COOPERATIVE_STATE_DIR:?}:/state"
+    networks: [internal]
+
+networks:
+  internal:
+    internal: true
+  published: {}

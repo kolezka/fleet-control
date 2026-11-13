@@ -57,7 +57,7 @@ export function cooperativeConfig(env: Record<string, string | undefined>) {
   return { databaseUrl: raw!, runtimeDatabaseUrl: runtimeRaw!, runtimeRole: runtimeUrl.username, schema, credentialsFile, incarnationFile, port: Number(port), ...(tls ? { tls } : {}) };
 }
 
-function parseCredentials(text: string): Credential[] {
+export function parseCredentials(text: string): Credential[] {
   const credentials: unknown = JSON.parse(text);
   if (!Array.isArray(credentials) || credentials.some((c) => !c || typeof c !== "object" || Array.isArray(c) || Object.keys(c).some((k) => !["tokenHash", "principal"].includes(k)) || !c.principal || typeof c.principal !== "object" || Array.isArray(c.principal) || Object.keys(c.principal).some((k) => !["name", "role", "principalId", "hostId", "session"].includes(k)))) throw new Error("invalid credentials");
   new CentralAuth(credentials);
@@ -67,7 +67,7 @@ function parseCredentials(text: string): Credential[] {
 
 // Same checks as the adapter config: absolute path, no final symlink, regular file owned by
 // this user with no group or other access, at most 1 MiB.
-async function readPrivateText(path: string): Promise<string> {
+export async function readPrivateText(path: string): Promise<string> {
   if (!isAbsolute(path)) throw new Error("credentials path must be absolute");
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -121,28 +121,53 @@ export async function startCooperative(env: Record<string, string | undefined> =
   catch { throw new Error("invalid or unreadable cooperative credentials file"); }
   // Before provisioning, so a bad certificate never creates a schema.
   const tls = config.tls ? await loadTlsFiles(config.tls, "cooperative") : undefined;
-  const auth = new CentralAuth(credentials);
-  const supervisor = credentials.find((c) => c.principal.role === "supervisor")!.principal;
-  if (supervisor.role !== "supervisor") throw new Error("supervisor required");
   rejectAmbientPostgresEnvironment(process.env);
   const admin = new SQL(config.databaseUrl);
-  let db: SQL | undefined;
   try {
     await provisionCooperative(admin, { testSchema: config.schema, runtimeRole: config.runtimeRole });
-    await admin.close();
+  } catch (error) {
+    await admin.close().catch(() => {});
+    throw new Error("cooperative startup failed; schema may remain and must not be reused", { cause: error });
+  }
+  await admin.close();
+  try {
+    const running = await serveCooperative({ runtimeDatabaseUrl: config.runtimeDatabaseUrl, schema: config.schema, credentials, tls, hostname: "127.0.0.1", port: config.port, shutdownGraceMs, persist: (credential) => writeIncarnationFile(config.incarnationFile, credential), incarnationFile: config.incarnationFile });
+    return { ...running, incarnationId: running.incarnationId! };
+  } catch (error) {
+    if (error instanceof IncarnationFileError) throw new Error("cooperative startup failed: could not write incarnation file; schema remains and must not be reused");
+    // The schema may already have been created. Never drop it automatically.
+    throw new Error("cooperative startup failed; schema may remain and must not be reused", { cause: error });
+  }
+}
+
+// Shared by the disposable entry point and the persistent service. Opens the runtime pool on an
+// already provisioned schema and enrolls the supervisor. With persist it also activates a new
+// incarnation (fencing the previous one) and hands its secret to persist after the listener is
+// up. Without persist no incarnation changes, so a service restart fences nothing. Never provisions.
+export async function serveCooperative(options: {
+  runtimeDatabaseUrl: string; schema: string; credentials: Credential[]; tls?: Awaited<ReturnType<typeof loadTlsFiles>>;
+  hostname: "127.0.0.1" | "0.0.0.0"; port: number; shutdownGraceMs: number; incarnationFile?: string;
+  persist?: (credential: { incarnationId: string; token: string }) => Promise<void>;
+}) {
+  const { schema, tls, port, shutdownGraceMs } = options;
+  const auth = new CentralAuth(options.credentials);
+  const supervisor = options.credentials.find((c) => c.principal.role === "supervisor")!.principal;
+  if (supervisor.role !== "supervisor") throw new Error("supervisor required");
+  let db: SQL | undefined;
+  try {
     rejectAmbientPostgresEnvironment(process.env);
-    db = new SQL(config.runtimeDatabaseUrl);
+    db = new SQL(options.runtimeDatabaseUrl);
     const pool = db;
-    const runner: CooperativeTransactionRunner = (operation) => withCooperativeSchema(pool, config.schema, operation);
+    const runner: CooperativeTransactionRunner = (operation) => withCooperativeSchema(pool, schema, operation);
     await runner(async () => undefined);
     const identities = new SupervisorIdentityRegistry(db, runner);
     const incarnations = new SupervisorIncarnations(db, runner);
     await identities.enroll(supervisor);
-    const credential = await incarnations.activate(supervisor);
+    const credential = options.persist ? await incarnations.activate(supervisor) : undefined;
     const commands = new CentralCommands(db, undefined, runner);
     const app = createCooperativeCentralApp({ auth, identities, commands, claims: new CooperativeClaims(db, incarnations, undefined, runner), lifecycle: new CooperativeLifecycle(db, incarnations, undefined, runner), inspection: new CooperativeInspection(db, runner), reconciliation: new CooperativeReconciliation(db, undefined, runner), settlement: new CooperativeSettlement(db, undefined, runner) });
     const pending = new Set<Promise<Response>>();
-    const server = Bun.serve({ hostname: "127.0.0.1", port: config.port, ...(tls ? { tls } : {}), fetch(request, server) {
+    const server = Bun.serve({ hostname: options.hostname, port, ...(tls ? { tls } : {}), fetch(request, server) {
       if (request.headers.get("host") !== `127.0.0.1:${server.port}` && request.headers.get("host") !== `localhost:${server.port}`) return new Response("invalid host", { status: 403 });
       const task = Promise.resolve(app.fetch(request));
       pending.add(task);
@@ -165,22 +190,20 @@ export async function startCooperative(env: Record<string, string | undefined> =
         await pool.close();
       }
     })();
-    try { await writeIncarnationFile(config.incarnationFile, credential); }
+    try { if (options.persist && credential) await options.persist(credential); }
     catch {
       await stop().catch(() => {});
       db = undefined;
       throw new IncarnationFileError();
     }
-    return { server, url: `${tls ? "https" : "http"}://127.0.0.1:${server.port}`, incarnationId: credential.incarnationId, incarnationFile: config.incarnationFile, stop };
+    return { server, url: `${tls ? "https" : "http"}://127.0.0.1:${server.port}`, incarnationId: credential?.incarnationId, incarnationFile: options.incarnationFile, stop };
   } catch (error) {
-    if (error instanceof IncarnationFileError) throw new Error("cooperative startup failed: could not write incarnation file; schema remains and must not be reused");
-    await Promise.allSettled([admin.close(), ...(db ? [db.close()] : [])]);
-    // The schema may already have been created. Never drop it automatically.
-    throw new Error("cooperative startup failed; schema may remain and must not be reused", { cause: error });
+    if (db) await db.close().catch(() => {});
+    throw error;
   }
 }
 
-class IncarnationFileError extends Error {}
+export class IncarnationFileError extends Error {}
 
 // The only stdout line. It must never contain the incarnation token.
 export async function runCooperativeCli(env: Record<string, string | undefined> = process.env) {
