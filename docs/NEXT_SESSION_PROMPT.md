@@ -1,5 +1,7 @@
 # Next-session metaprompt
 
+Historical (written 2026-11-09, before any implementation). Its statement that nothing is connected is out of date: the host service, cooperative central and adapter, and the installer exist on `main`. Start a new session from [HANDOFF.md](HANDOFF.md) and [implementation status](implementation-status.md) instead. The decisions and authorization limits below still apply.
+
 Copy the following into a new coding session opened in the Fleet Control project directory.
 
 ```text

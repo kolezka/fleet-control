@@ -6,7 +6,7 @@ This directory records the design discussion and decisions as of 2026-11-09. It 
 
 ## Read in this order
 
-For a new coding session, use the [metaprompt](NEXT_SESSION_PROMPT.md), then read [HANDOFF.md](HANDOFF.md) and the [preserved design](design/terminal-deck.html).
+For a new coding session, read [HANDOFF.md](HANDOFF.md) first, then the [preserved design](design/terminal-deck.html). The original [metaprompt](NEXT_SESSION_PROMPT.md) is kept as history; its implementation status is out of date.
 
 1. [Architecture](architecture.md): roles, host ownership and existing plugin integration.
 2. [Installation split](installation.md): what belongs on the MacBook and workstation.
