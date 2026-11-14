@@ -43,3 +43,30 @@ test("settlement route validates the request and maps store errors without leaki
   expect(await failed.text()).not.toContain("sensitive");
   expect((await app.request(path, { headers: { authorization: "Bearer operator" } })).status).toBe(404);
 });
+
+test("settlement route hands the store the caller, the command and every field of the body", async () => {
+  const calls: unknown[][] = [];
+  const stored = { commandId: "cmd", requestId: "r-7", actor: "operator", disposition: "failed" as const, evidence: "exit 2", expectedSequence: "12", at: "now" };
+  const app = createCooperativeSettlementRoute({ auth, settlement: {
+    async get(principal, id) { calls.push(["get", principal, id]); return stored; },
+    async settle(principal, id, requestId, disposition, evidence, expected) {
+      calls.push(["settle", principal, id, requestId, disposition, evidence, expected]);
+      return { created: false, settlement: stored };
+    },
+  } });
+  const headers = { authorization: "Bearer operator", "content-type": "application/json" };
+  const operator = { role: "operator", name: "operator" };
+
+  const read = await app.request(path, { headers });
+  expect(read.status).toBe(200);
+  expect(await read.json()).toEqual(stored);
+
+  const repeated = await app.request(path, { method: "POST", headers, body: JSON.stringify({ requestId: "r-7", disposition: "failed", evidence: "exit 2", expectedSequence: "12" }) });
+  expect(repeated.status).toBe(200);
+  expect(await repeated.json()).toEqual(stored);
+
+  expect(calls).toEqual([
+    ["get", operator, "cmd"],
+    ["settle", operator, "cmd", "r-7", "failed", "exit 2", "12"],
+  ]);
+});

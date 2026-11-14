@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { CommandError } from "../domain/commands.ts";
 import type { CentralAuth } from "./auth.ts";
+import { cooperativeOperator } from "./application/cooperative.ts";
 import type { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 import { readBoundedJson } from "./http-body.ts";
 
@@ -27,7 +28,7 @@ export function createCooperativeSettlementRoute(deps: { auth: CentralAuth; sett
     const id = commandId(c.req.url);
     if (!id) return c.json({ error: "invalid settlement parameters" }, 400);
     try {
-      const settlement = await deps.settlement.get(principal, id);
+      const settlement = await cooperativeOperator({ settlement: deps.settlement }, principal).settlement(id);
       return settlement ? c.json(settlement, 200) : c.json({ error: "not found" }, 404);
     } catch { return c.json({ error: "request failed" }, 500); }
   });
@@ -48,7 +49,7 @@ export function createCooperativeSettlementRoute(deps: { auth: CentralAuth; sett
       return c.json({ error: "invalid settlement" }, 400);
     }
     try {
-      const { settlement, created } = await deps.settlement.settle(principal, id, body.requestId, body.disposition as never, body.evidence, body.expectedSequence as string | null);
+      const { settlement, created } = await cooperativeOperator({ settlement: deps.settlement }, principal).settle(id, { requestId: body.requestId, disposition: body.disposition as never, evidence: body.evidence, expectedSequence: body.expectedSequence as string | null });
       return c.json(settlement, created ? 201 : 200);
     } catch (error) {
       if (error instanceof CommandError) return c.json({ error: error.message }, error.kind === "not_found" ? 404 : error.kind === "conflict" ? 409 : 400);
