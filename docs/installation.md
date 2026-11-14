@@ -1,6 +1,6 @@
 # MacBook and workstation installation
 
-Status: target installation split plus the service configuration that exists in the feat-fleet-adapter worktree (section "Running the service"). Chosen hosts: 192.168.50.4 (macOS, user `me`) and 192.168.50.15 (Manjaro, user `me`, on hold). Nothing has been installed as a persistent service yet.
+Status: target installation split plus the service configuration on `main` (section "Running the service"). Chosen hosts: 192.168.50.4 (macOS, user `me`) and 192.168.50.15 (Manjaro, user `me`). A test-fleet service is installed on `.4` (see "Installed on 192.168.50.4" below). No host service is installed on `.15`; the cooperative central and adapter there are covered in [deploy-15-plan.md](deploy-15-plan.md).
 
 ## Component split
 

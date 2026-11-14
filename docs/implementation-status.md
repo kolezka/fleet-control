@@ -46,7 +46,7 @@ The live deck now nests sessions under selectable hosts and scopes terminal sock
 
 Verification: **161 pass, 3 skip, 0 fail**, typecheck clean, design handler check PASS. Real local services with separate SQLite stores, two private shell fleets and browser renders verified host isolation, approval scope, draft switching and offline behavior. The viewer-plus-send test was skipped then because the selected agent-fleet checkout lacked its separate send-keys fix (superseded: see the 2026-11-11 correction near the top). Details: [multi-host evidence](evidence-2026-11-09-multi-host.md).
 
-Run/install: [multi-host guide](multi-host.md), [plan and acceptance](decentralized-client-plan.md). No Linux workstation was contacted or deployed for this change. The existing `.4` service was not upgraded. `.15` remains on hold. Linux systemd instructions are a template, not runtime proof.
+Run/install: [multi-host guide](multi-host.md), [plan and acceptance](decentralized-client-plan.md). No Linux workstation was contacted or deployed for this change. The existing `.4` service was not upgraded. `.15` was on hold at the time; since 2026-11-13 the separate cooperative central and adapter are deployed there, not this host service. Linux systemd instructions are a template, not runtime proof.
 
 The stage sections below are historical snapshots. Later sections supersede earlier limitations, including auth and model observation.
 
@@ -181,7 +181,7 @@ Setup and removal: [installation.md](installation.md). Evidence read back from t
 
 ## Not implemented in this project
 
-- A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. `.15` has nothing.
+- A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. This project installed no host service on `.15`.
 - Using the viewer with real agent sessions: the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)) is fixed in the pinned `vendor/agent-fleet` (see the 2026-11-11 correction above), and a real Claude Code agent received the pasted Enter with the viewer open (2026-11-12, private fleet), but the installed `.4` service was not upgraded, and real-session use needs the owner's authorization.
 - phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
 - Terminal input and exclusive input leases. The viewer is read-only by design.
@@ -222,14 +222,14 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Decided
 
-- Hosts: `192.168.50.4` (macOS, user `me`) and `192.168.50.15` (Manjaro, user `me` via `REMOTE_USER`, on hold). Peers, each with its own service; access over LAN and Tailscale.
+- Hosts: `192.168.50.4` (macOS, user `me`) and `192.168.50.15` (Manjaro, user `me` via `REMOTE_USER`; no host service installed; the earlier hold no longer applies, since the owner approved the cooperative deployment there on 2026-11-13). Peers, each with its own service; access over LAN and Tailscale.
 - Store: SQLite per host (`bun:sqlite`). Client auth: bearer tokens per principal, browser cookie. PTY: Bun built-in terminal with `fleet attach --read-only`; renderer `ghostty-web` 0.4.0. MCP: official SDK, Streamable HTTP at `/mcp`.
 - Model source for Claude Code: session file plus transcript, bound to pid, session id and process start.
 
 ## Open decisions
 
-1. Network route: decided 2026-11-09, LAN bind with TLS and tokens; no listener on Tailscale. Open: certificate source (self-signed per host and trusted on the MacBook, or a local CA such as mkcert) and whether installation happens now.
-2. LaunchAgent vs LaunchDaemon on `.4`; when `.15` comes off hold, a systemd user unit there.
+1. Network route: decided 2026-11-09, LAN bind with TLS and tokens; no listener on Tailscale. Done for `.4` on 2026-11-09: certificate from the MacBook's mkcert CA, service installed (see above). Open: certificate rotation.
+2. `.4` runs a LaunchAgent, which runs only while `me` is logged in. Open: whether a real-fleet service should be a LaunchDaemon instead, and a systemd user unit if a host service is installed on `.15`.
 3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers.
 4. Supervisor wakeup when it is busy or a dialog is open; what a command does then.
 5. Mapping Agent subagents to reports rather than terminals.
@@ -240,8 +240,8 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Suggested next order
 
-1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Done with a real Claude Code agent (2026-11-12, `scripts/viewer-agent-smoke.ts`). Still open: upgrading the installed `.4` service.
+1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Done with a real Claude Code agent (2026-11-12, `scripts/viewer-agent-smoke.ts`). Still open: upgrading the installed `.4` service. Checked on `.4` on 2026-11-14 without changing anything: its `index.ts` is dated 2026-11-09, and the agent-fleet copy its plist points at has the `watchdog.sh` from before the paste-keys fix (same SHA-256 as the parent of `5871fa5`).
 2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, after the real-agent check above and the `.4` upgrade decision.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
 4. Input lease design, then implementation.
-5. `.15` when the hold is lifted.
+5. A host service on `.15`: not installed, and it needs its own authorization. The cooperative central and adapter deployed there are separate; see [deploy-15-plan.md](deploy-15-plan.md).
