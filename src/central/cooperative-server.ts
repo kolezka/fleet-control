@@ -150,7 +150,9 @@ export function createCooperativeCentralApp(deps: {
     }
     const server = principal.role === "operator"
       ? buildCentralMcpServer({ commands }, principal, { commandListLimit: 4 })
-      : buildCooperativeMcpServer({ claims: deps.claims, lifecycle: deps.lifecycle }, principal, credential!);
+      : buildCooperativeMcpServer({ claims: deps.claims, lifecycle: deps.lifecycle }, principal, credential!, {
+        refuse: [c.req.header("authorization")?.match(/^Bearer[ \t]+([^\s]+)$/i)?.[1] ?? ""],
+      });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try { await server.connect(transport); return await transport.handleRequest(request); }
     finally { await server.close(); }

@@ -12,13 +12,12 @@ import { CooperativeSettlement } from "./cooperative-settlement.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 
-// Characterizes a known defect (docs/central-server-status.md, cooperative MCP section):
-// central does not filter the supervisor's own bearer from report fields. This test does not fix it.
+// A supervisor's own bearer must never be stored through cooperative MCP input; central refuses it.
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
 const pgTest = url ? test : test.skip;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
-pgTest("PostgreSQL: a supervisor bearer in report detail and request ID is stored and shown to operators", async () => {
+pgTest("PostgreSQL: a supervisor bearer in report or claim input is refused and never stored or shown", async () => {
   const admin = new SQL(url!);
   const schema = `report_bearer_test_${crypto.randomUUID().replaceAll("-", "")}`;
   await admin`CREATE SCHEMA ${admin(schema)}`;
@@ -70,21 +69,34 @@ pgTest("PostgreSQL: a supervisor bearer in report detail and request ID is store
     expect(plain).not.toContain(supervisorToken);
 
     const leakedId = `leak-${supervisorToken}`;
-    const leaked = await call("cooperative_report", { commandId: command.id, requestId: leakedId, status: "running", detail: `detail ${supervisorToken}` });
-    expect(JSON.parse(leaked).result.isError ?? false).toBe(false);
-    expect(leaked).toContain(supervisorToken);
+    for (const args of [
+      { commandId: command.id, requestId: leakedId, status: "running", detail: "plain detail" },
+      { commandId: command.id, requestId: "leak-detail", status: "running", detail: `detail ${supervisorToken}` },
+      { commandId: `${command.id}${supervisorToken}`, requestId: "leak-command", status: "running", detail: "plain detail" },
+    ]) {
+      const refused = await call("cooperative_report", args);
+      expect(JSON.parse(refused).result.isError).toBe(true);
+      expect(refused).not.toContain(supervisorToken);
+    }
+    const refusedClaim = await call("cooperative_claim", { requestId: leakedId });
+    expect(JSON.parse(refusedClaim).result.isError).toBe(true);
+    expect(refusedClaim).not.toContain(supervisorToken);
 
-    const rows = await db<{ request_id: string; detail: string }[]>`SELECT request_id, detail FROM central_cooperative_lifecycle_events WHERE command_id = ${command.id} ORDER BY request_id`;
-    expect(rows.map((row) => row.request_id).sort()).toEqual([leakedId, "plain"].sort());
-    expect(rows.find((row) => row.request_id === leakedId)!.detail).toBe(`detail ${supervisorToken}`);
-    expect(rows.find((row) => row.request_id === "plain")!.detail).toBe("synthetic accepted");
+    const rows = await db`SELECT request_id, detail FROM central_cooperative_lifecycle_events WHERE command_id = ${command.id}`;
+    expect([...rows]).toEqual([{ request_id: "plain", detail: "synthetic accepted" }]);
+    expect(await db`SELECT 1 FROM central_cooperative_claims WHERE request_id = ${leakedId}`).toHaveLength(0);
+
+    // The same request ID without the secret still works: refusal wrote nothing to replay against.
+    const later = await call("cooperative_report", { commandId: command.id, requestId: "leak-detail", status: "running", detail: "clean detail" });
+    expect(JSON.parse(later).result.isError ?? false).toBe(false);
 
     const page = await fetch(`${base}/api/commands/${command.id}/cooperative`, { headers: { authorization: `Bearer ${operatorToken}` } });
     expect(page.status).toBe(200);
     const pageText = await page.text();
-    expect(pageText).toContain(supervisorToken);
+    expect(pageText).not.toContain(supervisorToken);
     expect(pageText).not.toContain(operatorToken);
     expect(pageText).not.toContain(credential.token);
+    expect(JSON.parse(pageText).events.map((event: { requestId: string }) => event.requestId)).toEqual(["plain", "leak-detail"]);
   } finally {
     listener?.stop(true);
     await db.close();
