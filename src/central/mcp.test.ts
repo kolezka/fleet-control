@@ -13,12 +13,13 @@ import { createHash } from "node:crypto";
 import type { SupervisorReadGuard } from "./data/commands.ts";
 import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage, SupervisorCommandScope } from "./domain/commands.ts";
 import type { RequestMutationGuard } from "./data/requests.ts";
-import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { buildCentralMcpServer } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
-class FakeCommands implements CentralMcpCommands {
+class FakeCommands implements CentralCommandStore {
   rows: CentralCommand[] = [];
   transitions: { id: string; status: CommandStatus; actor: string; detail: string }[] = [];
   listScopes: (CommandListScope | undefined)[] = [];

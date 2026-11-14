@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import { createCentralApp } from "./server.ts";
 
 const cancellationError = new Error("synthetic cancellation failure");
@@ -26,7 +26,7 @@ test("synthetic cancellation control rejects and records cancellation", async ()
 
 test("legacy REST and MCP consume rejected oversized body cancellations", async () => {
   const auth = new CentralAuth([{ tokenHash: createHash("sha256").update("operator").digest("hex"), principal: { name: "operator", role: "operator" } }]);
-  const commands: CentralMcpCommands = {
+  const commands: CentralCommandStore = {
     async submit() { throw new Error("unexpected submit"); },
     async get() { throw new Error("unexpected get"); },
     async list() { throw new Error("unexpected list"); },

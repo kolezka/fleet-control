@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import type { SQL } from "bun";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { buildCentralMcpServer } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import { CentralRequests } from "./data/requests.ts";
 
 const rows = [
@@ -25,7 +26,7 @@ function database(): SQL {
 }
 
 async function connect() {
-  const commands = {} as CentralMcpCommands;
+  const commands = {} as CentralCommandStore;
   const server = buildCentralMcpServer({ commands, requests: new CentralRequests(database()) }, { name: "operator", role: "operator" });
   const client = new Client({ name: "pagination-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

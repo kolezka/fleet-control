@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { buildCentralMcpServer } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
 
 const calls = [
@@ -29,7 +30,7 @@ for (const [tool, args, method] of calls) {
       if (method === "transitionScoped") return { actor: parameters[2] };
       return { origin: parameters[0].origin ?? parameters[0].actor };
     };
-    const commands = { [method]: mutation } as unknown as CentralMcpCommands;
+    const commands = { [method]: mutation } as unknown as CentralCommandStore;
     const requests = { [method]: mutation } as unknown as CentralRequests;
     const identities = { async lockActive(received: unknown, identity: unknown) { expect(received).toBe(tx); observed = { ...identity as object }; locks++; return active; } };
     const server = buildCentralMcpServer({ commands, requests, identities }, principal);

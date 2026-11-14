@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CommandError, MAX_TEXT } from "../domain/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { type CentralAuth } from "./auth.ts";
 import { supervisorIdentity, type SupervisorIdentityLookup } from "./domain/identity.ts";
-import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { parseCommandSubmission } from "./domain/commands.ts";
+import { buildCentralMcpServer } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralCommands } from "./data/commands.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
@@ -57,7 +59,7 @@ export function createCooperativeCentralApp(deps: {
   allowedOrigins?: readonly string[];
 }) {
   if (deps.requests !== undefined) throw new Error("cooperative request store is unsupported");
-  const commands: CentralMcpCommands = {
+  const commands: CentralCommandStore = {
     submit: (...args) => deps.commands.submitBounded(...args),
     get: (...args) => deps.commands.getBounded(...args),
     list: (...args) => deps.commands.listBounded(...args),
@@ -115,10 +117,9 @@ export function createCooperativeCentralApp(deps: {
     let input: unknown;
     try { input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBody(c.req.raw))); }
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
-    if (!input || typeof input !== "object" || Array.isArray(input)) return c.json({ error: "invalid command" }, 400);
-    const body = input as Record<string, unknown>;
-    if (typeof body.hostId !== "string" || !body.hostId.trim() || body.hostId.length > 256 || typeof body.target !== "string" || body.target.length > 256 || typeof body.text !== "string" || body.text.length > MAX_TEXT || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 200) return c.json({ error: "invalid command" }, 400);
-    const result = await deps.commands.submitBounded({ hostId: body.hostId, target: body.target, text: body.text, idempotencyKey: body.idempotencyKey, actor: principal.name });
+    const submission = parseCommandSubmission(input);
+    if (!submission) return c.json({ error: "invalid command" }, 400);
+    const result = await deps.commands.submitBounded({ ...submission, actor: principal.name });
     return c.json(result, result.created ? 201 : 200);
   });
   app.all("/mcp", async (c) => {

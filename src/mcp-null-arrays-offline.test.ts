@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { handleMcp } from "./mcp.ts";
 import type { Requests } from "./data/requests.ts";
 import { CentralAuth } from "./central/auth.ts";
-import type { CentralMcpCommands } from "./central/mcp.ts";
+import type { CentralCommandStore } from "./central/application/commands.ts";
 import type { CentralRequests } from "./central/data/requests.ts";
 import { createCentralApp } from "./central/server.ts";
 
@@ -12,7 +12,7 @@ for (const mode of ["local", "legacy central"] as const) {
     const calls: Record<string, unknown>[] = [];
     const requests = { create(input: Record<string, unknown>) { calls.push(input); return { ...input }; } };
     const auth = new CentralAuth([{ tokenHash: createHash("sha256").update("token").digest("hex"), principal: { role: "supervisor", name: "supervisor", principalId: "id", hostId: "host", session: "session" } }]);
-    const app = createCentralApp({ auth, commands: {} as CentralMcpCommands, requests: requests as unknown as CentralRequests, identities: { async matches() { return true; } } });
+    const app = createCentralApp({ auth, commands: {} as CentralCommandStore, requests: requests as unknown as CentralRequests, identities: { async matches() { return true; } } });
     const send = async (args: object) => {
       const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "request_create", arguments: args } });
       const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer token", host: "localhost" };
