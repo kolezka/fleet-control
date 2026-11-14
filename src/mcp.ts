@@ -5,7 +5,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { type Commands } from "./data/commands.ts";
 import { CommandError, MAX_TEXT } from "./domain/commands.ts";
-import type { Deliverer } from "./delivery.ts";
+import type { Deliverer } from "./application/delivery.ts";
 import { type Requests } from "./data/requests.ts";
 import { RequestError } from "./domain/requests.ts";
 

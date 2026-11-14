@@ -3,18 +3,19 @@
 import { Auth, COOKIE, isLoopback, type Principal } from "./auth.ts";
 import login from "../web/login.html";
 import { hostname as osHostname } from "node:os";
-import { FleetError, type FleetReader } from "./fleet/cli.ts";
+import { FleetError, type FleetReader } from "./domain/fleet.ts";
 import { modelState, type ModelState } from "./domain/model.ts";
-import type { Observation } from "./observe/claude.ts";
+import type { Observation } from "./domain/model.ts";
 import type { Store } from "./data/store.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
 import { type Commands } from "./data/commands.ts";
 import { CommandError } from "./domain/commands.ts";
-import type { Deliverer } from "./delivery.ts";
+import type { Deliverer } from "./application/delivery.ts";
 import { handleMcp } from "./mcp.ts";
 import { type Requests } from "./data/requests.ts";
 import { RequestError } from "./domain/requests.ts";
+import type { ModelObserver } from "./domain/model.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -31,7 +32,6 @@ function errorResponse(e: unknown): Response {
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
 }
 
-export type ModelObserver = { observe(session: string): Promise<Observation> };
 
 const unknownReason: Record<Exclude<Observation["kind"], "observed">, string> = {
   no_turn_yet: "agent running, no main-thread turn yet",

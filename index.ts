@@ -2,7 +2,8 @@
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
 import { serveOptionsFromEnv } from "./src/config.ts";
 import { Commands } from "./src/data/commands.ts";
-import { Deliverer, fleetSender } from "./src/delivery.ts";
+import { Deliverer } from "./src/application/delivery.ts";
+import { fleetSender } from "./src/fleet/sender.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
 import { resolveFleetBin } from "./src/fleet/path.ts";
 import { Requests } from "./src/data/requests.ts";

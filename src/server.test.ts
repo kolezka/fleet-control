@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { FleetCli, FleetError, type FleetReader } from "./fleet/cli.ts";
+import { FleetCli } from "./fleet/cli.ts";
+import { FleetError, type FleetReader } from "./domain/fleet.ts";
 import { createTestFleet, defaultFleetBin, type TestFleet } from "./fleet/fixture.ts";
 import { createApp, serve } from "./server.ts";
 import { Store } from "./data/store.ts";

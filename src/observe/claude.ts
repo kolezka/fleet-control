@@ -3,20 +3,12 @@
 // Read-only: lists panes and processes, reads files. Never scrapes terminal text.
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { ModelObservation } from "../domain/model.ts";
+import type { Observation } from "../domain/model.ts";
 
 export const OBSERVATION_SOURCE = "claude-code transcript";
 const TAIL_BYTES = 512 * 1024;
 
 export type ProcessInfo = { pid: number; ppid: number; started: string; args: string };
-
-// Outcomes stay distinct: "no process" and "malformed metadata" must not look alike.
-export type Observation =
-  | { kind: "observed"; runtimeInstance: string; observation: ModelObservation }
-  | { kind: "no_turn_yet"; runtimeInstance: string }
-  | { kind: "no_agent_process" }
-  | { kind: "unavailable"; reason: string }
-  | { kind: "malformed"; runtimeInstance: string | null; reason: string };
 
 export type ClaudeObserverDeps = {
   configDir: string; // CLAUDE_CONFIG_DIR or ~/.claude

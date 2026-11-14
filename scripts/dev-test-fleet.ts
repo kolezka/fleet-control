@@ -2,7 +2,8 @@ import { resolveFleetBin } from "../src/fleet/path.ts";
 // Local demo: private test fleet (shell sessions only, no model) plus the service on 127.0.0.1.
 // Never points at a real fleet. Ctrl-C kills the private tmux server.
 import { Commands } from "../src/data/commands.ts";
-import { Deliverer, fleetSender } from "../src/delivery.ts";
+import { Deliverer } from "../src/application/delivery.ts";
+import { fleetSender } from "../src/fleet/sender.ts";
 import { FleetCli } from "../src/fleet/cli.ts";
 import { Requests } from "../src/data/requests.ts";
 import { createTestFleet } from "../src/fleet/fixture.ts";

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import type { Commands } from "./data/commands.ts";
-import type { Command, CommandStatus } from "./domain/commands.ts";
+import type { Commands } from "../data/commands.ts";
+import type { Command, CommandStatus } from "../domain/commands.ts";
 import { Deliverer } from "./delivery.ts";
-import { messageFor, type Sender } from "./domain/delivery.ts";
+import { messageFor, type Sender } from "../domain/delivery.ts";
 
 function fixture(send: Sender) {
   let command: Command = {

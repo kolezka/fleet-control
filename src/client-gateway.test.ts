@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Auth, parseTokens, tokenLine } from "./auth.ts";
 import { Commands } from "./data/commands.ts";
-import { Deliverer } from "./delivery.ts";
+import { Deliverer } from "./application/delivery.ts";
 import type { Sender } from "./domain/delivery.ts";
 import { Requests } from "./data/requests.ts";
 import { serve } from "./server.ts";

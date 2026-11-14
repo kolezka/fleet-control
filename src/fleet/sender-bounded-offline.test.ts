@@ -2,8 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fleetSender } from "./delivery.ts";
-import { classify } from "./domain/delivery.ts";
+import { fleetSender } from "./sender.ts";
+import { classify } from "../domain/delivery.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "sender-test-"));
 const fixture = join(dir, "fixture");

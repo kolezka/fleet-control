@@ -1,32 +1,5 @@
 // Thin adapter over the existing agent-fleet CLI. It never talks to tmux or SSH itself.
-
-export type FleetErrorKind = "config" | "session_missing" | "invalid_name" | "cli_failed" | "malformed_output";
-
-export class FleetError extends Error {
-  constructor(
-    readonly kind: FleetErrorKind,
-    message: string,
-    readonly detail: { exitCode?: number; stderr?: string } = {},
-  ) {
-    super(message);
-    this.name = "FleetError";
-  }
-}
-
-export type FleetSessionStatus = {
-  name: string;
-  // tmux session exists on the fleet socket
-  running: boolean;
-  // context percent parsed from the agent screen; null when the CLI printed "?"
-  contextPct: number | null;
-};
-
-export type FleetStatus = { sessions: FleetSessionStatus[]; raw: string };
-
-export interface FleetReader {
-  screen(session: string, lines?: number): Promise<string>;
-  status(): Promise<FleetStatus>;
-}
+import { FleetError, type FleetSessionStatus, type FleetStatus, type FleetReader } from "../domain/fleet.ts";
 
 const sessionName = /^[A-Za-z0-9._-]+$/;
 
