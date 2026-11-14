@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { CentralAuth } from "./auth.ts";
+import { cooperativeOperator } from "./application/cooperative.ts";
 import type { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
 
 // Mount after authentication and origin middleware.
@@ -28,7 +29,7 @@ export function createCooperativeAssertionsRoute(deps: { auth: CentralAuth; reco
       return c.json({ error: "invalid assertion parameters" }, 400);
     }
     try {
-      const result = await deps.reconciliation.listBounded(principal, id, { limit: limit === undefined ? 4 : Number(limit), ...(cursor !== undefined ? { cursor } : {}) });
+      const result = await cooperativeOperator({ reconciliation: deps.reconciliation }, principal).assertions(id, { limit: limit === undefined ? 4 : Number(limit), ...(cursor !== undefined ? { cursor } : {}) });
       if (!result) return c.json({ error: "not found" }, 404);
       const body = JSON.stringify(result);
       if (Buffer.byteLength(body, "utf8") > 2 * 1024 * 1024) throw new Error("assertion response too large");

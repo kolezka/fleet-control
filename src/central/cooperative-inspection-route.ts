@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { CentralAuth } from "./auth.ts";
+import { cooperativeOperator } from "./application/cooperative.ts";
 import type { CooperativeInspection } from "./data/cooperative-inspection.ts";
 
 // Mount after the server's authentication and origin middleware.
@@ -31,7 +32,7 @@ export function createCooperativeInspectionRoute(deps: {
       return c.json({ error: "invalid inspection parameters" }, 400);
     }
     try {
-      const result = await deps.inspection.inspectBounded(id, { limit: limit === undefined ? 4 : Number(limit), ...(cursor !== undefined ? { cursor } : {}) });
+      const result = await cooperativeOperator({ inspection: deps.inspection }, principal).inspect(id, { limit: limit === undefined ? 4 : Number(limit), ...(cursor !== undefined ? { cursor } : {}) });
       if (!result) return c.json({ error: "not found" }, 404);
       const body = JSON.stringify(result);
       if (Buffer.byteLength(body, "utf8") > 2 * 1024 * 1024) throw new Error("inspection response too large");

@@ -80,14 +80,14 @@ function fakeRequests(local: Requests): CentralRequests {
       if (property === "gate") return async () => { throw new Error("unscoped gate not allowed for supervisors"); };
       if (property === "gateScoped") return async (runId: string, phase: string, revision: number, owner: string, guard: RequestMutationGuard) => {
         if (typeof guard !== "function") throw new Error("access denied");
-        await guard({} as SQL);
+        await guard({} as TransactionSQL);
         if (target.run(runId).orchestrator !== owner) throw new RequestError("forbidden", "access denied");
         return target.gate(runId, phase, revision);
       };
       if (["registerRun", "updatePhase", "create", "acknowledge", "withdraw"].includes(String(property))) {
         return async (input: unknown, guard?: RequestMutationGuard) => {
           if (typeof guard !== "function") throw new Error("access denied");
-          await guard({} as SQL);
+          await guard({} as TransactionSQL);
           return Reflect.apply(Reflect.get(target, property, target), target, [input]);
         };
       }

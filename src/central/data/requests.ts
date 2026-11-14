@@ -1,10 +1,10 @@
-import type { SQL } from "bun";
+import type { SQL, TransactionSQL } from "bun";
 import { RequestError, type RequestKind, type RequestStatus, type Run, type SupervisorRequest } from "../../domain/requests.ts";
 
 // The caller must bind the authenticated principal to the input actor before calling.
 // A guard fences that principal in this transaction; it does not authenticate the input.
 // Callers must capture immutable identity values for both the input and guard closure.
-export type RequestMutationGuard = (tx: SQL) => Promise<void>;
+export type RequestMutationGuard = (tx: TransactionSQL) => Promise<void>;
 
 type Event = { seq: string; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string };
 type CreateInput = { runId: string; origin: string; expectedRevision: number; kind: RequestKind; question: string; proposedAction?: string; scope?: string; evidence?: string[]; allowedResponses?: string[]; blocking?: boolean };
@@ -48,7 +48,7 @@ export class CentralRequests {
   private async transaction<T>(fn: (tx: SQL) => Promise<T>, guard?: RequestMutationGuard): Promise<T> {
     return this.db.begin(async (tx) => {
       // Lock order: guard locks, event lock, then request/run locks.
-      if (guard) await guard(tx as unknown as SQL);
+      if (guard) await guard(tx);
       const rows = await tx`SELECT id FROM central_request_event_lock WHERE id = 1 FOR UPDATE`;
       if (!rows[0]) throw new Error("central request event lock row missing");
       return fn(tx as unknown as SQL);

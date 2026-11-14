@@ -1,6 +1,5 @@
 // What an operator and a supervisor may do with runs and requests on central.
 import { RequestError } from "../../domain/requests.ts";
-import type { SupervisorReadGuard } from "../data/commands.ts";
 import type { CentralRequests, RequestMutationGuard } from "../data/requests.ts";
 import type { Principal } from "../domain/identity.ts";
 import { displayRequest, displayRun, runOwner } from "../domain/requests.ts";
@@ -20,8 +19,8 @@ export function operatorRequests(requests: Requests, principal: Extract<Principa
 }
 
 // A supervisor works only on runs it owns. The owner is derived from the authenticated identity,
-// and every call is fenced by the identity guard inside the store's transaction.
-export function supervisorRequests(requests: Requests, principal: Extract<Principal, { role: "supervisor" }>, guard: SupervisorReadGuard) {
+// and the store runs the identity guard inside the transaction of every call.
+export function supervisorRequests(requests: Requests, principal: Extract<Principal, { role: "supervisor" }>, requestGuard: RequestMutationGuard) {
   // A run the caller does not own looks the same as a run that does not exist.
   const mutation = async <T>(fn: () => Promise<T>): Promise<T> => {
     try { return await fn(); } catch (error) {
@@ -29,7 +28,6 @@ export function supervisorRequests(requests: Requests, principal: Extract<Princi
       throw error;
     }
   };
-  const requestGuard: RequestMutationGuard = async (tx) => { await guard(tx as unknown as Parameters<SupervisorReadGuard>[0], { hostId: principal.hostId, session: principal.session }); };
   const owner = runOwner(principal);
 
   return {
