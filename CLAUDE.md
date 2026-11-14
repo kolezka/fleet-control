@@ -4,7 +4,7 @@ Read `AGENTS.md` and `docs/HANDOFF.md` first. They identify the selected design,
 
 Selected baseline: `docs/design/terminal-deck.html`. Check it with `bun run design:check`. Preserve the full-window Terminal Deck, host-grouped left navigation and right supervisor panel. The workstation owns execution; the MacBook is a client.
 
-The Bun examples below are starter guidance, not implemented Fleet Control features. `index.ts` starts a local, loopback-only service over the fleet CLI: session list, screen, a read-only terminal WebSocket (stage 3), and a durable command queue with MCP at `/mcp` (stage 4). It has no auth and is not deployed; see `docs/implementation-status.md`. Do not infer that an API server or live terminal bridge exists from those examples.
+The Bun examples below are starter guidance, not implemented Fleet Control features. `index.ts` starts the host service over the fleet CLI: session list, screen, a read-only terminal WebSocket, a durable command queue, scoped requests and MCP at `/mcp`. It binds to loopback without auth by default; any other bind address requires bearer tokens, and TLS is optional. A test-fleet instance is installed on `192.168.50.4`; no real fleet is connected. See `docs/implementation-status.md`. Do not infer that an API server or live terminal bridge exists from those examples.
 
 ## Bun defaults
 

@@ -10,7 +10,7 @@ Prepared 2026-11-09. Project: `/Users/me/Development/fleet-control`. This is a s
 4. Read [UI design](ui-design.md), the [visual tokens](../.design/design-system.md) and [model visibility requirement](model-observability.md).
 5. Check [implementation status](implementation-status.md) before claiming anything works outside the mockup.
 
-Do not restart product discovery or redesign the agreed layout without a new reason. The host service is implemented and the macOS test deployment is recorded below. Current work follows [the decentralized-client plan](decentralized-client-plan.md), not a new visual direction.
+Do not restart product discovery or redesign the agreed layout without a new reason. The host service is implemented and the macOS test deployment is recorded below. The latest work is the central server section below. [The decentralized-client plan](decentralized-client-plan.md) was delivered in PR #3.
 
 ## Latest: central server and cooperative supervisor (in progress)
 
@@ -118,7 +118,7 @@ Presentation: a compact label beside the session name, with details for full ide
 ## What actually exists
 
 - A Bun-initialized project with documentation and static interactive designs.
-- `index.ts` starts the host service: fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth and optional TLS. The original feature branch was merged. A launchd test service was installed on `.4`; `.15` remains on hold.
+- `index.ts` starts the host service: fleet CLI adapter, read-only terminal, durable commands, scoped requests, MCP, model observer, token auth and optional TLS. The original feature branch was merged. A launchd test service was installed on `.4`. This project installed no host service on `.15`; since 2026-11-13 that host has the separate cooperative central and adapter (see the latest section).
 - v4 includes synthetic terminal output, in-memory requests, demo approvals and a command composer.
 - `bun run design:check` checks the preserved design's handlers with a minimal DOM fixture.
 
@@ -168,9 +168,9 @@ The handler check is not browser automation. These bullets record the original d
 
 ## Next action
 
-See "Suggested next order" in [implementation-status.md](implementation-status.md). In short: verify the agent-fleet `send-keys` fix once the other session lands it; the `.4` service runs for a test fleet only (no Tailscale listener, owner decision); pointing it at a real fleet needs approval; then phased-delivery over MCP. Ask before merging `feat-fleet-adapter` into main. `.15` stays on hold. `runner-01` is only a design fixture.
+See "Suggested next order" in [implementation-status.md](implementation-status.md). That list covers the host service; central work is in the remaining-work list in the latest section above. In short, for the host service: the agent-fleet `send-keys` fix is in the pinned CLI, but the installed `.4` service still runs the older copy; that service runs for a test fleet only (no Tailscale listener, owner decision); upgrading it or pointing it at a real fleet needs approval; then phased-delivery over MCP. `feat-fleet-adapter` was merged (PRs #1 and #2). This project installed no host service on `.15`. `runner-01` is only a design fixture.
 
-Recheck Git state before changing code and keep using the worktree. No remote creation or push is authorized for this repository.
+Recheck Git state before changing code and keep using the worktree. The original handoff said no remote or push was authorized; that is out of date. The repository has a GitHub remote (`origin`) and work is published as pull requests. See the latest section for what the owner has authorized.
 
 ## Authorization boundary
 
