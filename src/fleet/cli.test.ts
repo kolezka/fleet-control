@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { FleetCli, FleetError, parseStatus } from "./cli.ts";
+import { FleetCli, parseStatus } from "./cli.ts";
+import { FleetError } from "../domain/fleet.ts";
 import { createTestFleet, defaultFleetBin, type TestFleet } from "./fixture.ts";
 
 const haveFleet = await Bun.file(defaultFleetBin).exists();

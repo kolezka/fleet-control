@@ -5,7 +5,8 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { type Commands } from "./data/commands.ts";
 import { CommandError, MAX_TEXT } from "./domain/commands.ts";
-import type { Deliverer } from "./delivery.ts";
+import { commandUseCases } from "./application/commands.ts";
+import type { Deliverer } from "./application/delivery.ts";
 import { type Requests } from "./data/requests.ts";
 import { RequestError } from "./domain/requests.ts";
 
@@ -18,7 +19,8 @@ const attempt = async (f: () => unknown) => { try { return json(await f()); } ca
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
 export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer; requests?: Requests }, principal?: string) {
-  const { commands, deliverer, requests } = deps;
+  const { commands, requests } = deps;
+  const queue = commandUseCases(deps);
   const as = asPrincipal(principal);
   const server = new McpServer({ name: "fleet-control", version: "0.1.0" });
 
@@ -34,18 +36,14 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
       actor: z.string().min(1).max(100).describe("Who is asking, e.g. 'macbook-session'"),
     },
   }, async (args) => {
-    try {
-      const { command, created } = commands.submit(as(args, "actor"));
-      const after = created ? await deliverer.deliver(command.id) : command;
-      return json({ command: after, created, events: commands.events(command.id) });
-    } catch (e) { return failure(e); }
+    try { return json(await queue.submit(as(args, "actor"))); } catch (e) { return failure(e); }
   });
 
   server.registerTool("command_deliver", {
     description: "Attempt delivery of a queued command. Other statuses are unchanged; investigate delivery_unknown rather than retrying it.",
     inputSchema: { id: z.string() },
   }, async ({ id }) => {
-    try { const c = await deliverer.deliver(id); return json({ command: c, events: commands.events(id) }); } catch (e) { return failure(e); }
+    try { return json(await queue.deliver(id)); } catch (e) { return failure(e); }
   });
 
   server.registerTool("command_get", {
@@ -53,7 +51,7 @@ export function buildMcpServer(deps: { commands: Commands; deliverer: Deliverer;
     inputSchema: { id: z.string() },
     annotations: { readOnlyHint: true },
   }, async ({ id }) => {
-    try { return json({ command: commands.get(id), events: commands.events(id) }); } catch (e) { return failure(e); }
+    try { return json(queue.read(id)); } catch (e) { return failure(e); }
   });
 
   server.registerTool("command_list", {

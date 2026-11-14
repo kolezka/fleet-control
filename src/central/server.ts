@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CommandError, MAX_TEXT, type CommandStatus } from "../domain/commands.ts";
+import { CommandError, type CommandStatus } from "../domain/commands.ts";
 import { type CentralAuth } from "./auth.ts";
 import { authorize, supervisorIdentity, type Principal, type SupervisorIdentityLookup } from "./domain/identity.ts";
-import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
+import { centralCommandStatuses, parseCommandSubmission } from "./domain/commands.ts";
+import { buildCentralMcpServer } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
 import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 
 const MAX_BODY = 32 * 1024;
-const statuses: CommandStatus[] = ["queued", "delivering", "delivered", "delivery_unknown", "claimed", "accepted", "rejected", "running", "completed", "failed"];
 type Env = { Variables: { principal: Principal } };
 
 async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
@@ -33,7 +34,7 @@ async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
   return body;
 }
 
-export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcpCommands; identities: SupervisorIdentityLookup & Partial<Pick<SupervisorIdentityRegistry, "lockActive">>; requests?: CentralRequests; allowedOrigins?: readonly string[]; listHosts?: () => { hostId: string; sessions: string[] | null }[] }) {
+export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCommandStore; identities: SupervisorIdentityLookup & Partial<Pick<SupervisorIdentityRegistry, "lockActive">>; requests?: CentralRequests; allowedOrigins?: readonly string[]; listHosts?: () => { hostId: string; sessions: string[] | null }[] }) {
   const app = new Hono<Env>();
   app.use("*", async (c, next) => {
     const principal = deps.auth.authenticate(c.req.raw);
@@ -62,15 +63,14 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralMcp
     let input: unknown;
     try { input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await boundedBody(c.req.raw))); }
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
-    if (!input || typeof input !== "object" || Array.isArray(input)) return c.json({ error: "invalid command" }, 400);
-    const body = input as Record<string, unknown>;
-    if (typeof body.hostId !== "string" || !body.hostId.trim() || body.hostId.length > 256 || typeof body.target !== "string" || body.target.length > 256 || typeof body.text !== "string" || body.text.length > MAX_TEXT || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim() || body.idempotencyKey.length > 200) return c.json({ error: "invalid command" }, 400);
-    const result = await deps.commands.submit({ hostId: body.hostId, target: body.target, text: body.text, idempotencyKey: body.idempotencyKey, actor: c.get("principal").name });
+    const submission = parseCommandSubmission(input);
+    if (!submission) return c.json({ error: "invalid command" }, 400);
+    const result = await deps.commands.submit({ ...submission, actor: c.get("principal").name });
     return c.json(result, result.created ? 201 : 200);
   });
   app.get("/api/commands", async (c) => {
     const status = c.req.query("status");
-    if (status !== undefined && !statuses.includes(status as CommandStatus)) return c.json({ error: "invalid status" }, 400);
+    if (status !== undefined && !(centralCommandStatuses as readonly string[]).includes(status)) return c.json({ error: "invalid status" }, 400);
     const limitText = c.req.query("limit");
     if (limitText !== undefined && (!/^[1-9]\d*$/.test(limitText) || Number(limitText) > 1000)) return c.json({ error: "invalid limit" }, 400);
     const hostId = c.req.query("hostId");

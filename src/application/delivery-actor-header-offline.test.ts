@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Commands } from "./data/commands.ts";
+import { Commands } from "../data/commands.ts";
 import { Deliverer } from "./delivery.ts";
-import { messageFor } from "./domain/delivery.ts";
+import { messageFor } from "../domain/delivery.ts";
 
 test("delivery escapes controls in actor headers without changing command text or confirmation", async () => {
   const db = new Database(":memory:");

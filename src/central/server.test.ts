@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { createCentralApp, assertSafeCentralBind } from "./server.ts";
 import { CommandError } from "../domain/commands.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
 
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -14,7 +14,7 @@ const auth = new CentralAuth([
 ]);
 function fixture(requests?: CentralRequests, identities: { matches(identity: import("./domain/identity.ts").SupervisorIdentity): Promise<boolean> } = { async matches() { return true; } }) {
   const saved: any[] = [];
-  const commands: CentralMcpCommands = {
+  const commands: CentralCommandStore = {
     async submit(input) { const command = { ...input, id: "one", status: "queued" as const, createdAt: "now", updatedAt: "now" }; saved.push(command); return { command, created: true }; },
     async get(id) { const command = saved.find((item) => item.id === id); if (!command) throw new CommandError("not_found", "missing"); return command; },
     async list(status, scope, pagination) {

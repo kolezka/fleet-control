@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Deliverer, fleetSender } from "./delivery.ts";
-import { classify } from "./domain/delivery.ts";
-import { Commands } from "./data/commands.ts";
-import { DeliveryJournal } from "./host-agent/data/journal.ts";
-import { DeliveryExecutor } from "./host-agent/executor.ts";
+import { Deliverer } from "./delivery.ts";
+import { fleetSender } from "../fleet/sender.ts";
+import { classify } from "../domain/delivery.ts";
+import { Commands } from "../data/commands.ts";
+import { DeliveryJournal } from "../host-agent/data/journal.ts";
+import { DeliveryExecutor } from "../host-agent/application/executor.ts";
 
 test("exact target response is required", () => {
   for (const stdout of ["alpha: delivered", "alpha: delivered\n", "alpha: delivered\r\n"]) {

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { DeliveryExecutor, type CommandOffer } from "./executor.ts";
-import { DeliveryJournal } from "./data/journal.ts";
+import { DeliveryJournal } from "../data/journal.ts";
 
 const base: CommandOffer = { id: "attempt", hostId: "host", target: "target", text: "text", instanceId: "instance" };
 const fields = ["id", "hostId", "target", "text", "instanceId"] as const;

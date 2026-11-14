@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./cooperative-server.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 // @ts-expect-error Legacy commands alone cannot satisfy the cooperative contract.
-const rejectLegacy: CooperativeCommands = {} as CentralMcpCommands;
+const rejectLegacy: CooperativeCommands = {} as CentralCommandStore;
 void rejectLegacy;
 
 test("cooperative REST and MCP route exclusively to bounded command methods", async () => {

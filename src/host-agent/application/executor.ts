@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { classify, type SendResult } from "../domain/delivery.ts";
-import { DeliveryJournal } from "./data/journal.ts";
-import type { DeliveryAttempt } from "./domain/delivery.ts";
+import { classify, type SendResult } from "../../domain/delivery.ts";
+import { DeliveryJournal } from "../data/journal.ts";
+import type { DeliveryAttempt } from "../domain/delivery.ts";
 
 export type CommandOffer = Readonly<{
   id: string;

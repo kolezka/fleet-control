@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { DeliveryExecutor, type CommandOffer } from "./executor.ts";
-import { DeliveryJournal } from "./data/journal.ts";
+import { DeliveryJournal } from "../data/journal.ts";
 
 test("unintegrated hypothetical name-based fake sender can deliver to a replacement after lookup", async () => {
   const db = new Database(":memory:");

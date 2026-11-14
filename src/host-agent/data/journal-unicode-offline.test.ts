@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { DeliveryJournal, JournalError } from "./journal";
-import { DeliveryExecutor } from "../executor";
+import { DeliveryExecutor } from "../application/executor";
 
 const replacementId = "attempt-�";
 const emojiId = "attempt-😀";

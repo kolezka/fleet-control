@@ -1,6 +1,6 @@
 // Read-only terminal viewer: a host PTY running `fleet attach --read-only <session>`.
 // It has no write path on purpose; tmux also drops keys and ignores the viewer size.
-import { FleetError } from "../fleet/cli.ts";
+import { FleetError } from "../domain/fleet.ts";
 
 const sessionName = /^[A-Za-z0-9._-]+$/;
 

@@ -41,3 +41,13 @@ export function modelState(input: {
   if (input.configuredModel) return { state: "configured", model: input.configuredModel, note: "configured, not observed" };
   return { state: "unknown", lastObserved: null, ...reason };
 }
+
+// Outcomes stay distinct: "no process" and "malformed metadata" must not look alike.
+export type Observation =
+  | { kind: "observed"; runtimeInstance: string; observation: ModelObservation }
+  | { kind: "no_turn_yet"; runtimeInstance: string }
+  | { kind: "no_agent_process" }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "malformed"; runtimeInstance: string | null; reason: string };
+
+export type ModelObserver = { observe(session: string): Promise<Observation> };

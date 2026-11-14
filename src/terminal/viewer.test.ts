@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { FleetError } from "../fleet/cli.ts";
+import { FleetError } from "../domain/fleet.ts";
 import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { clampSize, openViewer, supportsReadOnlyAttach } from "./viewer.ts";
 

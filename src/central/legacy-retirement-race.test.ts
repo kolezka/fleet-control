@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
 import { createCentralApp } from "./server.ts";
 
@@ -29,7 +29,7 @@ test("legacy supervisor mutations check identity after authentication and before
       return { id: input.runId, phase: input.phase, orchestrator: input.orchestrator };
     },
   } as unknown as CentralRequests;
-  const commands = {} as CentralMcpCommands;
+  const commands = {} as CentralCommandStore;
   const app = createCentralApp({ auth, identities, commands, requests });
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "run_register", arguments: { runId: "run-1", phase: "plan" } } });
   const headers = { authorization: "Bearer test-token", "content-type": "application/json", accept: "application/json, text/event-stream" };

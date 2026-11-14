@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { DeliveryJournal, JournalError } from "./data/journal.ts";
+import { DeliveryJournal, JournalError } from "../data/journal.ts";
 import { DeliveryExecutor, type CommandOffer } from "./executor.ts";
 
 const offer: CommandOffer = { id: "cmd-1", hostId: "host-1", target: "supervisor", text: "hello", instanceId: "instance-1" };

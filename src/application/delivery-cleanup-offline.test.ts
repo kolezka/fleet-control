@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import type { Commands } from "./data/commands.ts";
-import type { Command, CommandStatus } from "./domain/commands.ts";
+import type { Commands } from "../data/commands.ts";
+import type { Command, CommandStatus } from "../domain/commands.ts";
 import { Deliverer } from "./delivery.ts";
-import type { SendResult } from "./domain/delivery.ts";
+import type { SendResult } from "../domain/delivery.ts";
 
 for (const outcome of ["delivered", "delivery_unknown", "store failure"] as const) {
   for (const warningThrows of [false, true]) {

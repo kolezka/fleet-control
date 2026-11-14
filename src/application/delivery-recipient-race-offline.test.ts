@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Commands } from "./data/commands.ts";
-import { CommandError } from "./domain/commands.ts";
+import { Commands } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { Deliverer } from "./delivery.ts";
-import type { SendResult } from "./domain/delivery.ts";
+import type { SendResult } from "../domain/delivery.ts";
 
 test("recipient responses conflict until delivery finishes", async () => {
   const db = new Database(":memory:");

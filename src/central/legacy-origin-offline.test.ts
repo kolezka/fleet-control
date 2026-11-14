@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralMcpCommands } from "./mcp.ts";
+import type { CentralCommandStore } from "./application/commands.ts";
 import { createCentralApp } from "./server.ts";
 
 const allowedOrigin = "https://allowed.example";
 
 function fixture(allowedOrigins?: readonly string[]) {
   const calls: string[] = [];
-  const commands: CentralMcpCommands = {
+  const commands: CentralCommandStore = {
     async submit(input) {
       calls.push("submit");
       return { command: { ...input, id: "command", status: "queued", createdAt: "now", updatedAt: "now" }, created: true };

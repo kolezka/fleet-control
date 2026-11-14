@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Commands } from "./data/commands.ts";
 import type { Command } from "./domain/commands.ts";
-import { Deliverer } from "./delivery.ts";
+import { Deliverer } from "./application/delivery.ts";
 import { buildMcpServer } from "./mcp.ts";
 
 test("command_deliver describes queued attempts and does not resend unknown outcomes", async () => {
