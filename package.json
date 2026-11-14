@@ -8,6 +8,7 @@
     "test": "bun test",
     "serve": "bun index.ts",
     "client": "bun client.ts",
+    "fleet-control": "bun fleet-control.ts",
     "demo:two-hosts": "bun scripts/dev-two-hosts.ts",
     "design:check": "bun scripts/check-design.ts"
   },
