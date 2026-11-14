@@ -15,12 +15,13 @@ let pageBuild: Promise<Map<string, Response>> | undefined;
 // Explicit asset responses let the approval page carry frame protection too.
 function buildPage() {
   return pageBuild ??= Bun.build({
-    entrypoints: [resolve(import.meta.dir, "../web/index.html")], target: "browser", publicPath: "/",
+    entrypoints: ["index.html", "install.html"].map((name) => resolve(import.meta.dir, "../web", name)), target: "browser", publicPath: "/",
   }).then((result) => {
     if (!result.success) throw new Error("client page build failed");
     return new Map(result.outputs.map((output) => {
-      const path = output.kind === "entry-point" && output.path.endsWith(".html")
-        ? "/" : `/${output.path.split("/").at(-1)}`;
+      const name = output.path.split("/").at(-1)!;
+      const path = output.kind === "entry-point" && name.endsWith(".html")
+        ? (name === "install.html" ? "/install" : "/") : `/${name}`;
       return [path, new Response(output, { headers: { ...frameHeaders, "content-type": output.type } })];
     }));
   });
@@ -192,7 +193,10 @@ export type GatewayOptions = {
   maxPreOpenBytes?: number; // terminal bytes held while the browser socket opens, default 1 MiB
   maxFrameBytes?: number; // one terminal frame, default 1 MiB
   log?: (line: string) => void;
+  installer?: InstallerHandler; // local installer API and page; off unless supplied
 };
+// Handles /api/install after the gateway's Host, Origin and body checks. path is the part after /api/install.
+export type InstallerHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
 
 type Target =
   | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; body: boolean }
@@ -551,7 +555,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       const url = new URL(req.url);
       if (!url.pathname.startsWith("/api/")) {
         if (req.method !== "GET" && req.method !== "HEAD") return fail(405, "method_not_allowed", "method not allowed");
-        const asset = (await buildPage()).get(url.pathname);
+        const asset = url.pathname === "/install" && !opts.installer ? undefined : (await buildPage()).get(url.pathname);
         if (!asset) return fail(404, "not_found", "not found");
         return req.method === "HEAD" ? new Response(null, { headers: asset.headers }) : asset.clone();
       }
@@ -567,9 +571,26 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
+      }
+
+      if (url.pathname === "/api/install" || url.pathname.startsWith("/api/install/")) {
+        if (!opts.installer) return fail(404, "not_found", "not found");
+        if (req.method !== "GET" && req.method !== "POST") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET, POST" });
+        if (url.search) return fail(400, "invalid", "query parameters are not accepted");
+        let bytes: Uint8Array | null = null;
+        if (req.method === "POST") {
+          // The installer changes this machine, so a write must come from the page this gateway served.
+          if (origin === null) return fail(403, "forbidden", "Origin required for writes");
+          if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) return fail(415, "unsupported_media_type", "content-type must be application/json");
+          if (Number(req.headers.get("content-length") ?? 0) > maxReq) return fail(413, "too_large", "request body too large");
+          bytes = await readBounded(req.body, maxReq);
+          if (!bytes) return fail(413, "too_large", "request body too large");
+        }
+        const reply = await opts.installer(req.method, url.pathname.slice("/api/install".length), bytes);
+        return Response.json(reply.body, { status: reply.status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
       }
 
       const m = /^\/api\/hosts\/([^/]+)\/(.+)$/.exec(url.pathname);

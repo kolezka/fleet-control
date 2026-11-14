@@ -55,6 +55,7 @@ let fleet: Fleet = emptyFleet();
 let mode: "gateway" | "direct" | "" = "";
 let peers: Peer[] = [];
 let hostListError = "";
+let installer = false;
 let inspectorOpen = true;
 const apply = (f: Fleet) => { fleet = f; };
 
@@ -101,7 +102,7 @@ function renderNav() {
   // A single host service only links to other hosts' own services; it never reads their sessions.
   const peerLinks = peers.map((p) => `<section class="hostgroup peer" aria-label="${esc(p.name)}"><a class="hostbutton" href="${esc(p.url)}" target="_blank" rel="noopener">${HOST_ICON}<span class="hostidentity"><strong>${esc(p.name)}</strong><small>Own service · open</small></span></a></section>`).join("");
   const foot = mode === "gateway"
-    ? `<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
+    ? `${installer ? '<a class="footlink" href="/install">Install on this machine</a>' : ""}<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
     : `<span>Service runs on this host</span><span>This browser is a read-only client</span>`;
   setHtml($("sidebar"), `<div class="sidebarhead"><span>Hosts</span><span>${fleet.order.length + peers.length}</span></div>${groups}${peerLinks}<div class="sidebarfoot">${foot}</div>`);
 }
@@ -477,10 +478,12 @@ async function loadHostList() {
   try {
     const res = await fetch("/api/hosts", { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
     if (res.status === 401) { location.assign("/login"); return; }
-    const list = res.ok ? parseHostList(await res.json().catch(() => null)) : null;
+    const body = res.ok ? await res.json().catch(() => null) : null;
+    const list = parseHostList(body);
     if (!list) { hostListError = `Cannot read the host list (${res.status}). Host state is unknown.`; render(); return; }
     hostListError = list.hosts.length ? "" : "The gateway lists no hosts.";
     mode = list.mode;
+    installer = body.installer === true;
     peers = list.peers;
     apply(setHosts(fleet, list.hosts));
     render();
