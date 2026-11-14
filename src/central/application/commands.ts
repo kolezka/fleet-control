@@ -43,9 +43,10 @@ export function commandAccess(deps: { commands: CentralCommandStore; identities?
       return commands.getScoped(id, fence.scope, fence.commands);
     },
 
-    async list(status: CommandStatus | undefined, page: CommandListPagination): Promise<CommandPage> {
-      if (principal.role === "operator") return commands.list(status, undefined, page);
-      if (!fence || !commands.listScoped) throw new Error("access denied");
+    // An operator may narrow the list to one host or target. A supervisor's scope is its own and cannot be narrowed or widened.
+    async list(status: CommandStatus | undefined, page: CommandListPagination, filter?: CommandListScope): Promise<CommandPage> {
+      if (principal.role === "operator") return commands.list(status, filter, page);
+      if (!fence || !commands.listScoped || filter !== undefined) throw new Error("access denied");
       return commands.listScoped(status, fence.scope, fence.commands, page);
     },
 

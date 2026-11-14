@@ -6,7 +6,7 @@ import { authorize, supervisorIdentity, type Principal, type SupervisorIdentityL
 import { centralCommandStatuses, parseCommandSubmission } from "./domain/commands.ts";
 import { readBoundedBody, readBoundedJson } from "./http-body.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
-import type { CentralCommandStore } from "./application/commands.ts";
+import { commandAccess, type CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
 import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 
@@ -44,7 +44,7 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCom
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
     const submission = parseCommandSubmission(input);
     if (!submission) return c.json({ error: "invalid command" }, 400);
-    const result = await deps.commands.submit({ ...submission, actor: c.get("principal").name });
+    const result = await commandAccess({ commands: deps.commands }, c.get("principal")).submit(submission);
     return c.json(result, result.created ? 201 : 200);
   });
   app.get("/api/commands", async (c) => {
@@ -55,9 +55,9 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCom
     const hostId = c.req.query("hostId");
     const target = c.req.query("target");
     if ((hostId !== undefined && (!hostId.trim() || hostId.length > 256)) || (target !== undefined && (!target.trim() || target.length > 256))) return c.json({ error: "invalid scope" }, 400);
-    return c.json(await deps.commands.list(status as CommandStatus | undefined, { hostId, target }, { limit: limitText === undefined ? undefined : Number(limitText), cursor: c.req.query("cursor") }));
+    return c.json(await commandAccess({ commands: deps.commands }, c.get("principal")).list(status as CommandStatus | undefined, { limit: limitText === undefined ? undefined : Number(limitText), cursor: c.req.query("cursor") }, { hostId, target }));
   });
-  app.get("/api/commands/:id", async (c) => c.json({ command: await deps.commands.get(c.req.param("id")) }));
+  app.get("/api/commands/:id", async (c) => c.json({ command: await commandAccess({ commands: deps.commands }, c.get("principal")).read(c.req.param("id")) }));
   app.all("/mcp", async (c) => {
     const principal = c.get("principal");
     if (principal.role !== "operator" && principal.role !== "supervisor") return c.json({ error: "forbidden" }, 403);

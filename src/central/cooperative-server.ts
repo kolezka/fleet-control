@@ -6,7 +6,7 @@ import { supervisorIdentity, type SupervisorIdentityLookup } from "./domain/iden
 import { parseCommandSubmission } from "./domain/commands.ts";
 import { readBoundedBody, readBoundedJson } from "./http-body.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
-import type { CentralCommandStore } from "./application/commands.ts";
+import { commandAccess, type CentralCommandStore } from "./application/commands.ts";
 import type { CentralCommands } from "./data/commands.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
@@ -38,6 +38,7 @@ export function createCooperativeCentralApp(deps: {
   allowedOrigins?: readonly string[];
 }) {
   if (deps.requests !== undefined) throw new Error("cooperative request store is unsupported");
+  // The cooperative store's bounded methods behind the shape the command use cases expect.
   const commands: CentralCommandStore = {
     submit: (...args) => deps.commands.submitBounded(...args),
     get: (...args) => deps.commands.getBounded(...args),
@@ -79,7 +80,7 @@ export function createCooperativeCentralApp(deps: {
     if (limitText !== null && !/^[1-4]$/.test(limitText)) return c.json({ error: "invalid limit" }, 400);
     const cursor = query.get("cursor") ?? undefined;
     if (cursor !== undefined && (cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(cursor))) return c.json({ error: "invalid cursor" }, 400);
-    const page = await deps.commands.listBounded(undefined, { hostId: hostId!, target: target! }, { limit: limitText === null ? 4 : Number(limitText), cursor });
+    const page = await commandAccess({ commands }, principal).list(undefined, { limit: limitText === null ? 4 : Number(limitText), cursor }, { hostId: hostId!, target: target! });
     const body = JSON.stringify(page);
     if (Buffer.byteLength(body, "utf8") > MAX_COMMAND_LIST_BODY) throw new Error("command list too large");
     return c.body(body, 200, { "Content-Type": "application/json" });
@@ -87,7 +88,7 @@ export function createCooperativeCentralApp(deps: {
   app.get("/api/commands/:id", async (c) => {
     const principal = deps.auth.authenticate(c.req.raw);
     if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
-    return c.json({ command: await deps.commands.getBounded(c.req.param("id")) });
+    return c.json({ command: await commandAccess({ commands }, principal).read(c.req.param("id")) });
   });
   app.post("/api/commands", async (c) => {
     const principal = deps.auth.authenticate(c.req.raw);
@@ -98,7 +99,7 @@ export function createCooperativeCentralApp(deps: {
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
     const submission = parseCommandSubmission(input);
     if (!submission) return c.json({ error: "invalid command" }, 400);
-    const result = await deps.commands.submitBounded({ ...submission, actor: principal.name });
+    const result = await commandAccess({ commands }, principal).submit(submission);
     return c.json(result, result.created ? 201 : 200);
   });
   app.all("/mcp", async (c) => {

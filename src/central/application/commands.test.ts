@@ -53,6 +53,14 @@ test("a supervisor reads and answers only through its own host and session", asy
   ]);
 });
 
+test("an operator may narrow a list to a host and target; a supervisor may not pass a filter", async () => {
+  const { commands, calls } = store();
+  await commandAccess({ commands }, operator).list(undefined, { limit: 4 }, { hostId: "h", target: "t" });
+  expect(calls).toEqual([["list", undefined, { hostId: "h", target: "t" }, { limit: 4 }]]);
+  await expect(commandAccess({ commands, identities: active }, supervisor).list(undefined, {}, { hostId: "other", target: "t" })).rejects.toThrow("access denied");
+  expect(calls).toHaveLength(1);
+});
+
 test("a response without a reason records the decision as its detail", async () => {
   const { commands, calls } = store();
   await commandAccess({ commands, identities: active }, supervisor).respond("c-1", "accepted", "");

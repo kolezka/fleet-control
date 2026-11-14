@@ -6,13 +6,11 @@ import { hostname as osHostname } from "node:os";
 import { FleetError } from "./domain/fleet.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
-import { type Commands } from "./data/commands.ts";
 import { CommandError } from "./domain/commands.ts";
 import { commandUseCases } from "./application/commands.ts";
-import type { Deliverer } from "./application/delivery.ts";
+import { requestUseCases } from "./application/requests.ts";
 import { sessionReader } from "./application/sessions.ts";
-import { handleMcp } from "./mcp.ts";
-import { type Requests } from "./data/requests.ts";
+import { handleMcp, type ControlDeps } from "./mcp.ts";
 import { RequestError } from "./domain/requests.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
@@ -57,7 +55,6 @@ export function createApp(deps: Parameters<typeof sessionReader>[0]) {
 }
 
 type TerminalDeps = { fleetBin: string; confPath: string };
-type ControlDeps = { commands: Commands; deliverer: Deliverer; requests?: Requests };
 
 const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
 const requestStatus: Record<RequestError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400, forbidden: 403 };
@@ -109,7 +106,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const app = createApp(deps);
   const terminal = deps.terminal;
   const control = deps.control;
-  const queue = control ? commandUseCases(control) : null;
+  // With auth the caller's name replaces any actor the body declares; the use cases apply that rule.
+  const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who?.name) : null);
+  const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who?.name) : null);
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
   type Handler = (req: any, server: any) => Response | Promise<Response> | undefined | Promise<Response | undefined>;
@@ -171,8 +170,12 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       // The web UI reads and queues commands here; MCP clients use /mcp. Both share one queue.
       "/api/commands": {
-        GET: guard(() => (control ? Response.json({ commands: control.commands.list() }) : noControl())),
+        GET: guard((_req, _s, who) => {
+          const queue = queueFor(who);
+          return queue ? Response.json({ commands: queue.list() }) : noControl();
+        }),
         POST: guard(async (req, _s, who) => {
+          const queue = queueFor(who);
           if (!queue) return noControl();
           if (!originAllowed(req)) return forbidden();
           try {
@@ -183,7 +186,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const result = await queue.submit({
               idempotencyKey: str("idempotencyKey"),
               target: str("target"),
-              actor: who?.name ?? (str("actor") || "web-ui"),
+              actor: str("actor") || "web-ui",
               text: str("text"),
             });
             return Response.json(result, { status: result.created ? 201 : 200 });
@@ -194,7 +197,8 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         }),
       },
       "/api/commands/:id": {
-        GET: guard((req) => {
+        GET: guard((req, _s, who) => {
+          const queue = queueFor(who);
           if (!queue) return noControl();
           try {
             return Response.json(queue.read(req.params.id));
@@ -204,24 +208,25 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         }),
       },
       "/api/requests": {
-        GET: guard(() => {
-          if (!control?.requests) return noControl();
-          return Response.json({ runs: control.requests.runs(), requests: control.requests.list() });
+        GET: guard((_req, _s, who) => {
+          const requests = requestsFor(who);
+          return requests ? Response.json(requests.overview()) : noControl();
         }),
       },
       // A human answer from the page. Bound to the request id and the revision the page showed.
       "/api/requests/:id/resolve": {
         POST: guard(async (req, _s, who) => {
-          if (!control?.requests) return noControl();
+          const requests = requestsFor(who);
+          if (!requests) return noControl();
           if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
           try {
             const body: unknown = await req.json();
             if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
             const b = body as Record<string, unknown>;
-            const request = control.requests.resolve({
+            const request = requests.resolve({
               requestId: req.params.id,
               response: typeof b.response === "string" ? b.response : "",
-              actor: who?.name ?? "web-ui",
+              actor: "web-ui",
               expectedRevision: typeof b.expectedRevision === "number" ? b.expectedRevision : -1,
               note: typeof b.note === "string" ? b.note : undefined,
             });

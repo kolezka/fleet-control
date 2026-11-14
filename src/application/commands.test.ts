@@ -44,6 +44,43 @@ test("deliver and read return the command with the same history", async () => {
   expect(sent).toEqual(["worker"]);
 });
 
+test("list and eventsAfter read every command, optionally by status or after a cursor", async () => {
+  const { use } = fixture();
+  const first = await use.submit(input);
+  const second = await use.submit({ ...input, idempotencyKey: "key-00000002" });
+  expect(use.list().map((command) => command.id).sort()).toEqual([first.command.id, second.command.id].sort());
+  expect(use.list("queued")).toEqual([]);
+  const all = use.eventsAfter(0);
+  expect(all).toHaveLength(6);
+  expect(use.eventsAfter(all[3]!.seq).map((event) => event.seq)).toEqual([all[4]!.seq, all[5]!.seq]);
+});
+
+test("an answer is recorded under the declared actor, and the decision stands in for an empty reason", async () => {
+  const { use, commands } = fixture();
+  const { command } = await use.submit(input);
+  expect(use.respond(command.id, "accepted", "worker", "").status).toBe("accepted");
+  expect(use.report(command.id, "completed", "worker", "tests pass").status).toBe("completed");
+  expect(commands.events(command.id).slice(-2).map(({ status, actor, detail }) => ({ status, actor, detail }))).toEqual([
+    { status: "accepted", actor: "worker", detail: "accepted" },
+    { status: "completed", actor: "worker", detail: "tests pass" },
+  ]);
+});
+
+test("with an authenticated caller its name replaces every declared actor", async () => {
+  const sent: string[] = [];
+  const send: Sender = async (session) => { sent.push(session); return { exitCode: 0, stdout: `${session}: delivered`, stderr: "" }; };
+  const commands = new Commands(new Store(":memory:").db);
+  const use = commandUseCases({ commands, deliverer: new Deliverer(commands, send) }, "token-holder");
+  const { command } = await use.submit({ ...input, actor: "someone-else" });
+  expect(command.actor).toBe("token-holder");
+  use.respond(command.id, "accepted", "someone-else", "mine");
+  use.report(command.id, "failed", "someone-else", "tests fail");
+  expect(commands.events(command.id).slice(-2).map(({ status, actor, detail }) => ({ status, actor, detail }))).toEqual([
+    { status: "accepted", actor: "token-holder", detail: "mine" },
+    { status: "failed", actor: "token-holder", detail: "tests fail" },
+  ]);
+});
+
 test("reading an unknown command fails the same way the store does", () => {
   const { use } = fixture();
   expect(() => use.read("missing")).toThrow("no command missing");
