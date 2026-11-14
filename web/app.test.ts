@@ -141,3 +141,24 @@ test("browser preserves unknown send key on malformed success and mapping replac
   expect(b.app.getFleet().hosts.a.inspection).toBeNull();
   expect(b.element("composerTarget").textContent).toContain("new-session");
 });
+
+test("browser header carries the full host name for a clipped title", async () => {
+  const name = "build-workstation-04.example-tailnet.ts.net";
+  const b = await browser([{ ...host, name }], path => path.endsWith("/sessions") ? { sessions: [] } : { commands: [], nextCursor: null });
+  expect(b.element("hostTitle").textContent).toBe(name);
+  expect(b.element("hostTitle").title).toBe(name);
+});
+
+// The shell is a one-column grid. Without a bounded column, nowrap header text widens the whole page.
+test("page styles bound the shell column and clip the header host name", async () => {
+  const css = (await Bun.file(new URL("./live.css", import.meta.url)).text()).replace(/\s+/g, "");
+  expect(css).toContain(".shell{grid-template-columns:minmax(0,1fr)}");
+  expect(css).toMatch(/\.hostcontextstrong\{[^}]*min-width:0[^}]*overflow:hidden[^}]*text-overflow:ellipsis[^}]*white-space:nowrap[^}]*\}/);
+});
+
+// The supervisor panel is also a one-column grid and repeats the host name in three places.
+test("page styles bound the supervisor panel column and keep Send inside it", async () => {
+  const css = (await Bun.file(new URL("./live.css", import.meta.url)).text()).replace(/\s+/g, "");
+  expect(css).toContain(".coordination{grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}");
+  expect(css).toContain(".coordinationheadh2,.composerfooterbutton{flex-shrink:0}");
+});
