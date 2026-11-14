@@ -1,12 +1,9 @@
 import type { SQL, TransactionSQL } from "bun";
-import { CommandError } from "../../data/commands.ts";
-import type { Principal } from "../auth.ts";
+import { CommandError } from "../../domain/commands.ts";
+import type { Principal } from "../domain/identity.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { type SettlementDisposition, type Settlement, settlementDispositions } from "../domain/cooperative.ts";
 
-export type SettlementDisposition = "completed" | "failed" | "not-executed" | "unknown";
-export type Settlement = { commandId: string; requestId: string; actor: string; disposition: SettlementDisposition; evidence: string; expectedSequence: string | null; at: string };
-
-const dispositions: readonly string[] = ["completed", "failed", "not-executed", "unknown"];
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
 const validLifecycleSequence = (value: unknown): value is string | null => value === null || (typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n);
 
@@ -47,7 +44,7 @@ export class CooperativeSettlement {
   async settle(principal: Principal, commandId: string, requestId: string, disposition: SettlementDisposition, evidence: string, expectedSequence: string | null): Promise<{ settlement: Settlement; created: boolean }> {
     if (!principal || principal.role !== "operator" || !validId(principal.name)) throw new Error("access denied");
     const actor = principal.name;
-    if (!validId(commandId) || !validId(requestId) || !dispositions.includes(disposition) || typeof evidence !== "string" || !evidence.trim() || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validLifecycleSequence(expectedSequence)) throw new CommandError("invalid", "invalid settlement request");
+    if (!validId(commandId) || !validId(requestId) || !settlementDispositions.includes(disposition) || typeof evidence !== "string" || !evidence.trim() || evidence.length > 65536 || !evidence.isWellFormed() || evidence.includes("\0") || !validLifecycleSequence(expectedSequence)) throw new CommandError("invalid", "invalid settlement request");
     return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
       // Same lock as lifecycle reports and assertions, taken before any read.
       const [lock] = await tx`SELECT id FROM central_command_event_lock WHERE id = 1 FOR UPDATE`;

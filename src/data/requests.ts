@@ -2,38 +2,7 @@
 // The phase record has one writer: the orchestrator registered for the run. A new revision makes
 // every open request for the older revision stale, so an old approval can never apply to new work.
 import type { Database } from "bun:sqlite";
-
-export type RequestKind = "approval" | "clarification" | "scope_change" | "blocker";
-export type RequestStatus = "open" | "resolved" | "acknowledged" | "stale" | "withdrawn";
-
-export type Run = { id: string; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
-
-export type SupervisorRequest = {
-  id: string;
-  runId: string;
-  phase: string;
-  revision: number;
-  kind: RequestKind;
-  question: string;
-  proposedAction: string;
-  scope: string;
-  evidence: string[];
-  allowedResponses: string[];
-  blocking: boolean;
-  origin: string;
-  status: RequestStatus;
-  response: string | null;
-  resolvedBy: string | null;
-  resolutionNote: string | null;
-  resolvedAt: string | null;
-  createdAt: string;
-};
-
-export class RequestError extends Error {
-  constructor(readonly kind: "not_found" | "conflict" | "invalid" | "forbidden", message: string) {
-    super(message);
-  }
-}
+import { type RequestKind, type RequestStatus, type Run, type SupervisorRequest, RequestError } from "../domain/requests.ts";
 
 type Row = Omit<SupervisorRequest, "evidence" | "allowedResponses" | "blocking"> & { evidence: string; allowedResponses: string; blocking: number };
 const decode = (r: Row): SupervisorRequest => ({ ...r, evidence: JSON.parse(r.evidence), allowedResponses: JSON.parse(r.allowedResponses), blocking: r.blocking === 1 });

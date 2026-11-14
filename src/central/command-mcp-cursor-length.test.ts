@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CentralCommands } from "./data/commands.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
-import type { Principal } from "./auth.ts";
+import type { Principal } from "./domain/identity.ts";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
 const url = centralTestDatabaseUrl(process.env);

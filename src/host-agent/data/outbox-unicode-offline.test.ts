@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { OutboxError, ReceiptOutbox, type HostReceipt } from "./outbox";
+import { OutboxError, ReceiptOutbox } from "./outbox";
+import type { HostReceipt } from "../domain/delivery.ts";
 
 const replacement: HostReceipt = { hostId: "host-�", commandId: "command-�", attemptId: "attempt-�", status: "delivered" };
 const emoji: HostReceipt = { hostId: "host-😀", commandId: "command-😀", attemptId: "attempt-😀", status: "unknown" };

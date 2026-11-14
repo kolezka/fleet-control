@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { RequestError, Requests } from "./data/requests.ts";
+import { Requests } from "./data/requests.ts";
+import { RequestError } from "./domain/requests.ts";
 
 function fixture(status: "resolved" | "acknowledged", resolutionNote: string | null = "original note") {
   const row = {

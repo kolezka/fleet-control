@@ -1,5 +1,5 @@
 import type { SQL } from "bun";
-import { RequestError, type RequestKind, type RequestStatus, type Run, type SupervisorRequest } from "../../data/requests.ts";
+import { RequestError, type RequestKind, type RequestStatus, type Run, type SupervisorRequest } from "../../domain/requests.ts";
 
 // The caller must bind the authenticated principal to the input actor before calling.
 // A guard fences that principal in this transaction; it does not authenticate the input.

@@ -1,6 +1,6 @@
 import type { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { RequestError } from "../../data/requests.ts";
+import { RequestError } from "../../domain/requests.ts";
 import { CentralRequests } from "./requests.ts";
 
 const original = { id: "run", orchestrator: "owner", phase: "plan", revision: 1, phaseStatus: "planned", updatedAt: "2026-01-01T00:00:00.000Z" };

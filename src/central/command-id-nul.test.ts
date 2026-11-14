@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
 import { CentralCommands } from "./data/commands.ts";
-import { CommandError } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 const scope = { hostId: "host-a", session: "session-a" };

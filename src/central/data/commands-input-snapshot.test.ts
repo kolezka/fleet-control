@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { CentralCommands, type CentralCommand, type CentralCommandInput } from "./commands.ts";
+import { CentralCommands } from "./commands.ts";
+import type { CentralCommand, CentralCommandInput } from "../domain/commands.ts";
 
 function fixture(existing?: CentralCommand) {
   let release!: () => void;

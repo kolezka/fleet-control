@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { AgentSockets, type AgentDispatch, type AgentSocket } from "./agent-sockets.ts";
+import { AgentSockets, type AgentSocket } from "./agent-sockets.ts";
+import type { AgentDispatch } from "../domain/agent-protocol.ts";
 import { HostAgentClient, type HostSocket } from "../host-agent/client.ts";
 
 // Lone surrogates can be stored as U+FFFD and alias a different id, so every host socket boundary rejects them.

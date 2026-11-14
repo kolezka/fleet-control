@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { AgentSockets, type AgentInventory, type AgentSocket } from "./agent-sockets.ts";
+import { AgentSockets, type AgentSocket } from "./agent-sockets.ts";
+import type { AgentInventory } from "../domain/agent-protocol.ts";
 
 function setup() {
   const closed: [number, string][] = [];

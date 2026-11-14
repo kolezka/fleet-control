@@ -1,10 +1,8 @@
 import type { SQL, TransactionSQL } from "bun";
-import { CommandError } from "../../data/commands.ts";
-import type { Principal } from "../auth.ts";
+import { CommandError } from "../../domain/commands.ts";
+import type { Principal } from "../domain/identity.ts";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-
-export type ReconciliationDisposition = "unknown" | "completed" | "failed" | "not-executed";
-export type Reconciliation = { commandId: string; requestId: string; actor: string; disposition: ReconciliationDisposition; evidence: string; expectedSequence: string | null; sequence: string; supersedesSequence: string | null; at: string };
+import type { ReconciliationDisposition, Reconciliation } from "../domain/cooperative.ts";
 
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
 const validSequence = (value: unknown, maxDigits: number): value is string | null => value === null || (typeof value === "string" && value.length <= maxDigits && /^[1-9][0-9]*$/.test(value));

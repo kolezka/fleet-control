@@ -9,10 +9,12 @@ import type { Observation } from "./observe/claude.ts";
 import type { Store } from "./data/store.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
-import { CommandError, type Commands } from "./data/commands.ts";
+import { type Commands } from "./data/commands.ts";
+import { CommandError } from "./domain/commands.ts";
 import type { Deliverer } from "./delivery.ts";
 import { handleMcp } from "./mcp.ts";
-import { RequestError, type Requests } from "./data/requests.ts";
+import { type Requests } from "./data/requests.ts";
+import { RequestError } from "./domain/requests.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,

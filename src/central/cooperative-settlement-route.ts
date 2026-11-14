@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { CommandError } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import type { CentralAuth } from "./auth.ts";
 import type { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 

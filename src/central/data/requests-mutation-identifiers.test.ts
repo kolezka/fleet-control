@@ -1,6 +1,6 @@
 import type { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { RequestError } from "../../data/requests.ts";
+import { RequestError } from "../../domain/requests.ts";
 import { CentralRequests } from "./requests.ts";
 
 const methods = ["registerRun", "updatePhase", "create", "resolve", "acknowledge", "withdraw"] as const;

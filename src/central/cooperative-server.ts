@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CommandError, MAX_TEXT } from "../data/commands.ts";
-import { supervisorIdentity, type CentralAuth, type SupervisorIdentityLookup } from "./auth.ts";
+import { CommandError, MAX_TEXT } from "../domain/commands.ts";
+import { type CentralAuth } from "./auth.ts";
+import { supervisorIdentity, type SupervisorIdentityLookup } from "./domain/identity.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
 import type { CentralCommands } from "./data/commands.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";

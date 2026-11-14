@@ -1,54 +1,7 @@
 // Durable command queue. Each state change is a row in command_events, so the history survives restarts.
 // Queued, delivered, accepted and completed are separate facts; none implies the next one.
 import type { Database } from "bun:sqlite";
-
-export type CommandStatus =
-  | "queued" // stored on the host; not yet shown to the recipient
-  | "delivering" // a delivery attempt is in progress; after a crash this becomes delivery_unknown
-  | "delivered" // sender reported delivery; the bundled sender checks only a first-line prefix
-  | "delivery_unknown" // an attempt may or may not have reached the pane; never retried automatically
-  | "claimed" // cooperatively reserved, not accepted
-  | "accepted"
-  | "rejected"
-  | "running"
-  | "completed"
-  | "failed";
-
-export type Command = {
-  id: string;
-  idempotencyKey: string;
-  target: string;
-  actor: string;
-  text: string;
-  status: CommandStatus;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type CommandEvent = { seq: number; commandId: string; status: CommandStatus; actor: string; detail: string; at: string };
-
-export class CommandError extends Error {
-  constructor(readonly kind: "not_found" | "conflict" | "invalid", message: string) {
-    super(message);
-  }
-}
-
-// Who may move a command from which state. Delivery outcomes come only from the service itself.
-const allowed: Record<CommandStatus, CommandStatus[]> = {
-  queued: ["delivering", "accepted", "rejected"],
-  delivering: ["delivered", "queued", "delivery_unknown"],
-  delivered: ["accepted", "rejected"],
-  delivery_unknown: ["accepted", "rejected"],
-  claimed: [],
-  accepted: ["running", "completed", "failed"],
-  running: ["completed", "failed"],
-  rejected: [],
-  completed: [],
-  failed: [],
-};
-
-export const MAX_TEXT = 4000;
-const sessionName = /^[A-Za-z0-9._-]+$/;
+import { type CommandStatus, type Command, type CommandEvent, CommandError, commandTransitions, MAX_TEXT, sessionNamePattern } from "../domain/commands.ts";
 
 export class Commands {
   constructor(
@@ -90,7 +43,7 @@ export class Commands {
     const text = rawText.trim();
     if (!text) throw new CommandError("invalid", "instruction text is empty");
     if (text.length > MAX_TEXT) throw new CommandError("invalid", `instruction text is longer than ${MAX_TEXT} characters`);
-    if (!sessionName.test(target)) throw new CommandError("invalid", `invalid target session: ${target}`);
+    if (!sessionNamePattern.test(target)) throw new CommandError("invalid", `invalid target session: ${target}`);
     if (!idempotencyKey.trim() || !actor.trim()) throw new CommandError("invalid", "idempotencyKey and actor are required");
 
     return this.db.transaction(() => {
@@ -116,7 +69,7 @@ export class Commands {
   transition(id: string, to: CommandStatus, actor: string, detail: string): Command {
     return this.db.transaction(() => {
       const c = this.get(id);
-      if (!allowed[c.status].includes(to)) {
+      if (!commandTransitions[c.status].includes(to)) {
         throw new CommandError("conflict", `${id} is ${c.status}; cannot become ${to}`);
       }
       if (!actor.isWellFormed() || !detail.isWellFormed()) {

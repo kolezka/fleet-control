@@ -1,19 +1,8 @@
 import type { SQL, TransactionSQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-import { CommandError } from "../../data/commands.ts";
-import type { CentralCommand } from "./commands.ts";
-import type { CooperativeStatus } from "./cooperative-lifecycle.ts";
-
-export type CooperativeInspectionEvent = { seq: string; requestId: string; status: CooperativeStatus; detail: string; at: string };
-export type CooperativeInspectionResult = {
-  command: CentralCommand;
-  // incarnationActive is read with the claim: the claiming incarnation is active and its identity is not retired.
-  // False means nobody can report on this claim any more.
-  // settled: an operator recorded a terminal settlement for this claim (see CooperativeSettlement).
-  claim: { incarnationId: string; incarnationActive: boolean; settled: boolean; requestId: string; createdAt: string } | null;
-  events: CooperativeInspectionEvent[];
-  nextCursor: string | null;
-};
+import { CommandError } from "../../domain/commands.ts";
+import type { CentralCommand } from "../domain/commands.ts";
+import type { CooperativeStatus, CooperativeInspectionResult } from "../domain/cooperative.ts";
 
 // The caller must authenticate and authorize the operator before calling this method.
 // Pages are live reads, not a snapshot across calls. Command state is not lifecycle state.

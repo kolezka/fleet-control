@@ -1,14 +1,6 @@
 import type { SQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-
-export type SupervisorIdentity = { principalId: string; name: string; hostId: string; session: string };
-
-export const validId = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && value.isWellFormed() && !/[\x00-\x1f\x7f]/.test(value);
-
-export function validIdentity(identity: SupervisorIdentity): boolean {
-  return !!identity && validId(identity.principalId) && validId(identity.name) && validId(identity.hostId) && validId(identity.session);
-}
+import { type SupervisorIdentity, validIdentity } from "../domain/identity.ts";
 
 // Enrollment and retirement are operator actions, never derived from a request principal.
 // Existing principals are not migrated automatically; the caller must enroll trusted bindings.

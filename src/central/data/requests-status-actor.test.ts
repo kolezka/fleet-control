@@ -1,6 +1,6 @@
 import type { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { RequestError } from "../../data/requests.ts";
+import { RequestError } from "../../domain/requests.ts";
 import { CentralRequests } from "./requests.ts";
 
 const original = { id: "request", runId: "run", phase: "plan", revision: 1, kind: "approval", question: "Question?", proposedAction: "", scope: "", evidence: "[]", allowedResponses: '["approve"]', blocking: true, origin: "owner", status: "open", response: "approve", resolvedBy: "operator", resolutionNote: "", resolvedAt: null, createdAt: "2026-01-01T00:00:00.000Z" };

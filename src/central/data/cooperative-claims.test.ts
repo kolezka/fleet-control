@@ -1,6 +1,7 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralCommands, type CentralCommand } from "./commands.ts";
+import { CentralCommands } from "./commands.ts";
+import type { CentralCommand } from "../domain/commands.ts";
 import { CentralAttempts } from "./attempts.ts";
 import { SupervisorIdentityRegistry } from "./identity-registry.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";

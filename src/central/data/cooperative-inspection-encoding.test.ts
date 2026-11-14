@@ -1,6 +1,6 @@
 import type { SQL, TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../../data/commands.ts";
+import { CommandError } from "../../domain/commands.ts";
 import { CooperativeInspection } from "./cooperative-inspection.ts";
 
 for (const method of ["inspect", "inspectBounded"] as const) {

@@ -1,16 +1,10 @@
 import type { SQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-import { CommandError } from "../../data/commands.ts";
-import { supervisorIdentity, type Principal } from "../auth.ts";
-import { SupervisorIncarnations, type IncarnationCredential } from "./incarnations.ts";
+import { CommandError } from "../../domain/commands.ts";
+import { supervisorIdentity, type Principal, type IncarnationCredential } from "../domain/identity.ts";
+import { SupervisorIncarnations } from "./incarnations.ts";
+import { type CooperativeStatus, type CooperativeEvent, lifecycleTransitions } from "../domain/cooperative.ts";
 
-export type CooperativeStatus = "accepted" | "rejected" | "running" | "completed" | "failed";
-export type CooperativeEvent = { commandId: string; requestId: string; status: CooperativeStatus; detail: string; at: string };
-
-const transitions: Record<string, CooperativeStatus[]> = {
-  claimed: ["accepted", "rejected"], accepted: ["running", "completed", "failed"],
-  running: ["completed", "failed"], rejected: [], completed: [], failed: [],
-};
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
 
 // Standalone storage only. A claim remains frozen in central_commands.
@@ -44,7 +38,7 @@ export class CooperativeLifecycle {
       }
       const [latest] = await tx<{ status: CooperativeStatus }[]>`SELECT status FROM central_cooperative_lifecycle_events WHERE command_id = ${commandId} ORDER BY seq DESC LIMIT 1`;
       const current = latest?.status ?? "claimed";
-      if (!transitions[current]?.includes(status)) throw new CommandError("conflict", `${commandId} is ${current}; cannot become ${status}`);
+      if (!lifecycleTransitions[current]?.includes(status)) throw new CommandError("conflict", `${commandId} is ${current}; cannot become ${status}`);
       const at = this.now().toISOString();
       await tx`INSERT INTO central_cooperative_lifecycle_events (command_id, incarnation_id, request_id, status, detail, at) VALUES (${commandId}, ${credential.incarnationId}, ${requestId}, ${status}, ${detail}, ${at})`;
       return { commandId, requestId, status, detail, at };

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { AgentSockets, MAX_AGENT_MESSAGE_BYTES, type AgentDispatch, type AgentSocket } from "./agent-sockets.ts";
+import { AgentSockets, type AgentSocket } from "./agent-sockets.ts";
+import { MAX_AGENT_MESSAGE_BYTES, type AgentDispatch } from "../domain/agent-protocol.ts";
 
 class FakeSocket implements AgentSocket {
   sent: string[] = [];

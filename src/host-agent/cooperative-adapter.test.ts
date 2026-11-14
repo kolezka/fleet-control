@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createCooperativeAdapter, type CooperativeAdapterOptions } from "./cooperative-adapter.ts";
 import { createHash } from "node:crypto";
-import { MAX_TEXT } from "../data/commands.ts";
+import { MAX_TEXT } from "../domain/commands.ts";
 import { CentralAuth } from "../central/auth.ts";
 import { createCooperativeCentralApp } from "../central/cooperative-server.ts";
 import type { CooperativeCommands } from "../central/cooperative-server.ts";

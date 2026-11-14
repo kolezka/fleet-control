@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands, type SupervisorCommandScope } from "./data/commands.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { SupervisorCommandScope } from "./domain/commands.ts";
 
 const roundtrip = (value: string) => Buffer.from(value, "utf8").toString("utf8");
 const replacement = "�";

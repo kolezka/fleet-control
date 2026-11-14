@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { RequestError } from "../data/requests.ts";
+import { RequestError } from "../domain/requests.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
 import type { CentralRequests } from "./data/requests.ts";
 

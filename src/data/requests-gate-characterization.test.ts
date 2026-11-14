@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { Requests, type Run, type SupervisorRequest } from "./requests.ts";
+import { Requests } from "./requests.ts";
+import type { Run, SupervisorRequest } from "../domain/requests.ts";
 
 const run: Run = { id: "run", orchestrator: "owner", phase: "review", revision: 2, phaseStatus: "planned", updatedAt: "" };
 const request = (id: string, overrides: Partial<SupervisorRequest> = {}): SupervisorRequest => ({

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { ReceiptOutbox, type HostReceipt } from "./outbox";
+import { ReceiptOutbox } from "./outbox";
+import type { HostReceipt } from "../domain/delivery.ts";
 
 test("outer transactions decide whether returned enqueue and acknowledge changes persist", () => {
   const db = new Database(":memory:");

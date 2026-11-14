@@ -1,8 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandError } from "../data/commands.ts";
-import type { Principal } from "./auth.ts";
-import type { IncarnationCredential } from "./data/incarnations.ts";
+import { CommandError } from "../domain/commands.ts";
+import type { Principal, IncarnationCredential } from "./domain/identity.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 

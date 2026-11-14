@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { RequestError, Requests } from "./requests.ts";
+import { Requests } from "./requests.ts";
+import { RequestError } from "../domain/requests.ts";
 
 const fields = ["question", "proposedAction", "scope"] as const;
 const malformed = ["a\ud800", "a\udc00", "a\udc00\ud800"];

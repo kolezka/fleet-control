@@ -1,7 +1,5 @@
 import { Database } from "bun:sqlite";
-
-export type AttemptStatus = "started" | "delivered" | "unknown";
-export type DeliveryAttempt = { id: string; fingerprint: string; status: AttemptStatus };
+import type { DeliveryAttempt } from "../domain/delivery.ts";
 
 export class JournalError extends Error {
   constructor(readonly kind: "invalid" | "conflict" | "not_found", message: string) {

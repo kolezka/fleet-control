@@ -1,9 +1,9 @@
 import type { SQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-import { CommandError } from "../../data/commands.ts";
-import { supervisorIdentity, type Principal } from "../auth.ts";
-import { SupervisorIncarnations, type IncarnationCredential } from "./incarnations.ts";
-import type { CentralCommand } from "./commands.ts";
+import { CommandError } from "../../domain/commands.ts";
+import { supervisorIdentity, type Principal, type IncarnationCredential } from "../domain/identity.ts";
+import { SupervisorIncarnations } from "./incarnations.ts";
+import type { CentralCommand } from "../domain/commands.ts";
 
 // Initialize commands, delivery attempts, identities and incarnations first.
 // The database fence deliberately blocks ALL updates/deletes of claimed commands.

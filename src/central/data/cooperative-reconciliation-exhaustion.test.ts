@@ -1,7 +1,8 @@
 import type { SQL, TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../../data/commands.ts";
-import { CooperativeReconciliation, type Reconciliation } from "./cooperative-reconciliation.ts";
+import { CommandError } from "../../domain/commands.ts";
+import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import type { Reconciliation } from "../domain/cooperative.ts";
 
 const principal = { role: "operator", name: "operator" } as const;
 const maximum = "9".repeat(1000);

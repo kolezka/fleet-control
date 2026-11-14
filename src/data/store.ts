@@ -1,14 +1,7 @@
 // Host-local registry of sessions Fleet Control knows about. Runtime truth still comes from the fleet CLI.
 import { Database } from "bun:sqlite";
 import type { ModelObservation, SessionKind } from "../domain/model.ts";
-
-export type SessionRecord = {
-  name: string;
-  host: string;
-  role: string;
-  kind: SessionKind;
-  configuredModel: string | null;
-};
+import type { SessionRecord } from "../domain/sessions.ts";
 
 export class Store {
   readonly db: Database;

@@ -1,8 +1,6 @@
 import type { SQL } from "bun";
-import { CommandError } from "../../data/commands.ts";
-
-export type DeliveryResult = "delivered" | "unknown";
-export type CentralAttempt = { id: string; commandId: string; hostId: string; status: "started" | DeliveryResult; detail: string | null };
+import { CommandError } from "../../domain/commands.ts";
+import type { DeliveryResult, CentralAttempt } from "../domain/attempts.ts";
 
 // Initialize CentralCommands first. The caller owns the SQL pool.
 export class CentralAttempts {

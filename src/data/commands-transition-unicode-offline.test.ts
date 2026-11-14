@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { CommandError, Commands } from "./commands";
+import { Commands } from "./commands";
+import { CommandError } from "../domain/commands.ts";
 
 function expectKind(action: () => unknown, kind: CommandError["kind"]) {
   let error: unknown;

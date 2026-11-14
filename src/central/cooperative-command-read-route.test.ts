@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { CommandError } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { CentralAuth } from "./auth.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./cooperative-server.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";

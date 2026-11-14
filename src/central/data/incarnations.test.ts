@@ -1,7 +1,8 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "../test-database-url.ts";
-import { SupervisorIdentityRegistry, type SupervisorIdentity } from "./identity-registry.ts";
+import { SupervisorIdentityRegistry } from "./identity-registry.ts";
+import type { SupervisorIdentity } from "../domain/identity.ts";
 import { SupervisorIncarnations } from "./incarnations.ts";
 
 const url = centralTestDatabaseUrl(process.env);

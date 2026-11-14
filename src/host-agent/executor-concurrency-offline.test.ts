@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { DeliveryExecutor, type CommandOffer } from "./executor.ts";
-import { DeliveryJournal, type DeliveryAttempt } from "./data/journal.ts";
+import { DeliveryJournal } from "./data/journal.ts";
+import type { DeliveryAttempt } from "./domain/delivery.ts";
 
 const offer: CommandOffer = { id: "first", hostId: "host-1", target: "supervisor", text: "hello", instanceId: "instance-1" };
 const confirmed = { exitCode: 0, stdout: "supervisor: delivered", stderr: "" };

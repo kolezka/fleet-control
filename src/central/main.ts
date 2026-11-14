@@ -1,5 +1,6 @@
 import { SQL } from "bun";
-import { CentralAuth, type Credential } from "./auth.ts";
+import { CentralAuth } from "./auth.ts";
+import type { Credential } from "./domain/identity.ts";
 import { CentralCommands } from "./data/commands.ts";
 import { CentralRequests } from "./data/requests.ts";
 import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";

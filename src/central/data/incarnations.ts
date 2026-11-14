@@ -1,10 +1,8 @@
 import type { SQL, TransactionSQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
-import { validIdentity, type SupervisorIdentity } from "./identity-registry.ts";
+import { validIdentity, type SupervisorIdentity, type IncarnationCredential } from "../domain/identity.ts";
 
 export type CooperativeTransactionRunner = <T>(operation: (tx: TransactionSQL) => Promise<T>) => Promise<T>;
-
-export type IncarnationCredential = { incarnationId: string; token: string };
 
 const digest = (token: string) => createHash("sha256").update(token).digest("hex");
 

@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SupervisorIncarnations } from "./data/incarnations.ts";
-import { cleanupCooperativeRole, disposableCooperativeRole } from "./disposable-role-fixture.ts";
+import { cleanupCooperativeRole, disposableCooperativeRole } from "./test-fixtures/disposable-role-fixture.ts";
 
 const databaseUrl = process.env.CENTRAL_TEST_DATABASE_URL;
 const token = () => randomBytes(32).toString("base64url");

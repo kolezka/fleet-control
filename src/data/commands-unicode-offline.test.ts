@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { CommandError, Commands } from "./commands";
+import { Commands } from "./commands";
+import { CommandError } from "../domain/commands.ts";
 
 describe("command Unicode persistence", () => {
   test("rejects malformed UTF-16 before lookup or write", () => {

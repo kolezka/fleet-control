@@ -2,7 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Commands } from "./data/commands.ts";
-import { Deliverer, type Sender } from "./delivery.ts";
+import { Deliverer } from "./delivery.ts";
+import type { Sender } from "./domain/delivery.ts";
 import { serve } from "./server.ts";
 import { Store } from "./data/store.ts";
 

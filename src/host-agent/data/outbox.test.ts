@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OutboxError, ReceiptOutbox, type HostReceipt } from "./outbox";
+import { OutboxError, ReceiptOutbox } from "./outbox";
+import type { HostReceipt } from "../domain/delivery.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });

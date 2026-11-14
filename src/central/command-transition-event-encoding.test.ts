@@ -1,6 +1,6 @@
 import type { SQL, TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { CentralCommands } from "./data/commands.ts";
 
 const scope = { hostId: "host", session: "session" };

@@ -1,6 +1,6 @@
 import type { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../../data/commands.ts";
+import { CommandError } from "../../domain/commands.ts";
 import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
 
 const principal = { role: "operator", name: "operator" } as const;

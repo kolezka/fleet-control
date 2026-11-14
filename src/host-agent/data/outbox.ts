@@ -1,11 +1,5 @@
 import { Database } from "bun:sqlite";
-
-export type HostReceipt = Readonly<{
-  hostId: string;
-  commandId: string;
-  attemptId: string;
-  status: "delivered" | "unknown";
-}>;
+import type { HostReceipt } from "../domain/delivery.ts";
 
 export class OutboxError extends Error {
   constructor(readonly kind: "invalid" | "conflict" | "not_found", message: string) {

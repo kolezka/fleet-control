@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { join } from "node:path";
 import { Commands } from "./data/commands.ts";
-import { classify, Deliverer, fleetSender, type Sender } from "./delivery.ts";
+import { Deliverer, fleetSender } from "./delivery.ts";
+import { classify, type Sender } from "./domain/delivery.ts";
 import { createTestFleet, type TestFleet } from "./fleet/fixture.ts";
 
 const fleetBin = resolveFleetBin();

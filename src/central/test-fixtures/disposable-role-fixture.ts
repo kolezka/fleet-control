@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 import { randomBytes } from "node:crypto";
-import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
+import { rejectAmbientPostgresEnvironment } from "../test-database-url.ts";
 
 export async function cleanupCooperativeRole(
   fixture: Awaited<ReturnType<typeof disposableCooperativeRole>>, schema: string, ambiguous: boolean, report: (message: string) => void = console.error,

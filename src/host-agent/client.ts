@@ -1,4 +1,4 @@
-import { AGENT_PROTOCOL_VERSION, MAX_AGENT_MESSAGE_BYTES, MAX_INVENTORY_SESSIONS, validInventorySessions, type AgentDispatch, type AgentInventory, type AgentReceipt } from "../central/agent-sockets.ts";
+import { AGENT_PROTOCOL_VERSION, MAX_AGENT_MESSAGE_BYTES, MAX_INVENTORY_SESSIONS, validInventorySessions, type AgentDispatch, type AgentInventory, type AgentReceipt } from "../domain/agent-protocol.ts";
 
 export interface HostSocket {
   addEventListener(type: "open" | "message" | "close" | "error", listener: (event: any) => void): void;

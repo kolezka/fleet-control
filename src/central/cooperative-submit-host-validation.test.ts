@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { CentralCommands, type CentralCommandInput } from "./data/commands.ts";
-import { CommandError } from "../data/commands.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { CentralCommandInput } from "./domain/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 
 const input: CentralCommandInput = {
   idempotencyKey: "key",

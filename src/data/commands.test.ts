@@ -3,7 +3,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandError, Commands } from "./commands.ts";
+import { Commands } from "./commands.ts";
+import { CommandError } from "../domain/commands.ts";
 
 const input = { idempotencyKey: "key-0001", target: "supervisor", actor: "macbook", text: "run the tests" };
 const dirs: string[] = [];

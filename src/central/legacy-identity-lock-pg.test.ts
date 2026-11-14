@@ -2,7 +2,7 @@ import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { Principal } from "./auth.ts";
+import type { Principal } from "./domain/identity.ts";
 import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 import { CentralCommands } from "./data/commands.ts";
 import { buildCentralMcpServer } from "./mcp.ts";

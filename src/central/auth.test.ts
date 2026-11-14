@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { AuthConfigError, CentralAuth, authorize, type Credential } from "./auth.ts";
+import { AuthConfigError, CentralAuth } from "./auth.ts";
+import { authorize, type Credential } from "./domain/identity.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const credentials: Credential[] = [

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { RequestError, Requests } from "./requests.ts";
+import { Requests } from "./requests.ts";
+import { RequestError } from "../domain/requests.ts";
 
 function fixture(id = "historical-�") {
   const db = new Database(":memory:");

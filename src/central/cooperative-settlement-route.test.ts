@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import { CommandError } from "../data/commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { createCooperativeSettlementRoute } from "./cooperative-settlement-route.ts";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");

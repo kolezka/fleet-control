@@ -1,15 +1,9 @@
 import type { SQL, TransactionSQL } from "bun";
 import type { CooperativeTransactionRunner } from "./incarnations.ts";
-import { validId } from "./identity-registry.ts";
-import { CommandError, MAX_TEXT, type Command, type CommandStatus } from "../../data/commands.ts";
+import { validId } from "../domain/identity.ts";
+import { CommandError, MAX_TEXT, type Command, type CommandStatus } from "../../domain/commands.ts";
+import { type CentralCommandEvent, type CentralCommand, type CentralCommandInput, type CommandListScope, type CommandListPagination, type CommandPage, type SupervisorCommandScope, MAX_SCOPE_LENGTH, validScopeValue, centralCommandTransitions } from "../domain/commands.ts";
 
-export type CentralCommandEvent = { seq: string; commandId: string; status: CommandStatus; actor: string; detail: string; at: string };
-export type CentralCommand = Command & { hostId: string };
-export type CentralCommandInput = { idempotencyKey: string; hostId: string; target: string; actor: string; text: string };
-export type CommandListScope = { hostId?: string; target?: string };
-export type CommandListPagination = { limit?: number; cursor?: string };
-export type CommandPage = { commands: CentralCommand[]; nextCursor: string | null };
-export type SupervisorCommandScope = { hostId: string; session: string };
 export type SupervisorReadGuard = (tx: TransactionSQL, scope: SupervisorCommandScope) => Promise<boolean>;
 
 function decodeCursor(cursor: string): { createdAt: string; id: string; hostId: string | null; target: string | null; status: string | null } {
@@ -22,21 +16,6 @@ function decodeCursor(cursor: string): { createdAt: string; id: string; hostId: 
     return { createdAt: value[0], id: value[1], hostId: value[2], target: value[3], status: value[4] };
   } catch { throw new CommandError("invalid", "invalid cursor"); }
 }
-
-const MAX_SCOPE_LENGTH = 256;
-// Scope values must also be representable as PostgreSQL text.
-const validScopeValue = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= MAX_SCOPE_LENGTH && !value.includes("\0");
-
-const allowed: Record<CommandStatus, CommandStatus[]> = {
-  queued: ["delivering", "accepted", "rejected"],
-  delivering: ["delivered", "delivery_unknown", "accepted", "rejected"],
-  delivered: ["accepted", "rejected"],
-  delivery_unknown: ["accepted", "rejected"],
-  claimed: [],
-  accepted: ["running", "completed", "failed"],
-  running: ["completed", "failed"],
-  rejected: [], completed: [], failed: [],
-};
 
 // Call initialize before use. The caller owns and closes the SQL pool.
 export class CentralCommands {
@@ -117,7 +96,7 @@ export class CentralCommands {
       if (lock.length !== 1) throw new Error("central command event lock row missing");
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} FOR UPDATE`;
       if (!current) throw new CommandError("not_found", `no command ${id}`);
-      if (!allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
+      if (!centralCommandTransitions[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
       if ([actor, detail].some((value) => typeof value !== "string" || !value.isWellFormed() || value.includes("\0"))) throw new CommandError("invalid", "invalid event encoding");
       const at = this.now().toISOString();
       await tx`UPDATE central_commands SET status = ${to}, updated_at = ${at} WHERE id = ${id}`;
@@ -137,7 +116,7 @@ export class CentralCommands {
       if (lock.length !== 1) throw new Error("central command event lock row missing");
       const [current] = await tx<CentralCommand[]>`SELECT id, idempotency_key AS "idempotencyKey", host_id AS "hostId", target, actor, text, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session} FOR UPDATE`;
       if (!current) throw new Error("access denied");
-      if (!["accepted", "rejected", "running", "completed", "failed"].includes(to) || !allowed[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
+      if (!["accepted", "rejected", "running", "completed", "failed"].includes(to) || !centralCommandTransitions[current.status].includes(to)) throw new CommandError("conflict", `${id} is ${current.status}; cannot become ${to}`);
       if ([actor, detail].some((value) => typeof value !== "string" || !value.isWellFormed() || value.includes("\0"))) throw new CommandError("invalid", "invalid event encoding");
       const at = this.now().toISOString();
       await tx`UPDATE central_commands SET status = ${to}, updated_at = ${at} WHERE id = ${id}`;
@@ -211,7 +190,7 @@ export class CentralCommands {
   }
 
   private async listWithConnection(db: SQL | TransactionSQL, status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
-    if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
+    if (status !== undefined && !Object.hasOwn(centralCommandTransitions, status)) throw new CommandError("invalid", "invalid status");
     const scopeHostId = scope?.hostId;
     const scopeTarget = scope?.target;
     if ((scopeHostId !== undefined && (!validScopeValue(scopeHostId) || !scopeHostId.isWellFormed())) || (scopeTarget !== undefined && (!validScopeValue(scopeTarget) || !scopeTarget.isWellFormed()))) throw new CommandError("invalid", "invalid scope");
@@ -251,7 +230,7 @@ export class CentralCommands {
   }
 
   async listBounded(status?: CommandStatus, scope?: CommandListScope, pagination: CommandListPagination = {}): Promise<CommandPage> {
-    if (status !== undefined && !Object.hasOwn(allowed, status)) throw new CommandError("invalid", "invalid status");
+    if (status !== undefined && !Object.hasOwn(centralCommandTransitions, status)) throw new CommandError("invalid", "invalid status");
     const scopeHostId = scope?.hostId;
     const scopeTarget = scope?.target;
     if ((scopeHostId !== undefined && (!validScopeValue(scopeHostId) || !scopeHostId.isWellFormed())) || (scopeTarget !== undefined && (!validScopeValue(scopeTarget) || !scopeTarget.isWellFormed()))) throw new CommandError("invalid", "invalid scope");

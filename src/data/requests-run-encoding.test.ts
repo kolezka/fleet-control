@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { RequestError, Requests } from "./requests.ts";
+import { Requests } from "./requests.ts";
+import { RequestError } from "../domain/requests.ts";
 
 for (const [name, alias] of [["high surrogate", "run-\ud800"], ["low surrogate", "run-\udc00"]] as const) {
   test(`malformed ${name} cannot register, look up or mutate a replacement-character run`, () => {
