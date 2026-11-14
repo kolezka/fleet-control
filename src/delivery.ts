@@ -3,7 +3,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Command, Commands } from "./commands.ts";
+import type { Command, Commands } from "./data/commands.ts";
 
 export type SendResult = { exitCode: number; stdout: string; stderr: string };
 export type Sender = (session: string, file: string) => Promise<SendResult>;

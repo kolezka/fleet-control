@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Commands } from "./commands.ts";
+import { Commands } from "./data/commands.ts";
 import { Deliverer } from "./delivery.ts";
 
 function gate() {

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands } from "./commands.ts";
-import { CommandError } from "../commands.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CommandError } from "../data/commands.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 const scope = { hostId: "host-a", session: "session-a" };
 const command = { id: "command-a", hostId: scope.hostId, target: scope.session, status: "queued", idempotencyKey: "key", actor: "operator", text: "text", createdAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z" };

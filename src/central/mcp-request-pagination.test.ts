@@ -3,7 +3,7 @@ import type { SQL } from "bun";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
-import { CentralRequests } from "./requests.ts";
+import { CentralRequests } from "./data/requests.ts";
 
 const rows = [
   { id: "a", runId: "run-a", status: "open", createdAt: "2026-01-01T00:00:00.000Z" },

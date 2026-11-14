@@ -1,9 +1,9 @@
 import { SQL, type TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralCommands } from "./commands.ts";
+import { CentralCommands } from "./data/commands.ts";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
-import { provisionCooperative } from "./cooperative-provision.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { provisionCooperative } from "./data/cooperative-provision.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 const url = centralTestDatabaseUrl(process.env);
 const pgTest = url ? test : test.skip;

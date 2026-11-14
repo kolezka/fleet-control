@@ -2,7 +2,7 @@ import { resolveFleetBin } from "../fleet/path.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { Commands } from "../commands.ts";
+import { Commands } from "../data/commands.ts";
 import { Deliverer, fleetSender } from "../delivery.ts";
 import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { openViewer, supportsReadOnlyAttach } from "./viewer.ts";

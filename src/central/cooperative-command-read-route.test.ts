@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { CommandError } from "../commands.ts";
+import { CommandError } from "../data/commands.ts";
 import { CentralAuth } from "./auth.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const auth = new CentralAuth([

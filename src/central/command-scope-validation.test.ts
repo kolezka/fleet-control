@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../commands.ts";
-import { CentralCommands } from "./commands.ts";
+import { CommandError } from "../data/commands.ts";
+import { CentralCommands } from "./data/commands.ts";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
 const url = centralTestDatabaseUrl(process.env);

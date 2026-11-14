@@ -1,13 +1,13 @@
 import { SQL, type TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { provisionCooperative } from "./cooperative-provision.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations, type CooperativeTransactionRunner } from "./incarnations.ts";
-import { CentralCommands } from "./commands.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import { CooperativeInspection } from "./cooperative-inspection.ts";
-import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import { provisionCooperative } from "./data/cooperative-provision.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations, type CooperativeTransactionRunner } from "./data/incarnations.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import { CooperativeInspection } from "./data/cooperative-inspection.ts";
+import { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;
 const pgTest = url ? test : test.skip;

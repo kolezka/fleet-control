@@ -4,12 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadGatewayConfig, startGateway } from "./client-gateway.ts";
-import { CommandError } from "./commands.ts";
+import { CommandError } from "./data/commands.ts";
 import { CentralAuth } from "./central/auth.ts";
-import type { CentralCommand } from "./central/commands.ts";
-import type { CooperativeClaims } from "./central/cooperative-claims.ts";
-import type { CooperativeLifecycle, CooperativeStatus } from "./central/cooperative-lifecycle.ts";
-import type { CooperativeInspectionResult } from "./central/cooperative-inspection.ts";
+import type { CentralCommand } from "./central/data/commands.ts";
+import type { CooperativeClaims } from "./central/data/cooperative-claims.ts";
+import type { CooperativeLifecycle, CooperativeStatus } from "./central/data/cooperative-lifecycle.ts";
+import type { CooperativeInspectionResult } from "./central/data/cooperative-inspection.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./central/cooperative-server.ts";
 
 // Synthetic stores exercise real HTTP/auth/gateway wiring, not PostgreSQL or real agents.

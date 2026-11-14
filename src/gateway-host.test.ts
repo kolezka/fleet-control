@@ -1,11 +1,11 @@
 import { afterAll, expect, test } from "bun:test";
 import { Auth, parseTokens, tokenLine } from "./auth.ts";
 import { Credentials, startGateway } from "./client-gateway.ts";
-import { Commands } from "./commands.ts";
+import { Commands } from "./data/commands.ts";
 import { Deliverer } from "./delivery.ts";
-import { Requests } from "./requests.ts";
+import { Requests } from "./data/requests.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 // Exercise the actual host authentication and persistence contract, not a proxy-shaped stub.
 const stores: Store[] = [];

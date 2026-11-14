@@ -1,7 +1,7 @@
 import type { SQL, TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../commands.ts";
-import { CentralCommands } from "./commands.ts";
+import { CommandError } from "../data/commands.ts";
+import { CentralCommands } from "./data/commands.ts";
 
 const at = "2026-01-01T00:00:00.000Z";
 const command = { id: "command-a", idempotencyKey: "key", hostId: "host", target: "session", actor: "owner", text: "work", status: "queued", createdAt: at, updatedAt: at };

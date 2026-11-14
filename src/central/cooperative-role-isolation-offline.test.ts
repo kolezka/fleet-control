@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 const supervisor = { name: "supervisor", role: "supervisor" as const, principalId: "supervisor-id", hostId: "host", session: "session" };
 const incarnation = { incarnationId: "12345678-1234-4234-8234-123456789012", token: "a".repeat(43) };

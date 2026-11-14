@@ -4,13 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine, parseTokens } from "../src/auth.ts";
-import { Commands } from "../src/commands.ts";
+import { Commands } from "../src/data/commands.ts";
 import { Deliverer, fleetSender } from "../src/delivery.ts";
 import { FleetCli } from "../src/fleet/cli.ts";
 import { createTestFleet, type TestFleet } from "../src/fleet/fixture.ts";
-import { Requests } from "../src/requests.ts";
+import { Requests } from "../src/data/requests.ts";
 import { serve } from "../src/server.ts";
-import { Store } from "../src/store.ts";
+import { Store } from "../src/data/store.ts";
 
 const fleetBin = resolveFleetBin();
 const dir = await mkdtemp(join(tmpdir(), "fleet-control-two-hosts-"));

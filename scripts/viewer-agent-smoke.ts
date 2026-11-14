@@ -11,7 +11,7 @@ import { randomInt } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { Commands } from "../src/commands.ts";
+import { Commands } from "../src/data/commands.ts";
 import { Deliverer, fleetSender } from "../src/delivery.ts";
 import { resolveFleetBin } from "../src/fleet/path.ts";
 import { openViewer } from "../src/terminal/viewer.ts";

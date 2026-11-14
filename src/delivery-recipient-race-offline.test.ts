@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { CommandError, Commands } from "./commands.ts";
+import { CommandError, Commands } from "./data/commands.ts";
 import { Deliverer, type SendResult } from "./delivery.ts";
 
 test("recipient responses conflict until delivery finishes", async () => {

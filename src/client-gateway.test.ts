@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Auth, parseTokens, tokenLine } from "./auth.ts";
-import { Commands } from "./commands.ts";
+import { Commands } from "./data/commands.ts";
 import { Deliverer, type Sender } from "./delivery.ts";
-import { Requests } from "./requests.ts";
+import { Requests } from "./data/requests.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 import { Credentials, GatewayConfigError, loadGatewayConfig, parseGatewayConfig, startGateway, type GatewayOptions } from "./client-gateway.ts";
 
 // --- fake independent host services ------------------------------------------------------------

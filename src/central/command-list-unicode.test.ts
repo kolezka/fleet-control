@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands } from "./commands.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 for (const method of ["list", "listBounded"] as const) {
   for (const field of ["hostId", "target"] as const) {

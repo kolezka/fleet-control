@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands, type SupervisorCommandScope } from "./commands.ts";
+import { CentralCommands, type SupervisorCommandScope } from "./data/commands.ts";
 
 function fixture() {
   const queries: unknown[][] = [];

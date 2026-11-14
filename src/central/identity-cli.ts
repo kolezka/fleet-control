@@ -1,5 +1,5 @@
 import { SQL } from "bun";
-import { SupervisorIdentityRegistry, type SupervisorIdentity } from "./identity-registry";
+import { SupervisorIdentityRegistry, type SupervisorIdentity } from "./data/identity-registry";
 
 type Registry = Pick<SupervisorIdentityRegistry, "initialize" | "enroll" | "retire">;
 type Dependencies = {

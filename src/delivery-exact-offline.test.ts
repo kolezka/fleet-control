@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { classify, Deliverer, fleetSender } from "./delivery.ts";
-import { Commands } from "./commands.ts";
-import { DeliveryJournal } from "./host-agent/journal.ts";
+import { Commands } from "./data/commands.ts";
+import { DeliveryJournal } from "./host-agent/data/journal.ts";
 import { DeliveryExecutor } from "./host-agent/executor.ts";
 
 test("exact target response is required", () => {

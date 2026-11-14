@@ -4,15 +4,15 @@ import { Auth, COOKIE, isLoopback, type Principal } from "./auth.ts";
 import login from "../web/login.html";
 import { hostname as osHostname } from "node:os";
 import { FleetError, type FleetReader } from "./fleet/cli.ts";
-import { modelState, type ModelState } from "./model.ts";
+import { modelState, type ModelState } from "./domain/model.ts";
 import type { Observation } from "./observe/claude.ts";
-import type { Store } from "./store.ts";
+import type { Store } from "./data/store.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
-import { CommandError, type Commands } from "./commands.ts";
+import { CommandError, type Commands } from "./data/commands.ts";
 import type { Deliverer } from "./delivery.ts";
 import { handleMcp } from "./mcp.ts";
-import { RequestError, type Requests } from "./requests.ts";
+import { RequestError, type Requests } from "./data/requests.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,

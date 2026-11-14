@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { RequestError, Requests } from "./requests";
+import { RequestError, Requests } from "./data/requests";
 
 for (const status of ["resolved", "acknowledged"] as const) {
   for (const malformed of ["actor", "note", "both"] as const) {

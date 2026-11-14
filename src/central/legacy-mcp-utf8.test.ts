@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralCommandInput } from "./commands.ts";
+import type { CentralCommandInput } from "./data/commands.ts";
 import type { CentralMcpCommands } from "./mcp.ts";
 import { createCentralApp } from "./server.ts";
 

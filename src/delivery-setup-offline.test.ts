@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Command, Commands, CommandStatus } from "./commands.ts";
+import type { Command, Commands, CommandStatus } from "./data/commands.ts";
 import { Deliverer } from "./delivery.ts";
 
 for (const failure of ["mkdtemp", "write"] as const) {

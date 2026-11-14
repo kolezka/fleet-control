@@ -1,14 +1,14 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralCommands } from "./commands.ts";
-import { CentralAttempts } from "./attempts.ts";
-import { CentralRequests } from "./requests.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
-import { CooperativeSettlement } from "./cooperative-settlement.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CentralAttempts } from "./data/attempts.ts";
+import { CentralRequests } from "./data/requests.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
+import { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
 // Each test works in its own schema of the disposable database and drops it afterwards.

@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 const operator = { name: "operator", role: "operator" as const };
 const host = { name: "host-user", role: "host" as const, hostId: "host" };

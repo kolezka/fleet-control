@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { messageFor } from "./delivery.ts";
-import type { Command } from "./commands.ts";
+import type { Command } from "./data/commands.ts";
 
 test("control characters expand the rendered actor header", () => {
   const command: Command = { id: "cmd-test", idempotencyKey: "key", target: "session", actor: "x" + "a".repeat(1000), text: "text", status: "queued", createdAt: "", updatedAt: "" };

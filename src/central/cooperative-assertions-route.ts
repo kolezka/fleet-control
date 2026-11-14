@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { CentralAuth } from "./auth.ts";
-import type { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
+import type { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
 
 // Mount after authentication and origin middleware.
 export function createCooperativeAssertionsRoute(deps: { auth: CentralAuth; reconciliation: Pick<CooperativeReconciliation, "listBounded"> }) {

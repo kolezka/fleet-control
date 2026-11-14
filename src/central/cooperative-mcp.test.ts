@@ -2,12 +2,12 @@ import { SQL } from "bun";
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CentralCommands } from "./commands.ts";
-import { CentralAttempts } from "./attempts.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CentralAttempts } from "./data/attempts.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";
 
 const url = process.env.CENTRAL_TEST_DATABASE_URL;

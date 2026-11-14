@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CommandError, MAX_TEXT, type CommandStatus } from "../commands.ts";
+import { CommandError, MAX_TEXT, type CommandStatus } from "../data/commands.ts";
 import { authorize, supervisorIdentity, type CentralAuth, type Principal, type SupervisorIdentityLookup } from "./auth.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
-import type { CentralRequests } from "./requests.ts";
-import type { SupervisorIdentityRegistry } from "./identity-registry.ts";
+import type { CentralRequests } from "./data/requests.ts";
+import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 
 const MAX_BODY = 32 * 1024;
 const statuses: CommandStatus[] = ["queued", "delivering", "delivered", "delivery_unknown", "claimed", "accepted", "rejected", "running", "completed", "failed"];

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Commands } from "./commands.ts";
+import { Commands } from "./data/commands.ts";
 import { Deliverer, type Sender } from "./delivery.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 const sent: string[] = [];
 const fakeSend: Sender = async (session, file) => {

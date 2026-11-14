@@ -3,9 +3,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { CommandError, MAX_TEXT, type Commands } from "./commands.ts";
+import { CommandError, MAX_TEXT, type Commands } from "./data/commands.ts";
 import type { Deliverer } from "./delivery.ts";
-import { RequestError, type Requests } from "./requests.ts";
+import { RequestError, type Requests } from "./data/requests.ts";
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 const failure = (e: unknown) => ({

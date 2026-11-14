@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import type { CentralMcpCommands } from "./mcp.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 // @ts-expect-error Legacy commands alone cannot satisfy the cooperative contract.
 const rejectLegacy: CooperativeCommands = {} as CentralMcpCommands;

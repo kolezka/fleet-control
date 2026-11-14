@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { SupervisorIdentity } from "./identity-registry.ts";
+import type { SupervisorIdentity } from "./data/identity-registry.ts";
 
 export type SupervisorIdentityLookup = { matches(identity: SupervisorIdentity): Promise<boolean> };
 

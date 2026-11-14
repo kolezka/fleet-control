@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands } from "./commands.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 const replacement = "id-�";
 const malformedIds = [0xd800, 0xdc00].map((unit) => `id-${String.fromCharCode(unit)}`);

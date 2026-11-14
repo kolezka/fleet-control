@@ -1,17 +1,17 @@
 import { Hono } from "hono";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CommandError, MAX_TEXT } from "../commands.ts";
+import { CommandError, MAX_TEXT } from "../data/commands.ts";
 import { supervisorIdentity, type CentralAuth, type SupervisorIdentityLookup } from "./auth.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
-import type { CentralCommands } from "./commands.ts";
+import type { CentralCommands } from "./data/commands.ts";
 import { buildCooperativeMcpServer } from "./cooperative-mcp.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import type { CooperativeInspection } from "./cooperative-inspection.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import type { CooperativeInspection } from "./data/cooperative-inspection.ts";
 import { createCooperativeInspectionRoute } from "./cooperative-inspection-route.ts";
 import { createCooperativeAssertionsRoute } from "./cooperative-assertions-route.ts";
-import type { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
-import type { CooperativeSettlement } from "./cooperative-settlement.ts";
+import type { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
+import type { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 import { createCooperativeSettlementRoute } from "./cooperative-settlement-route.ts";
 
 const MAX_BODY = 32 * 1024;

@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activateService, initService, provisionService, serviceConfig, SERVICE_SCHEMA, STATE_LAYOUT, startService } from "./cooperative-service.ts";
-import { SERVICE_RUNTIME_ROLE } from "./cooperative-provision.ts";
+import { SERVICE_RUNTIME_ROLE } from "./data/cooperative-provision.ts";
 import { centralTestDatabaseUrl } from "./test-database-url.ts";
 import { parseCredentials, serveCooperative } from "./cooperative-main.ts";
 

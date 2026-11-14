@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { parsePeers } from "./config.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 test("peers parse to origins and reject junk", () => {
   expect(parsePeers("me-desktop=http://100.64.0.5:4871/x, mini=https://mini.tail:4871")).toEqual([

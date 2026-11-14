@@ -1,10 +1,10 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralCommands } from "./commands.ts";
-import { CentralAttempts } from "./attempts.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CentralAttempts } from "./data/attempts.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
 import { centralTestDatabaseUrl, withValidatedTestDatabaseUrl } from "./test-database-url.ts";
 
 // PostgreSQL check that a cooperative claim and a delivery attempt for the same command

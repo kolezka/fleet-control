@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands } from "./commands.ts";
+import { CentralCommands } from "./data/commands.ts";
 
 const scope = { hostId: "host-a", session: "session-a" };
 

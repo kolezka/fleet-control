@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Auth, AuthConfigError, parseTokens, tokenLine } from "./auth.ts";
-import { Commands } from "./commands.ts";
+import { Commands } from "./data/commands.ts";
 import { Deliverer, type Sender } from "./delivery.ts";
-import { Requests } from "./requests.ts";
+import { Requests } from "./data/requests.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 describe("tokens file", () => {
   test("stores only hashes and maps a token to its principal", () => {

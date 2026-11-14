@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CommandError } from "../commands.ts";
-import { CentralCommands, type SupervisorCommandScope } from "./commands.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { CommandError } from "../data/commands.ts";
+import { CentralCommands, type SupervisorCommandScope } from "./data/commands.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 function fixture() {
   const queries: { sql: string; values: unknown[] }[] = [];

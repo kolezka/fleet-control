@@ -1,10 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandError } from "../commands.ts";
+import { CommandError } from "../data/commands.ts";
 import type { Principal } from "./auth.ts";
-import type { IncarnationCredential } from "./incarnations.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { IncarnationCredential } from "./data/incarnations.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 // The caller must authenticate the principal and obtain the credential out of band.
 // This server must not be mounted alongside legacy supervisor mutation routes.

@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { RequestError } from "../requests.ts";
+import { RequestError } from "../data/requests.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
-import type { CentralRequests } from "./requests.ts";
+import type { CentralRequests } from "./data/requests.ts";
 
 const principal = { role: "supervisor" as const, name: "supervisor", principalId: "identity", hostId: "host", session: "session" };
 const identity = { name: "supervisor", principalId: "identity", hostId: "host", session: "session" };

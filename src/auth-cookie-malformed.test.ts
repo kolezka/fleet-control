@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { Auth, COOKIE, parseTokens, tokenLine } from "./auth.ts";
 import { serve } from "./server.ts";
-import type { Store } from "./store.ts";
+import type { Store } from "./data/store.ts";
 
 const token = "valid/token";
 const auth = new Auth(parseTokens(tokenLine("operator", token)));
