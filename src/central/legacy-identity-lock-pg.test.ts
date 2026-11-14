@@ -183,6 +183,8 @@ pgTest("retire holding the identity lock makes a concurrent legacy supervisor wr
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 type ToolCase = {
   tool: string;
+  // The event lock this tool takes after the guard. The two command reads take none.
+  eventLock?: "central_request_event_lock" | "central_command_event_lock";
   // Committed rows created with the real stores before the retire starts. Returns the tool arguments and any strings
   // that must not appear in a fail-closed response.
   setup(f: Fixture): Promise<{ args: Record<string, unknown>; secrets: string[] }>;
@@ -201,29 +203,29 @@ const createOwnRequest = async (f: Fixture, runId: string) =>
 
 // Every supervisor tool in src/central/mcp.ts that reaches the identity guard.
 const toolCases: ToolCase[] = [
-  { tool: "run_register", setup: async () => ({ args: { runId: `run-${crypto.randomUUID()}`, phase: "plan" }, secrets: [] }) },
-  { tool: "phase_update", setup: async (f) => ({ args: { runId: await registerOwnRun(f), expectedRevision: 1, phase: "build", phaseStatus: "moving on", newRevision: true }, secrets: [] }) },
-  { tool: "request_create", setup: async (f) => ({ args: { runId: await registerOwnRun(f), expectedRevision: 1, kind: "approval", question: "may I?" }, secrets: [] }) },
-  { tool: "request_acknowledge", setup: async (f) => {
+  { tool: "run_register", eventLock: "central_request_event_lock", setup: async () => ({ args: { runId: `run-${crypto.randomUUID()}`, phase: "plan" }, secrets: [] }) },
+  { tool: "phase_update", eventLock: "central_request_event_lock", setup: async (f) => ({ args: { runId: await registerOwnRun(f), expectedRevision: 1, phase: "build", phaseStatus: "moving on", newRevision: true }, secrets: [] }) },
+  { tool: "request_create", eventLock: "central_request_event_lock", setup: async (f) => ({ args: { runId: await registerOwnRun(f), expectedRevision: 1, kind: "approval", question: "may I?" }, secrets: [] }) },
+  { tool: "request_acknowledge", eventLock: "central_request_event_lock", setup: async (f) => {
     const requestId = await createOwnRequest(f, await registerOwnRun(f));
     await f.requests.resolve({ requestId, response: "approve", actor: "operator", expectedRevision: 1 });
     return { args: { requestId }, secrets: [requestId] };
   } },
-  { tool: "request_withdraw", setup: async (f) => {
+  { tool: "request_withdraw", eventLock: "central_request_event_lock", setup: async (f) => {
     const requestId = await createOwnRequest(f, await registerOwnRun(f));
     return { args: { requestId, reason: "no longer needed" }, secrets: [requestId] };
   } },
-  { tool: "request_gate", setup: async (f) => {
+  { tool: "request_gate", eventLock: "central_request_event_lock", setup: async (f) => {
     const runId = await registerOwnRun(f);
     const requestId = await createOwnRequest(f, runId);
     await f.requests.resolve({ requestId, response: "approve", actor: "operator", expectedRevision: 1 });
     return { args: { runId, phase: "plan", revision: 1 }, secrets: [requestId, "approved"] };
   } },
-  { tool: "command_respond", setup: async (f) => {
+  { tool: "command_respond", eventLock: "central_command_event_lock", setup: async (f) => {
     const command = await submitOwnCommand(f, "respond");
     return { args: { id: command.id, decision: "accepted", reason: "ok" }, secrets: [command.id, command.text] };
   } },
-  { tool: "command_report", setup: async (f) => {
+  { tool: "command_report", eventLock: "central_command_event_lock", setup: async (f) => {
     const command = await submitOwnCommand(f, "report");
     await f.commands.transition(command.id, "accepted", "setup", "accepted for test");
     return { args: { id: command.id, status: "running", evidence: "started" }, secrets: [command.id, command.text] };
@@ -308,6 +310,52 @@ for (const toolCase of toolCases) {
     } finally {
       release();
       await Promise.allSettled(pending);
+      await cleanup();
+    }
+  }, 30_000);
+}
+
+// Lock order for every tool that writes events: identity first, then the event lock.
+for (const toolCase of toolCases.filter((c) => c.eventLock)) {
+  pgTest(`${toolCase.tool} takes the identity lock before the event lock`, async () => {
+    const f = await fixture();
+    const { other, observer, principal, identity, client, cleanup } = f;
+    let release = () => {};
+    const pending: Promise<unknown>[] = [];
+    const retirer = await other.reserve();
+    try {
+      const { args } = await toolCase.setup(f);
+      let held!: (pid: number) => void;
+      const holderReady = new Promise<number>((resolve) => { held = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const holder = other.begin(async (tx) => {
+        await tx`SELECT id FROM ${tx(toolCase.eventLock!)} WHERE id = 1 FOR UPDATE`;
+        held(await pidOf(tx)); await gate;
+      });
+      pending.push(holder);
+      const holderPid = await withTimeout(holderReady, "event lock holder");
+      const call = client.callTool({ name: toolCase.tool, arguments: args });
+      pending.push(call);
+      // The tool is stopped at the event lock.
+      const toolPid = await waitForBlocked(observer, holderPid);
+      expect(toolPid).toBeDefined();
+
+      const retirerPid = await pidOf(retirer);
+      const retire = new SupervisorIdentityRegistry(retirer).retire(identity);
+      pending.push(retire);
+      // A retire now waits on the tool, so the tool already owns the identity row lock.
+      expect(await waitForBlocked(observer, toolPid!, retirerPid)).toBe(retirerPid);
+      expect(await retired(observer, principal.principalId)).toBe(false);
+
+      release();
+      await withTimeout(holder, "holder commit");
+      expect((await withTimeout(call, toolCase.tool)).isError).not.toBe(true);
+      await withTimeout(retire, "retire");
+      expect(await retired(observer, principal.principalId)).toBe(true);
+    } finally {
+      release();
+      await Promise.allSettled(pending);
+      retirer.release();
       await cleanup();
     }
   }, 30_000);
