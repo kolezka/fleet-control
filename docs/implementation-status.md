@@ -20,6 +20,10 @@ Earlier recorded full local run (2026-11-13, PR #58), against the disposable loo
 
 These results do not establish production readiness. The sections below record earlier service work and verification, not central-backend acceptance.
 
+## Prepared-checkout installer CLI
+
+The local `fleet-control.ts` CLI adds pure install plans and explicit apply for fresh cooperative central, adapter and client installations, including SSH delegation to a prepared remote checkout. It does not bootstrap dependencies, update an existing installation, replace a supervisor, restore state or deploy this PR. Existing artifacts are refused. Verification is limited to hermetic local fixtures and stubbed external commands, not a real service installation. See [installer scope and prerequisites](install-cli.md).
+
 ## Legacy host authority limits
 
 The legacy host service authenticates principal names but does not assign operator or supervisor roles. Its MCP request tools and same-origin HTTP answer endpoint do not enforce that a human operator, rather than the originating supervisor, resolves an approval. The host gate reports matching stored responses; it is not proof of human authority. Command response and report tools also lack a recipient-identity check. Treat these as unresolved authorization gaps, not as guarantees of the central cooperative prototype. Do not use these legacy paths as a security boundary for autonomous execution.

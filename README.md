@@ -10,7 +10,7 @@ As of 2026-11-13, [PR #58](https://github.com/kolezka/fleet-control/pull/58) and
 - Central is reachable only inside the private tailnet at [https://local-arch.tail4a51cb.ts.net:4881](https://local-arch.tail4a51cb.ts.net:4881). Tailscale Serve terminates HTTPS and forwards to loopback; this is not a public endpoint or a web UI.
 - Persistent cooperative adapters run on `.15` (Compose) and `.4` (launchd), each listening on `127.0.0.1:4882` with its own supervisor identity and incarnation. Supervisors claim work and report through MCP; there is no tmux paste fallback or idle-agent wakeup.
 - Synthetic submit, claim, accepted/running/completed reports and operator inspection passed through both adapters, then passed again after central and both adapters restarted. Incarnations stayed unchanged. No real agents or production fleet sessions were used for those checks.
-- The legacy `.4` host service and Terminal Deck UI remain separate and unchanged. The UI is not wired to the cooperative backend.
+- The deployed legacy `.4` host service and UI remain unchanged. An opt-in local gateway now connects the Terminal Deck command panel to cooperative central; that integration has not been deployed. See [cooperative client configuration](docs/multi-host.md#optional-cooperative-central-commands).
 - A lead-verified real DSH run on `.15` completed through the persistent desktop adapter and tailnet central in about 13 seconds: accepted/running/completed, exact fixture answer `2: host-b, host-d`, unchanged file and no token leak. This was read-only scratch work, not a UI, idle-wakeup or production-session test; see [the run evidence](docs/central-server-status.md#real-dsh-on-15-2026-11-13).
 
 See [cooperative deployment](deploy/cooperative/README.md), [persistent adapter setup](deploy/cooperative/README.md#persistent-adapters-and-tailnet-access), [central backend status](docs/central-server-status.md) and [session handoff](docs/HANDOFF.md). The host-service instructions below describe the separate SQLite-backed UI path, not the cooperative deployment.
@@ -23,7 +23,7 @@ There are two repositories. This one calls the other.
 | --- | --- | --- |
 | What it is | A Claude Code plugin with the `fleet` command and a watchdog | A service with a web page, an API and MCP |
 | What it does | Starts agents in tmux, pastes messages into them, reads their screens, answers dialogs, nudges stuck agents | Shows the agents' terminals (read-only), the model each one uses, supervisor requests, approvals and commands, and keeps all of that in a database |
-| How it talks to tmux | Directly | Only through the `fleet` command. It never runs tmux or SSH itself |
+| How it talks to tmux | Directly | Runtime terminal access uses the `fleet` command. The separate installation CLI can invoke a prepared remote installer through SSH |
 | State | Files in the fleet directory | PostgreSQL for cooperative control; SQLite for the separate host service |
 
 In short: agent-fleet runs the agents; Fleet Control is the control panel on top of it.
@@ -55,7 +55,9 @@ In short: agent-fleet runs the agents; Fleet Control is the control panel on top
 
 ## Install
 
-To install it on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
+For fresh cooperative central, adapter or client installations from a prepared checkout, use the [installation CLI](docs/install-cli.md). It prints a plan before any explicit apply and can invoke the same CLI through SSH. It does not upgrade existing installations or install prerequisites.
+
+To install the separate legacy host service on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
 
 ```bash
 git clone --recurse-submodules git@github.com:kolezka/fleet-control.git

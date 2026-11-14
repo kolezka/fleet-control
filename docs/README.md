@@ -10,7 +10,8 @@ For a new coding session, use the [metaprompt](NEXT_SESSION_PROMPT.md), then rea
 
 1. [Architecture](architecture.md): roles, host ownership and existing plugin integration.
 2. [Installation split](installation.md): what belongs on the MacBook and workstation.
-- [install-guide.md](install-guide.md): step-by-step install on a host (launchd, TLS, tokens, clients).
+- [install-guide.md](install-guide.md): step-by-step legacy host-service install (launchd, TLS, tokens, clients).
+- [Installation CLI](install-cli.md): fresh central, adapter and client setup from prepared local or SSH checkouts.
 3. [Control protocol](control-protocol.md): commands, requests, decisions, events and terminal access.
 4. [Interface design](ui-design.md): selected Terminal Deck layout and Apple HIG sources.
 5. [Session model visibility](model-observability.md): observed versus configured models and freshness.
