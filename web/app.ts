@@ -401,7 +401,10 @@ function renderComposer(h: HostState | undefined) {
 }
 
 function renderChrome(h: HostState | undefined) {
-  $("hostTitle").textContent = h ? h.info.name : "Fleet Control";
+  const title = $("hostTitle");
+  title.textContent = h ? h.info.name : "Fleet Control";
+  // The header clips long names, so the full name stays reachable as a tooltip.
+  title.title = title.textContent;
   const v = h ? describeSessions(h) : null;
   $("hostSubtitle").textContent = !h || !v ? (hostListError || "Loading hosts")
     : v.kind === "loading" ? "Reading sessions"

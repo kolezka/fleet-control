@@ -1,6 +1,6 @@
 # Session model visibility
 
-Status: a Claude Code observer exists in the feat-fleet-adapter worktree (see "Implemented source" below). It has been checked against real Claude Code 2.1.319 processes on the MacBook, not against an agent started by agent-fleet. Other harnesses have no observer.
+Status: a Claude Code observer exists on `main` (see "Implemented source" below). It has been checked against real Claude Code 2.1.319 processes on the MacBook, not against an agent started by agent-fleet. Other harnesses have no observer.
 
 ## What the user should see
 

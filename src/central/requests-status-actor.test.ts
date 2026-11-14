@@ -72,6 +72,32 @@ for (const method of ["acknowledge", "withdraw"] as const) {
   });
 }
 
+for (const [name, reason] of [["NUL", "bad\0reason"], ["high surrogate", "bad\ud800reason"], ["low surrogate", "bad\udc00reason"]] as const) {
+  test(`withdraw rejects reason with ${name} before writes`, async () => {
+    const f = fixture("open");
+    const error = await errorOf(f.store.withdraw({ requestId: "request", actor: "owner", reason }));
+    noWrites(f.calls);
+    expect(error).toBeInstanceOf(RequestError);
+    expect((error as RequestError).kind).toBe("invalid");
+  });
+}
+
+test("withdraw owner and status checks precede reason encoding validation", async () => {
+  const other = fixture("open");
+  expect((await errorOf(other.store.withdraw({ requestId: "request", actor: "intruder", reason: "bad\0reason" })) as RequestError).kind).toBe("forbidden");
+  const stale = fixture("resolved");
+  expect((await errorOf(stale.store.withdraw({ requestId: "request", actor: "owner", reason: "bad\ud800reason" })) as RequestError).kind).toBe("conflict");
+  noWrites(other.calls);
+  noWrites(stale.calls);
+});
+
+test("withdraw guard precedes reason encoding validation", async () => {
+  const f = fixture("open");
+  const denied = new Error("guard denied");
+  expect(await errorOf(f.store.withdraw({ requestId: "request", actor: "owner", reason: "bad\0reason" }, async () => { throw denied; }))).toBe(denied);
+  expect(f.calls).toEqual([]);
+});
+
 test("acknowledged replay returns before actor encoding validation for the exact owner", async () => {
   for (const actor of ["owner", "bad\0actor", "bad\ud800actor", "bad\udc00actor"]) {
     const f = fixture("acknowledged", actor);

@@ -41,3 +41,10 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .hostbutton[aria-pressed="true"] .hostidentity strong { color: var(--ink); }
 .hostbutton[aria-pressed="false"] .hostidentity strong { font-weight: 500; }
 .instructionform textarea:disabled { opacity: .55; }
+
+/* The shell is a one-column grid. Bound that column so long header text clips instead of widening the page. */
+.shell{grid-template-columns:minmax(0,1fr)}
+.hostcontext strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Same for the supervisor panel: an unbroken host name wraps instead of pushing Send past the edge. */
+.coordination{grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}
+.coordinationhead h2,.composerfooter button{flex-shrink:0}
