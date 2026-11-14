@@ -4,6 +4,7 @@ import { CommandError, type CommandStatus } from "../domain/commands.ts";
 import { type CentralAuth } from "./auth.ts";
 import { authorize, supervisorIdentity, type Principal, type SupervisorIdentityLookup } from "./domain/identity.ts";
 import { centralCommandStatuses, parseCommandSubmission } from "./domain/commands.ts";
+import { readBoundedBody, readBoundedJson } from "./http-body.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
 import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralRequests } from "./data/requests.ts";
@@ -11,28 +12,6 @@ import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 
 const MAX_BODY = 32 * 1024;
 type Env = { Variables: { principal: Principal } };
-
-async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
-  const length = request.headers.get("content-length");
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_BODY)) throw new RangeError("body too large");
-  if (!request.body) return new Uint8Array();
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_BODY) { void reader.cancel().catch(() => {}); throw new RangeError("body too large"); }
-      chunks.push(value);
-    }
-  } finally { reader.releaseLock(); }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
-  return body;
-}
 
 export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCommandStore; identities: SupervisorIdentityLookup & Partial<Pick<SupervisorIdentityRegistry, "lockActive">>; requests?: CentralRequests; allowedOrigins?: readonly string[]; listHosts?: () => { hostId: string; sessions: string[] | null }[] }) {
   const app = new Hono<Env>();
@@ -61,7 +40,7 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCom
   app.post("/api/commands", async (c) => {
     if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "expected JSON" }, 415);
     let input: unknown;
-    try { input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await boundedBody(c.req.raw))); }
+    try { input = await readBoundedJson(c.req.raw, MAX_BODY); }
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
     const submission = parseCommandSubmission(input);
     if (!submission) return c.json({ error: "invalid command" }, 400);
@@ -85,7 +64,7 @@ export function createCentralApp(deps: { auth: CentralAuth; commands: CentralCom
     let request = c.req.raw;
     if (request.method === "POST") {
       let body: Uint8Array<ArrayBuffer>;
-      try { body = await boundedBody(request); } catch { return c.json({ error: "body too large" }, 413); }
+      try { body = await readBoundedBody(request, MAX_BODY); } catch { return c.json({ error: "body too large" }, 413); }
       try { new TextDecoder("utf-8", { fatal: true }).decode(body); }
       catch { return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400); }
       request = new Request(request.url, { method: request.method, headers: request.headers, body });

@@ -4,6 +4,7 @@ import { CommandError } from "../domain/commands.ts";
 import { type CentralAuth } from "./auth.ts";
 import { supervisorIdentity, type SupervisorIdentityLookup } from "./domain/identity.ts";
 import { parseCommandSubmission } from "./domain/commands.ts";
+import { readBoundedBody, readBoundedJson } from "./http-body.ts";
 import { buildCentralMcpServer } from "./mcp.ts";
 import type { CentralCommandStore } from "./application/commands.ts";
 import type { CentralCommands } from "./data/commands.ts";
@@ -21,28 +22,6 @@ const MAX_BODY = 32 * 1024;
 const MAX_COMMAND_LIST_BODY = 2 * 1024 * 1024;
 // Allow 65536 UTF-16 code units escaped as six JSON bytes each, plus envelope.
 const MAX_MCP_BODY = 512 * 1024;
-
-async function readBody(request: Request, maxBody = MAX_BODY): Promise<Uint8Array<ArrayBuffer>> {
-  const length = request.headers.get("content-length");
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBody)) throw new RangeError();
-  if (!request.body) return new Uint8Array();
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBody) { void reader.cancel().catch(() => {}); throw new RangeError(); }
-      chunks.push(value);
-    }
-  } finally { reader.releaseLock(); }
-  const result = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
-  return result;
-}
 
 export type CooperativeCommands = Pick<CentralCommands, "submitBounded" | "getBounded" | "listBounded">;
 
@@ -115,7 +94,7 @@ export function createCooperativeCentralApp(deps: {
     if (!principal || principal.role !== "operator") return c.json({ error: "forbidden" }, 403);
     if (!/^application\/json(?:\s*;|$)/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "expected JSON" }, 415);
     let input: unknown;
-    try { input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBody(c.req.raw))); }
+    try { input = await readBoundedJson(c.req.raw, MAX_BODY); }
     catch (error) { return c.json({ error: error instanceof RangeError ? "body too large" : "invalid JSON" }, error instanceof RangeError ? 413 : 400); }
     const submission = parseCommandSubmission(input);
     if (!submission) return c.json({ error: "invalid command" }, 400);
@@ -135,7 +114,7 @@ export function createCooperativeCentralApp(deps: {
     let request = c.req.raw;
     if (request.method === "POST") {
       let body: Uint8Array<ArrayBuffer>;
-      try { body = await readBody(request, MAX_MCP_BODY); } catch { return c.json({ error: "body too large" }, 413); }
+      try { body = await readBoundedBody(request, MAX_MCP_BODY); } catch { return c.json({ error: "body too large" }, 413); }
       let decoded: string;
       try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(body); }
       catch { return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400); }
