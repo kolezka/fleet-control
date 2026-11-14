@@ -4,14 +4,14 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { CentralAuth } from "./auth.ts";
 import { createCooperativeInspectionRoute } from "./cooperative-inspection-route.ts";
-import { CooperativeInspection } from "./cooperative-inspection.ts";
-import { CentralCommands } from "./commands.ts";
-import { CentralAttempts } from "./attempts.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import { CooperativeSettlement } from "./cooperative-settlement.ts";
+import { CooperativeInspection } from "./data/cooperative-inspection.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CentralAttempts } from "./data/attempts.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const auth = new CentralAuth([

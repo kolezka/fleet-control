@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { CentralAuth } from "./auth.ts";
-import type { CooperativeInspection } from "./cooperative-inspection.ts";
+import type { CooperativeInspection } from "./data/cooperative-inspection.ts";
 
 // Mount after the server's authentication and origin middleware.
 export function createCooperativeInspectionRoute(deps: {

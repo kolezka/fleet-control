@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "../central/auth.ts";
-import { MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "../central/agent-sockets.ts";
+import { MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "../domain/agent-protocol.ts";
 import { createHostSocketServer, type HostSocketData } from "../central/host-socket-server.ts";
 import { HostAgentClient, type HostClientOptions, type HostSocket } from "./client.ts";
 

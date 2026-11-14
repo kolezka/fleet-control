@@ -2,21 +2,22 @@ import { SQL } from "bun";
 import { constants } from "node:fs";
 import { lstat, open, unlink } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { CentralAuth, type Credential } from "./auth.ts";
-import { CentralCommands } from "./commands.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import { CooperativeInspection } from "./cooperative-inspection.ts";
-import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
-import { CooperativeSettlement } from "./cooperative-settlement.ts";
-import { provisionCooperative } from "./cooperative-provision.ts";
+import { CentralAuth } from "./auth.ts";
+import type { Credential } from "./domain/identity.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import { CooperativeInspection } from "./data/cooperative-inspection.ts";
+import { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
+import { CooperativeSettlement } from "./data/cooperative-settlement.ts";
+import { provisionCooperative } from "./data/cooperative-provision.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
-import { withCooperativeSchema } from "./schema-guard.ts";
+import { withCooperativeSchema } from "./data/schema-guard.ts";
 import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
 import { loadTlsFiles, tlsFilesFromEnv } from "./tls-files.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 // Disposable experiment only. The database and all its roles/writers must be trusted.
 // This creates a fresh schema and never resumes or migrates an existing one. Stores

@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Commands } from "./commands.ts";
-import { Deliverer, type Sender } from "./delivery.ts";
-import { Requests } from "./requests.ts";
+import { Commands } from "./data/commands.ts";
+import { Deliverer } from "./delivery.ts";
+import type { Sender } from "./domain/delivery.ts";
+import { Requests } from "./data/requests.ts";
 import { serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 const fakeSend: Sender = async (session) => ({ exitCode: 0, stdout: `${session}: delivered`, stderr: "" });
 const fleet = { screen: async () => "", status: async () => ({ sessions: [] }) } as never;

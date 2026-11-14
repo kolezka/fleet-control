@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { CentralCommands, type CommandListScope } from "./commands.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { CommandListScope } from "./domain/commands.ts";
 
 for (const field of ["hostId", "target"] as const) {
   test(`listBounded uses the validated ${field} when its getter changes`, async () => {

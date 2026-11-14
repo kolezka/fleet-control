@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cooperativeConfig, runCooperativeCli, startCooperative } from "./cooperative-main.ts";
-import { disposableCooperativeRole } from "./disposable-role-fixture.ts";
+import { disposableCooperativeRole } from "./test-fixtures/disposable-role-fixture.ts";
 
 const schema = () => `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;
 const valid = { COOPERATIVE_DATABASE_URL: "postgres://test@127.0.0.1:57507/fleet_control_test", COOPERATIVE_RUNTIME_DATABASE_URL: `postgres://cooperative_runtime_${"a".repeat(32)}@127.0.0.1:57507/fleet_control_test`, COOPERATIVE_SCHEMA: schema(), COOPERATIVE_CREDENTIALS_FILE: "/tmp/credentials", COOPERATIVE_INCARNATION_FILE: "/tmp/fleet-incarnation-never-created.json", COOPERATIVE_PORT: "0" };

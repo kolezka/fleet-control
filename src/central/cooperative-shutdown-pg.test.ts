@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startCooperative } from "./cooperative-main.ts";
-import { cleanupCooperativeRole, disposableCooperativeRole } from "./disposable-role-fixture.ts";
+import { cleanupCooperativeRole, disposableCooperativeRole } from "./test-fixtures/disposable-role-fixture.ts";
 
 // Central shutdown against real PostgreSQL. A second connection holds the command event lock,
 // so a submitted command stops inside its transaction at a known point. This fixes the order

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { createHostSocketServer } from "./host-socket-server.ts";
-import { MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "./agent-sockets.ts";
+import { MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "../domain/agent-protocol.ts";
 
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 const auth = new CentralAuth([

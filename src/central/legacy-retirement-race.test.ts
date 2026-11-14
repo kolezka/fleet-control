@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import type { CentralMcpCommands } from "./mcp.ts";
-import type { CentralRequests } from "./requests.ts";
+import type { CentralRequests } from "./data/requests.ts";
 import { createCentralApp } from "./server.ts";
 
 test("legacy supervisor mutations check identity after authentication and before writing", async () => {

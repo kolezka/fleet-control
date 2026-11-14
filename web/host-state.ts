@@ -1,4 +1,4 @@
-import type { CooperativeInspectionResult } from "../src/central/cooperative-inspection.ts";
+import type { CooperativeInspectionResult } from "../src/central/domain/cooperative.ts";
 
 // Pure per-host state for the multi-host deck. No DOM, no fetch, no terminal library: web/app.ts wires
 // this to the browser. Every host keeps its own sessions, selection, supervisor data, draft and

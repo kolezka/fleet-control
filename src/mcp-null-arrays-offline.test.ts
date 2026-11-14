@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { handleMcp } from "./mcp.ts";
-import type { Requests } from "./requests.ts";
+import type { Requests } from "./data/requests.ts";
 import { CentralAuth } from "./central/auth.ts";
 import type { CentralMcpCommands } from "./central/mcp.ts";
-import type { CentralRequests } from "./central/requests.ts";
+import type { CentralRequests } from "./central/data/requests.ts";
 import { createCentralApp } from "./central/server.ts";
 
 for (const mode of ["local", "legacy central"] as const) {

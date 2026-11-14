@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Commands } from "./commands.ts";
-import { classify, Deliverer, type SendResult } from "./delivery.ts";
+import { Commands } from "./data/commands.ts";
+import { Deliverer } from "./delivery.ts";
+import { classify, type SendResult } from "./domain/delivery.ts";
 
 test("unknown sender output never reaches returned or stored events", async () => {
   const db = new Database(":memory:");

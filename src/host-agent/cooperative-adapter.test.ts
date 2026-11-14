@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createCooperativeAdapter, type CooperativeAdapterOptions } from "./cooperative-adapter.ts";
 import { createHash } from "node:crypto";
-import { MAX_TEXT } from "../commands.ts";
+import { MAX_TEXT } from "../domain/commands.ts";
 import { CentralAuth } from "../central/auth.ts";
 import { createCooperativeCentralApp } from "../central/cooperative-server.ts";
 import type { CooperativeCommands } from "../central/cooperative-server.ts";
-import type { CooperativeClaims } from "../central/cooperative-claims.ts";
-import type { CooperativeLifecycle } from "../central/cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "../central/data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "../central/data/cooperative-lifecycle.ts";
 
 const localToken = "a".repeat(43);
 const supervisorToken = "b".repeat(43);

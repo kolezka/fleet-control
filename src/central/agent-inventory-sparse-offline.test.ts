@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { validInventorySessions } from "./agent-sockets.ts";
+import { validInventorySessions } from "../domain/agent-protocol.ts";
 
 test("rejects an inventory consisting of a single hole", () => {
   expect(validInventorySessions(new Array(1))).toBe(false);

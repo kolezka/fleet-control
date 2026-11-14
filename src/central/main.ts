@@ -1,8 +1,9 @@
 import { SQL } from "bun";
-import { CentralAuth, type Credential } from "./auth.ts";
-import { CentralCommands } from "./commands.ts";
-import { CentralRequests } from "./requests.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
+import { CentralAuth } from "./auth.ts";
+import type { Credential } from "./domain/identity.ts";
+import { CentralCommands } from "./data/commands.ts";
+import { CentralRequests } from "./data/requests.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
 import { createCentralApp } from "./server.ts";
 import { loadTlsFiles, tlsFilesFromEnv } from "./tls-files.ts";
 import { createHostSocketServer, type HostSocketData } from "./host-socket-server.ts";

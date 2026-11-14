@@ -5,8 +5,8 @@ Status: decided 2026-11-12. The owner confirmed there is no legacy central data 
 ## Current state
 
 - `src/central/main.ts` (legacy) creates its tables with `CREATE TABLE IF NOT EXISTS` in whatever schema the connection's `search_path` resolves to, usually `public`. It initializes commands, requests and supervisor identities only. It has no incarnations, claims, lifecycle events, settlements, schema marker, triggers or restricted runtime role.
-- `src/central/cooperative-provision.ts` creates a new schema (default `fleet_cooperative_v1`) and fails if it already exists. It does not upgrade, repair or adopt legacy tables.
-- `src/central/cooperative-provision.test.ts` checks that each table the provisioner creates has the same columns, indexes and constraints as the legacy `initialize()` methods create. So row shapes match for the shared tables.
+- `src/central/data/cooperative-provision.ts` creates a new schema (default `fleet_cooperative_v1`) and fails if it already exists. It does not upgrade, repair or adopt legacy tables.
+- `src/central/data/cooperative-provision.test.ts` checks that each table the provisioner creates has the same columns, indexes and constraints as the legacy `initialize()` methods create. So row shapes match for the shared tables.
 - Legacy command statuses include `delivering`, `delivered` and `delivery_unknown`. The cooperative path adds `claimed`. A command in `delivering` or `delivery_unknown` has an unknown outcome.
 - Neither central entry point is deployed. As far as this repository records, no legacy central database with real data exists. That should be confirmed before choosing.
 

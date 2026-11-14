@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { CommandError } from "../commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import type { CentralAuth } from "./auth.ts";
-import type { CooperativeSettlement } from "./cooperative-settlement.ts";
+import type { CooperativeSettlement } from "./data/cooperative-settlement.ts";
 
 const MAX_BODY = 512 * 1024;
 const validId = (id: string) => !!id && id.length <= 256 && id.trim() === id && !/[\x00-\x1f\x7f]/.test(id);

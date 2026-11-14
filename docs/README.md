@@ -16,6 +16,7 @@ For a new coding session, read [HANDOFF.md](HANDOFF.md) first, then the [preserv
 4. [Interface design](ui-design.md): selected Terminal Deck layout and Apple HIG sources.
 5. [Session model visibility](model-observability.md): observed versus configured models and freshness.
 6. [Implementation status](implementation-status.md): current files, checks, gaps and open decisions.
+7. [Source layout](source-layout.md): where domain rules, stores and transport code live, and the import rules between them.
 
 ## Status vocabulary
 

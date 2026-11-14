@@ -1,14 +1,14 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
 import { serveOptionsFromEnv } from "./src/config.ts";
-import { Commands } from "./src/commands.ts";
+import { Commands } from "./src/data/commands.ts";
 import { Deliverer, fleetSender } from "./src/delivery.ts";
 import { FleetCli } from "./src/fleet/cli.ts";
 import { resolveFleetBin } from "./src/fleet/path.ts";
-import { Requests } from "./src/requests.ts";
+import { Requests } from "./src/data/requests.ts";
 import { observerForConf } from "./src/observe/claude.ts";
 import { serve } from "./src/server.ts";
-import { Store } from "./src/store.ts";
+import { Store } from "./src/data/store.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {

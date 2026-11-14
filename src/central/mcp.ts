@@ -1,12 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandError, MAX_TEXT, type CommandStatus } from "../commands.ts";
-import { authorize, supervisorIdentity, type Principal } from "./auth.ts";
-import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage } from "./commands.ts";
-import { RequestError } from "../requests.ts";
-import type { CentralRequests } from "./requests.ts";
-import type { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import type { SupervisorCommandScope, SupervisorReadGuard } from "./commands.ts";
+import { CommandError, MAX_TEXT, type CommandStatus } from "../domain/commands.ts";
+import { authorize, supervisorIdentity, type Principal } from "./domain/identity.ts";
+import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage, SupervisorCommandScope } from "./domain/commands.ts";
+import { RequestError } from "../domain/requests.ts";
+import type { CentralRequests } from "./data/requests.ts";
+import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import type { SupervisorReadGuard } from "./data/commands.ts";
 import type { TransactionSQL } from "bun";
 
 export type CentralMcpCommands = {

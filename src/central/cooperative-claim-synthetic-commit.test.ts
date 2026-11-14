@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import type { CentralCommand } from "./commands.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CentralCommand } from "./domain/commands.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 import { createCooperativeCentralApp, type CooperativeCommands } from "./cooperative-server.ts";
 import { createCooperativeAdapter } from "../host-agent/cooperative-adapter.ts";
 

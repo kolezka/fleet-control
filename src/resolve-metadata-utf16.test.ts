@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { Requests } from "./requests.ts";
+import { Requests } from "./data/requests.ts";
 
 function setup(historicalAllowedResponses?: string[]) {
   const db = new Database(":memory:", { strict: true });

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { DeliveryJournal } from "./journal.ts";
+import { DeliveryJournal } from "./data/journal.ts";
 import { HostAgentClient, type HostClientOptions, type HostSocket } from "./client.ts";
 
 class FakeSocket implements HostSocket {

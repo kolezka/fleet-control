@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { FleetCli } from "../fleet/cli.ts";
 import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { serve } from "../server.ts";
-import { Store } from "../store.ts";
+import { Store } from "../data/store.ts";
 import { supportsReadOnlyAttach } from "./viewer.ts";
 
 const roBin = resolveFleetBin();

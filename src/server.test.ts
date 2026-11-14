@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { FleetCli, FleetError, type FleetReader } from "./fleet/cli.ts";
 import { createTestFleet, defaultFleetBin, type TestFleet } from "./fleet/fixture.ts";
 import { createApp, serve } from "./server.ts";
-import { Store } from "./store.ts";
+import { Store } from "./data/store.ts";
 
 const read = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 function stubFleet(over: Partial<FleetReader> = {}): FleetReader {

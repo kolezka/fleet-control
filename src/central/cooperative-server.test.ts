@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
-import { CommandError } from "../commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
 import type { CooperativeCommands } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const incarnationId = "00000000-0000-4000-8000-000000000001";

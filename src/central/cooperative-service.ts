@@ -3,10 +3,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, open, unlink } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { CENTRAL_SHUTDOWN_GRACE_MS, parseCredentials, readPrivateText, serveCooperative } from "./cooperative-main.ts";
-import { provisionCooperative, SERVICE_RUNTIME_ROLE } from "./cooperative-provision.ts";
-import { SupervisorIdentityRegistry } from "./identity-registry.ts";
-import { SupervisorIncarnations } from "./incarnations.ts";
-import { withCooperativeSchema } from "./schema-guard.ts";
+import { provisionCooperative, SERVICE_RUNTIME_ROLE } from "./data/cooperative-provision.ts";
+import { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
+import { SupervisorIncarnations } from "./data/incarnations.ts";
+import { withCooperativeSchema } from "./data/schema-guard.ts";
 import { rejectAmbientPostgresEnvironment } from "./test-database-url.ts";
 import { loadTlsFiles, tlsFilesFromEnv } from "./tls-files.ts";
 

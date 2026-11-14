@@ -1,8 +1,8 @@
 import type { SQL, TransactionSQL } from "bun";
 import { expect, test } from "bun:test";
-import { CooperativeClaims } from "./cooperative-claims.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import type { SupervisorIncarnations } from "./incarnations.ts";
+import { CooperativeClaims } from "./data/cooperative-claims.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import type { SupervisorIncarnations } from "./data/incarnations.ts";
 
 const principal = { role: "supervisor", principalId: "principal", name: "supervisor", hostId: "host", session: "session" } as const;
 const credential = { incarnationId: "incarnation", token: "token" };

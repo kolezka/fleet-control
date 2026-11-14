@@ -1,59 +1,16 @@
 // This registry is process-local. Authentication and durable delivery state belong to the caller.
-export const AGENT_PROTOCOL_VERSION = 1;
-export const MAX_AGENT_MESSAGE_BYTES = 64 * 1024;
-export const MAX_INVENTORY_SESSIONS = 256;
-export const MAX_SESSION_LENGTH = 256;
-
-export function validInventorySessions(value: unknown): value is string[] {
-  if (!Array.isArray(value) || value.length > MAX_INVENTORY_SESSIONS) return false;
-  for (let index = 0; index < value.length; index++) {
-    if (!Object.hasOwn(value, index)) return false;
-  }
-  return value.every((session) => nonempty(session) && session.isWellFormed() && session.length <= MAX_SESSION_LENGTH && !/[\x00-\x1f\x7f]/.test(session)) &&
-    new Set(value).size === value.length;
-}
+import { AGENT_PROTOCOL_VERSION, MAX_AGENT_MESSAGE_BYTES, validInventorySessions, type AgentReceipt, type AgentInventory, type AgentDispatch, nonempty } from "../domain/agent-protocol.ts";
 
 export interface AgentSocket {
   send(message: string): unknown;
   close(code: number, reason: string): unknown;
 }
 
-export type AgentReceipt = {
-  version: 1;
-  type: "receipt";
-  hostId: string;
-  commandId: string;
-  attemptId: string;
-  status: "delivered" | "unknown";
-};
-
-export type AgentInventory = {
-  version: 1;
-  type: "inventory";
-  hostId: string;
-  sessions: string[];
-};
-
-export type AgentDispatch = {
-  version: 1;
-  type: "dispatch";
-  hostId: string;
-  commandId: string;
-  attemptId: string;
-  target: string;
-  text: string;
-};
-
 export interface AgentSocketDependencies {
   // Must check that this exact command and attempt belong to this host.
   validateAttempt(hostId: string, commandId: string, attemptId: string): boolean | Promise<boolean>;
   onReceipt(receipt: AgentReceipt): void | Promise<void>;
   onInventory(inventory: AgentInventory): void | Promise<void>;
-}
-
-// Lone surrogates are rejected so an id cannot alias another one after UTF-8 storage.
-function nonempty(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.isWellFormed();
 }
 
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {

@@ -1,19 +1,22 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { RequestError, Requests } from "../requests.ts";
+import { Requests } from "../data/requests.ts";
+import { RequestError } from "../domain/requests.ts";
 import type { SQL, TransactionSQL } from "bun";
-import type { CentralRequests } from "./requests.ts";
+import type { CentralRequests } from "./data/requests.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CommandError, type CommandStatus } from "../commands.ts";
-import { CentralAuth, type Principal } from "./auth.ts";
+import { CommandError, type CommandStatus } from "../domain/commands.ts";
+import { CentralAuth } from "./auth.ts";
+import type { Principal } from "./domain/identity.ts";
 import { createHash } from "node:crypto";
-import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage, SupervisorCommandScope, SupervisorReadGuard } from "./commands.ts";
-import type { RequestMutationGuard } from "./requests.ts";
+import type { SupervisorReadGuard } from "./data/commands.ts";
+import type { CentralCommand, CentralCommandInput, CommandListPagination, CommandListScope, CommandPage, SupervisorCommandScope } from "./domain/commands.ts";
+import type { RequestMutationGuard } from "./data/requests.ts";
 import { buildCentralMcpServer, type CentralMcpCommands } from "./mcp.ts";
 import { createCooperativeCentralApp } from "./cooperative-server.ts";
-import type { CooperativeClaims } from "./cooperative-claims.ts";
-import type { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
+import type { CooperativeClaims } from "./data/cooperative-claims.ts";
+import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
 
 class FakeCommands implements CentralMcpCommands {
   rows: CentralCommand[] = [];

@@ -55,7 +55,7 @@ When a session is replaced, bind new observations to its new runtime instance. D
 - A known shell watchdog shows no model, while an uninstrumented agent shows unknown.
 - A label is never presented as verified runtime data when it comes only from a static example fixture.
 
-Covered by tests in `src/model.test.ts`, `src/observe/claude.test.ts` and `src/server.test.ts`: observed with source and time, configured vs observed, model switch, child model not overwriting the parent, missing vs malformed, replacement and disconnect not promoting history, script shows no model, uninstrumented agent shows unknown. Not covered: a fallback inside one turn, and other harnesses.
+Covered by tests in `src/domain/model.test.ts`, `src/observe/claude.test.ts` and `src/server.test.ts`: observed with source and time, configured vs observed, model switch, child model not overwriting the parent, missing vs malformed, replacement and disconnect not promoting history, script shows no model, uninstrumented agent shows unknown. Not covered: a fallback inside one turn, and other harnesses.
 
 ## Implemented source (Claude Code)
 

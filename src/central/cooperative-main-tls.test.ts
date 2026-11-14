@@ -5,7 +5,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cooperativeConfig, runCooperativeCli, startCooperative } from "./cooperative-main.ts";
-import { disposableCooperativeRole } from "./disposable-role-fixture.ts";
+import { disposableCooperativeRole } from "./test-fixtures/disposable-role-fixture.ts";
 import { startCooperativeAdapter } from "../host-agent/cooperative-main.ts";
 
 const schema = () => `cooperative_test_${crypto.randomUUID().replaceAll("-", "")}`;

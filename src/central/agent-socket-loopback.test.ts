@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
-import { AgentSockets, MAX_AGENT_MESSAGE_BYTES, type AgentDispatch, type AgentReceipt } from "./agent-sockets.ts";
+import { AgentSockets } from "./agent-sockets.ts";
+import { MAX_AGENT_MESSAGE_BYTES, type AgentDispatch, type AgentReceipt } from "../domain/agent-protocol.ts";
 import { HostAgentClient, type HostClientOptions, type HostSocket } from "../host-agent/client.ts";
 
 // AgentSockets and HostAgentClient joined by a real Bun WebSocket on 127.0.0.1.

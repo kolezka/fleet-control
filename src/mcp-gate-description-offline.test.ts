@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { Commands } from "./commands.ts";
+import type { Commands } from "./data/commands.ts";
 import type { Deliverer } from "./delivery.ts";
-import type { Requests } from "./requests.ts";
+import type { Requests } from "./data/requests.ts";
 import { buildMcpServer } from "./mcp.ts";
 
 test("request_gate describes reported responses without claiming human authority", async () => {

@@ -16,8 +16,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { disposableCooperativeRole } from "../src/central/disposable-role-fixture.ts";
-import { SupervisorIncarnations } from "../src/central/incarnations.ts";
+import { disposableCooperativeRole } from "../src/central/test-fixtures/disposable-role-fixture.ts";
+import { SupervisorIncarnations } from "../src/central/data/incarnations.ts";
 
 const token = () => randomBytes(32).toString("base64url");
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");

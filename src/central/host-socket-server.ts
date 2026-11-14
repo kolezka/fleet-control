@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from "bun";
-import { AgentSockets, MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "./agent-sockets.ts";
+import { AgentSockets } from "./agent-sockets.ts";
+import { MAX_AGENT_MESSAGE_BYTES, type AgentInventory } from "../domain/agent-protocol.ts";
 import type { CentralAuth } from "./auth.ts";
 
 export type HostSocketData = { hostId: string };

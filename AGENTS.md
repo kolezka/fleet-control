@@ -17,6 +17,7 @@ The baseline is a synthetic interactive mockup, not a connected application. The
 - Reuse agent-fleet CLI where applicable. phased-delivery's inspected workers/reviewers are Agent calls, not inherently independent tmux terminals.
 - Keep worker claims, verification, review, human approval and execution acknowledgement separate.
 - Read `docs/implementation-status.md` before making implementation or completion claims.
+- Follow `docs/source-layout.md`: types and rules in `domain/`, queries only in `data/` stores, servers and tools call stores. `src/layering.test.ts` checks the import rules. Do not move the entry points that deployment files start by path.
 - Host access, live terminal input, credentials, dependencies, spending and deployment require their own authorization.
 - Recheck repository and worktree state before implementation. The design pass began before Git initialization; the user later authorized an initial local snapshot on main. Use an isolated worktree for subsequent code changes.
 

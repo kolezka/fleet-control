@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SQL, TransactionSQL } from "bun";
-import { CentralCommands } from "./commands.ts";
-import type { CooperativeTransactionRunner } from "./incarnations.ts";
+import { CentralCommands } from "./data/commands.ts";
+import type { CooperativeTransactionRunner } from "./data/incarnations.ts";
 
 const createdAt = "2026-01-01T00:00:00.000Z";
 const id = "cmd-00000000-0000-0000-0000-000000000001";

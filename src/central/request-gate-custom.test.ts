@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CentralRequests } from "./requests.ts";
+import { CentralRequests } from "./data/requests.ts";
 
 type Row = {
   id: string;

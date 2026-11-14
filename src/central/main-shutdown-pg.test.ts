@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupCooperativeRole, disposableCooperativeRole } from "./disposable-role-fixture.ts";
+import { cleanupCooperativeRole, disposableCooperativeRole } from "./test-fixtures/disposable-role-fixture.ts";
 import { startCentral } from "./main.ts";
 
 // Legacy central shutdown against real PostgreSQL. The legacy entry point uses unqualified

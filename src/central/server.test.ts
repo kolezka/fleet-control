@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { CentralAuth } from "./auth.ts";
 import { createCentralApp, assertSafeCentralBind } from "./server.ts";
-import { CommandError } from "../commands.ts";
+import { CommandError } from "../domain/commands.ts";
 import type { CentralMcpCommands } from "./mcp.ts";
-import type { CentralRequests } from "./requests.ts";
+import type { CentralRequests } from "./data/requests.ts";
 
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 const auth = new CentralAuth([
@@ -12,7 +12,7 @@ const auth = new CentralAuth([
   { tokenHash: hash("host"), principal: { name: "host", role: "host", hostId: "h1" } },
   { tokenHash: hash("supervisor"), principal: { name: "supervisor", role: "supervisor", principalId: "supervisor-id", hostId: "h1", session: "s1" } },
 ]);
-function fixture(requests?: CentralRequests, identities: { matches(identity: import("./identity-registry.ts").SupervisorIdentity): Promise<boolean> } = { async matches() { return true; } }) {
+function fixture(requests?: CentralRequests, identities: { matches(identity: import("./domain/identity.ts").SupervisorIdentity): Promise<boolean> } = { async matches() { return true; } }) {
   const saved: any[] = [];
   const commands: CentralMcpCommands = {
     async submit(input) { const command = { ...input, id: "one", status: "queued" as const, createdAt: "now", updatedAt: "now" }; saved.push(command); return { command, created: true }; },
@@ -23,7 +23,7 @@ function fixture(requests?: CentralRequests, identities: { matches(identity: imp
     },
     async transition() { throw new Error("not used"); },
   };
-  const fencedIdentities = { ...identities, async lockActive(_tx: unknown, identity: import("./identity-registry.ts").SupervisorIdentity) { return identities.matches(identity); } };
+  const fencedIdentities = { ...identities, async lockActive(_tx: unknown, identity: import("./domain/identity.ts").SupervisorIdentity) { return identities.matches(identity); } };
   return { app: createCentralApp({ auth, commands, requests, identities: fencedIdentities, allowedOrigins: ["http://localhost"] }), saved };
 }
 const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });

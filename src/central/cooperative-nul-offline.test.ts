@@ -1,9 +1,9 @@
 import type { SQL } from "bun";
 import { expect, test } from "bun:test";
-import { CommandError } from "../commands.ts";
-import { CooperativeLifecycle } from "./cooperative-lifecycle.ts";
-import { CooperativeReconciliation } from "./cooperative-reconciliation.ts";
-import type { SupervisorIncarnations } from "./incarnations.ts";
+import { CommandError } from "../domain/commands.ts";
+import { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
+import { CooperativeReconciliation } from "./data/cooperative-reconciliation.ts";
+import type { SupervisorIncarnations } from "./data/incarnations.ts";
 
 const supervisor = { role: "supervisor", principalId: "principal", name: "supervisor", hostId: "host", session: "session" } as const;
 const operator = { role: "operator", name: "operator" } as const;

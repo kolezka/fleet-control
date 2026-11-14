@@ -3,7 +3,7 @@
 // Read-only: lists panes and processes, reads files. Never scrapes terminal text.
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { ModelObservation } from "../model.ts";
+import type { ModelObservation } from "../domain/model.ts";
 
 export const OBSERVATION_SOURCE = "claude-code transcript";
 const TAIL_BYTES = 512 * 1024;
