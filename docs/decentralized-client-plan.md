@@ -26,3 +26,5 @@ All four code/documentation stages are complete locally. [Verification evidence]
 No shared scheduler, replicated host database, automatic failover, cross-host approval, writable terminal, new agent runtime or automatic remote installation. No new dependencies are required.
 
 192.168.50.15 remains on hold and must not be contacted. This change does not authorize deployment to either host, a Tailscale listener, paid runtime agents, credential changes, push or merge. Linux service instructions can be prepared and checked without claiming a live Linux deployment. Two local test services prove isolation, not cross-platform operation.
+
+Later note (2026-11-14): this plan was delivered in PR #3. The hold on `.15` no longer applies: the owner approved the cooperative deployment there on 2026-11-13 (see [deploy-15-plan.md](deploy-15-plan.md)). No host service was installed on `.15`. The paragraph above is the boundary as it stood for this change.

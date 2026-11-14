@@ -25,7 +25,8 @@ function fixture(options: { owned?: boolean; guard?: boolean; status?: string } 
   const store = new CentralCommands(db, () => new Date("2026-01-02T00:00:00.000Z"));
   const guard = async () => { order.push("guard"); return options.guard !== false; };
   const invoke = (actor: string, detail: string) => store.transitionScoped("command", "accepted", actor, detail, scope, guard);
-  return { calls, order, invoke };
+  const invokeUnscoped = (actor: string, detail: string) => store.transition("command", "accepted", actor, detail);
+  return { calls, order, invoke, invokeUnscoped };
 }
 
 async function errorOf(operation: Promise<unknown>): Promise<unknown> {
@@ -75,4 +76,32 @@ test("transition conflict precedes event encoding validation", async () => {
   expect(error).toBeInstanceOf(CommandError);
   expect((error as CommandError).kind).toBe("conflict");
   expect(f.order).toEqual(["guard", "lock", "ownership"]);
+});
+
+for (const field of ["actor", "detail"] as const) {
+  for (const [name, malformed] of [["NUL", "bad\0text"], ["high surrogate", "bad\ud800text"], ["low surrogate", "bad\udc00text"]] as const) {
+    test(`unscoped transition rejects ${name} in ${field} before writes`, async () => {
+      const f = fixture();
+      const error = await errorOf(f.invokeUnscoped(field === "actor" ? malformed : "service", field === "detail" ? malformed : "accept"));
+      expect(f.order).toEqual(["lock", "ownership"]);
+      expect(error).toBeInstanceOf(CommandError);
+      expect((error as CommandError).kind).toBe("invalid");
+    });
+  }
+}
+
+test("unscoped transition preserves supplementary characters in event fields", async () => {
+  const f = fixture();
+  const result = await f.invokeUnscoped("service 😀", "accepted 🚀");
+  expect(result.status).toBe("accepted");
+  expect(f.order).toEqual(["lock", "ownership", "update", "insert"]);
+  expect(f.calls.find(({ query }) => query.includes("INSERT INTO central_command_events"))?.values.slice(0, 4)).toEqual(["command", "accepted", "service 😀", "accepted 🚀"]);
+});
+
+test("unscoped not-found and conflict precede event encoding validation", async () => {
+  const missing = fixture({ owned: false });
+  expect((await errorOf(missing.invokeUnscoped("bad\ud800actor", "bad\0detail")) as CommandError).kind).toBe("not_found");
+  const done = fixture({ status: "completed" });
+  expect((await errorOf(done.invokeUnscoped("bad\ud800actor", "bad\0detail")) as CommandError).kind).toBe("conflict");
+  expect(done.order).toEqual(["lock", "ownership"]);
 });

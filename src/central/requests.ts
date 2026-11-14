@@ -177,6 +177,7 @@ export class CentralRequests {
       if (r.status !== (status === "acknowledged" ? "resolved" : "open")) throw new RequestError("conflict", `${r.id} is ${r.status}; cannot become ${status}`);
       if (!validEncoding(input.actor)) throw new RequestError("invalid", "invalid request encoding");
       const detail = status === "withdrawn" ? nonEmpty(reason!, "reason") : `read answer "${r.response}"`;
+      if (status === "withdrawn" && !validEncoding(detail)) throw new RequestError("invalid", "invalid request encoding");
       await tx`UPDATE central_requests SET status = ${status} WHERE id = ${r.id}`;
       await this.event(tx, r.id, r.runId, status, input.actor, detail, this.now().toISOString());
       return this.getRequest(tx, r.id);
