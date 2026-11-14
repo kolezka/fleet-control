@@ -68,7 +68,7 @@ test("every supervisor operation acts as the owner derived from its identity and
     ["withdraw", { requestId: "r-1", reason: "done", actor: owner }],
     ["gateScoped", "run-1", "plan", 1, owner],
   ]);
-  expect(guarded).toEqual(Array(6).fill(["tx", { hostId: "host", session: "session" }]));
+  expect(guarded).toEqual(Array(6).fill(["tx"]));
 });
 
 test("someone else's run and a missing run look the same; other errors pass through", async () => {

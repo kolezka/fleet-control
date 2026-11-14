@@ -6,7 +6,7 @@ import { centralCommandStatuses } from "./domain/commands.ts";
 import { RequestError } from "../domain/requests.ts";
 import type { CentralRequests } from "./data/requests.ts";
 import type { SupervisorIdentityRegistry } from "./data/identity-registry.ts";
-import type { SupervisorReadGuard } from "./data/commands.ts";
+import type { IdentityFence } from "./data/identity-fence.ts";
 import { commandAccess, type CentralCommandStore } from "./application/commands.ts";
 import { operatorRequests, supervisorRequests } from "./application/requests.ts";
 
@@ -62,11 +62,11 @@ export function buildCentralMcpServer(deps: { commands: CentralCommandStore; req
       inputSchema: { id: z.string().min(1), status: z.enum(["running", "completed", "failed"]), evidence: z.string().min(1).max(4000) },
     }, async ({ id, status, evidence }) => attempt(async () => ({ command: await access.report(id, status, evidence) })));
   }
-  if (deps.requests) registerRequestTools(server, deps.requests, principal, access.guard);
+  if (deps.requests) registerRequestTools(server, deps.requests, principal, access.fence);
   return server;
 }
 
-function registerRequestTools(server: McpServer, requests: CentralRequests, principal: Principal, guard: SupervisorReadGuard) {
+function registerRequestTools(server: McpServer, requests: CentralRequests, principal: Principal, fence: IdentityFence | undefined) {
   if (principal.role === "operator") {
     const operator = operatorRequests(requests, principal);
     server.registerTool("request_list", {
@@ -83,8 +83,8 @@ function registerRequestTools(server: McpServer, requests: CentralRequests, prin
     }, async (args) => attempt(async () => ({ request: await operator.resolve(args) })));
     return;
   }
-  if (principal.role !== "supervisor") return;
-  const supervisor = supervisorRequests(requests, principal, guard);
+  if (principal.role !== "supervisor" || !fence) return;
+  const supervisor = supervisorRequests(requests, principal, fence.requests);
   server.registerTool("run_register", {
     description: "Register a run owned by the authenticated supervisor.",
     inputSchema: { runId: z.string().min(1).max(200), phase: z.string().min(1).max(200) },
