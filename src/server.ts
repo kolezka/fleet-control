@@ -3,19 +3,17 @@
 import { Auth, COOKIE, isLoopback, type Principal } from "./auth.ts";
 import login from "../web/login.html";
 import { hostname as osHostname } from "node:os";
-import { FleetError, type FleetReader } from "./domain/fleet.ts";
-import { modelState, type ModelState } from "./domain/model.ts";
-import type { Observation } from "./domain/model.ts";
-import type { Store } from "./data/store.ts";
+import { FleetError } from "./domain/fleet.ts";
 import deck from "../web/index.html";
 import { clampSize, openViewer, type Viewer } from "./terminal/viewer.ts";
 import { type Commands } from "./data/commands.ts";
 import { CommandError } from "./domain/commands.ts";
+import { commandUseCases } from "./application/commands.ts";
 import type { Deliverer } from "./application/delivery.ts";
+import { sessionReader } from "./application/sessions.ts";
 import { handleMcp } from "./mcp.ts";
 import { type Requests } from "./data/requests.ts";
 import { RequestError } from "./domain/requests.ts";
-import type { ModelObserver } from "./domain/model.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -33,63 +31,14 @@ function errorResponse(e: unknown): Response {
 }
 
 
-const unknownReason: Record<Exclude<Observation["kind"], "observed">, string> = {
-  no_turn_yet: "agent running, no main-thread turn yet",
-  no_agent_process: "no claude process in this session",
-  unavailable: "model metadata unavailable",
-  malformed: "model metadata malformed",
-};
-
-export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => Date; observer?: ModelObserver }) {
+export function createApp(deps: Parameters<typeof sessionReader>[0]) {
   const now = deps.now ?? (() => new Date());
-  const known = () => new Map(deps.store.sessions().map((s) => [s.name, s]));
-
-  // Runs a fresh observation for this read; storage only keeps history.
-  async function modelFor(name: string, kind: "agent" | "script", configuredModel: string | null, running: boolean): Promise<ModelState> {
-    if (kind === "script") return { state: "not_applicable" };
-    let runtimeInstance: string | null = null;
-    let reason: string | undefined = running ? "no model observer configured" : "session not running";
-    if (deps.observer && running) {
-      let o: Observation;
-      try {
-        o = await deps.observer.observe(name);
-      } catch {
-        o = { kind: "unavailable", reason: "observer failed" };
-      }
-      if (o.kind === "observed") {
-        runtimeInstance = o.runtimeInstance;
-        reason = undefined;
-        const last = deps.store.latestObservation(name);
-        if (!last || last.runtimeInstance !== o.observation.runtimeInstance || last.observedAt !== o.observation.observedAt || last.model !== o.observation.model) {
-          deps.store.recordObservation(name, o.observation);
-        }
-      } else {
-        if (o.kind === "no_turn_yet") runtimeInstance = o.runtimeInstance;
-        reason = "reason" in o ? `${unknownReason[o.kind]}: ${o.reason}` : unknownReason[o.kind];
-      }
-    }
-    return modelState({ kind, configuredModel, observation: deps.store.latestObservation(name), runtimeInstance, now: now(), reason });
-  }
+  const reader = sessionReader(deps);
 
   return {
     async sessions(): Promise<Response> {
       try {
-        const status = await deps.fleet.status();
-        const records = known();
-        const sessions = await Promise.all(status.sessions.map(async (s) => {
-          const rec = records.get(s.name);
-          // Unregistered sessions in a fleet are agents unless registered as scripts.
-          const model = await modelFor(s.name, rec?.kind ?? "agent", rec?.configuredModel ?? null, s.running);
-          return {
-            name: s.name,
-            host: rec?.host ?? null,
-            role: rec?.role ?? null,
-            registered: Boolean(rec),
-            running: s.running,
-            contextPct: s.contextPct,
-            model,
-          };
-        }));
+        const sessions = await reader.list();
         return Response.json({ sessions, source: "fleet status", readAt: now().toISOString() });
       } catch (e) {
         return errorResponse(e);
@@ -98,7 +47,7 @@ export function createApp(deps: { fleet: FleetReader; store: Store; now?: () => 
 
     async screen(name: string, lines: number): Promise<Response> {
       try {
-        const text = await deps.fleet.screen(name, lines);
+        const text = await reader.screen(name, lines);
         return Response.json({ session: name, text, source: "fleet screen", readAt: now().toISOString() });
       } catch (e) {
         return errorResponse(e);
@@ -160,6 +109,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const app = createApp(deps);
   const terminal = deps.terminal;
   const control = deps.control;
+  const queue = control ? commandUseCases(control) : null;
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
   type Handler = (req: any, server: any) => Response | Promise<Response> | undefined | Promise<Response | undefined>;
@@ -223,21 +173,20 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       "/api/commands": {
         GET: guard(() => (control ? Response.json({ commands: control.commands.list() }) : noControl())),
         POST: guard(async (req, _s, who) => {
-          if (!control) return noControl();
+          if (!queue) return noControl();
           if (!originAllowed(req)) return forbidden();
           try {
             const body: unknown = await req.json();
             if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
             const fields = body as Record<string, unknown>;
             const str = (k: string) => (typeof fields[k] === "string" ? (fields[k] as string) : "");
-            const { command, created } = control.commands.submit({
+            const result = await queue.submit({
               idempotencyKey: str("idempotencyKey"),
               target: str("target"),
               actor: who?.name ?? (str("actor") || "web-ui"),
               text: str("text"),
             });
-            const after = created ? await control.deliverer.deliver(command.id) : command;
-            return Response.json({ command: after, created, events: control.commands.events(command.id) }, { status: created ? 201 : 200 });
+            return Response.json(result, { status: result.created ? 201 : 200 });
           } catch (e) {
             if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
             return commandError(e);
@@ -246,9 +195,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       "/api/commands/:id": {
         GET: guard((req) => {
-          if (!control) return noControl();
+          if (!queue) return noControl();
           try {
-            return Response.json({ command: control.commands.get(req.params.id), events: control.commands.events(req.params.id) });
+            return Response.json(queue.read(req.params.id));
           } catch (e) {
             return commandError(e);
           }
