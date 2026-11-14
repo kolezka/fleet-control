@@ -1,0 +1,34 @@
+/* Installer page. Same shell and tokens as the deck: roles on the left, options and plan in the
+   middle, the apply decision in the right panel. */
+/* Keep the shell at window width: a long checkout path in the header must be cut, not widen the page. */
+.installpage{grid-template-columns:minmax(0,1fr)}
+.installpage .identity,.installpage .hostcontext{flex:1}
+.installmain{overflow:auto;min-width:0;min-height:0;padding:20px 24px 28px;display:flex;flex-direction:column;gap:24px;background:var(--surface)}
+.installform{display:grid;gap:12px;max-width:560px}
+.installform h2{font-size:13px}
+.field{display:grid;gap:4px}
+.field label{font-size:11px;font-weight:500}
+.field small{font-size:10px}
+.field input,.instructionform input{width:100%;min-height:30px;padding:6px 10px;background:var(--terminal);color:var(--ink);border:1px solid var(--line);border-radius:4px;font:12px/1.5 var(--mono)}
+.field input::placeholder{color:var(--muted)}
+.field input:focus-visible,.instructionform input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.formactions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.formactions button{font-size:11px;border-color:var(--line);padding:5px 13px;min-height:28px}
+.formactions span{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.plan{display:grid;gap:18px;border-top:1px solid var(--line);padding-top:18px;max-width:760px}
+.plan h3,.applynote h3{font-size:11px;font-weight:500;color:var(--muted);margin-bottom:6px}
+.plan ul,.plan ol,.applynote ul{margin:0;padding-left:18px;display:grid;gap:6px;font-size:12px}
+.applynote ul{font-size:11px;color:var(--muted)}
+.plan code{overflow-wrap:anywhere}
+.plan .tag{display:block;font-size:10px;color:var(--muted)}
+.plan pre{margin:6px 0 0;padding:10px 12px;background:var(--terminal);border:1px solid var(--line);border-radius:4px;font:11px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.stale{color:var(--warn)}
+#jobText{font-size:12px;overflow-wrap:anywhere}
+#jobText[data-tone="good"]{color:var(--good)}
+#jobText[data-tone="warn"]{color:var(--warn)}
+#jobText[data-tone="bad"]{color:var(--bad)}
+.instructionform .fineprint{margin:0}
+.instructionform .primary,.instructionform .primary:hover{background:var(--ink);color:var(--surface);border-color:var(--ink);min-height:28px}
+/* The apply panel is part of the task here, so on narrow windows it stacks instead of hiding. */
+@media(max-width:600px){.installpage .sidebarfoot{display:grid}}
+@media(max-width:900px){.installpage .workarea{display:flex;flex-direction:column;overflow:auto}.installpage .installmain{overflow:visible;flex-shrink:0}.installpage .inspector{position:static;width:auto;flex-shrink:0;overflow:visible;border-left:0;border-top:1px solid var(--line);padding-left:24px}}
