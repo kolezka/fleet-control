@@ -1,14 +1,14 @@
 # Claim recovery for a dead incarnation
 
-Status: the owner chose option A, with settlement allowed only after the claiming incarnation is inactive or its identity retired. A is implemented in `src/central/cooperative-settlement.ts`. B and C are not implemented.
+Status: the owner chose option A, with settlement allowed only after the claiming incarnation is inactive or its identity retired. A is implemented in `src/central/data/cooperative-settlement.ts`. B and C are not implemented.
 
 ## Current behaviour
 
-- A cooperative claim moves a command from `queued` to `claimed` and records the claiming incarnation (`src/central/cooperative-claims.ts`). A trigger then blocks every update and delete of that command row.
-- Lifecycle reports (`accepted`, `running`, `completed`, `failed`, `rejected`) are written only by the incarnation that holds the claim, and only while it is active (`src/central/cooperative-lifecycle.ts`).
-- Activating a new incarnation for the same identity deactivates the old one (`src/central/incarnations.ts`).
+- A cooperative claim moves a command from `queued` to `claimed` and records the claiming incarnation (`src/central/data/cooperative-claims.ts`). A trigger then blocks every update and delete of that command row.
+- Lifecycle reports (`accepted`, `running`, `completed`, `failed`, `rejected`) are written only by the incarnation that holds the claim, and only while it is active (`src/central/data/cooperative-lifecycle.ts`).
+- Activating a new incarnation for the same identity deactivates the old one (`src/central/data/incarnations.ts`).
 - So when an incarnation dies or is replaced, its claims are frozen. Nobody can report on them. The command stays `claimed` forever.
-- An operator can append reconciliation assertions (`unknown`, `completed`, `failed`, `not-executed`) with evidence (`src/central/cooperative-reconciliation.ts`). They are evidence only. They change no command or lifecycle state.
+- An operator can append reconciliation assertions (`unknown`, `completed`, `failed`, `not-executed`) with evidence (`src/central/data/cooperative-reconciliation.ts`). They are evidence only. They change no command or lifecycle state.
 - A claim whose response never reached the adapter (`src/central/cooperative-claim-response-risk.test.ts`) is in the same frozen state, even though the work may never have started.
 
 Fixed owner decisions: no automatic requeue, no successor command, unknown outcomes are never retried automatically.
