@@ -6,14 +6,17 @@ import { join } from "node:path";
 
 const script = join(import.meta.dir, "central-backup-check.ts");
 
-// A fake pg_restore that accepts only stdin starting with PGDMP and prints a TOC header.
+// A fake pg_restore that accepts only stdin starting with PGDMP. With --list it prints a TOC header.
+// With --file=/dev/null it stands in for the full read: like the real tool, it fails on input cut short.
 const fake = [
   "#!/bin/sh",
-  '[ "$#" -eq 1 ] && [ "$1" = "--list" ] || exit 9',
+  '[ "$#" -eq 1 ] || exit 9',
+  'case "$1" in --list) mode=list ;; --file=/dev/null) mode=data ;; *) exit 9 ;; esac',
   '[ -z "$PGHOST" ] || exit 8',
   '[ -z "$GROW" ] || printf more >> "$GROW"',
-  'cat > "$CAPTURE"',
-  '[ "$(head -c 5 "$CAPTURE")" = "PGDMP" ] || exit 1',
+  'cat > "$CAPTURE.$mode"',
+  '[ "$(head -c 5 "$CAPTURE.$mode")" = "PGDMP" ] || exit 1',
+  'if [ "$mode" = data ]; then [ "$(tail -c 3 "$CAPTURE.data")" = "END" ] || exit 5; exit 0; fi',
   '[ -z "$FAKE_FAIL" ] || exit 3',
   "printf ';\\n;     dbname: fleet_control_test\\n;     TOC Entries: 12\\n;     Format: %s\\n;\\n' \"${FAKE_FORMAT:-CUSTOM}\"",
   "",
@@ -26,7 +29,7 @@ test("archive check lists the table of contents read-only and reports a checksum
     await writeFile(join(dir, "pg_restore"), fake);
     await chmod(join(dir, "pg_restore"), 0o700);
     const archive = join(dir, "good.dump");
-    const content = "PGDMP" + "x".repeat(200000);
+    const content = "PGDMP" + "x".repeat(200000) + "END";
     await writeFile(archive, content);
     const capture = join(dir, "capture");
     const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, PGHOST: "must-be-dropped", CAPTURE: capture };
@@ -37,8 +40,18 @@ test("archive check lists the table of contents read-only and reports a checksum
     const ok = await run([archive]);
     expect(ok.code).toBe(0);
     expect(JSON.parse(ok.stdout)).toEqual({ sha256: createHash("sha256").update(content).digest("hex"), bytes: content.length, tocEntries: 12, dbname: "fleet_control_test" });
-    // pg_restore received exactly the bytes that were hashed.
-    expect(await Bun.file(capture).text()).toBe(content);
+    // Both pg_restore passes received exactly the bytes that were hashed.
+    expect(await Bun.file(capture + ".list").text()).toBe(content);
+    expect(await Bun.file(capture + ".data").text()).toBe(content);
+
+    // The table of contents still lists, but the data section is cut short.
+    const cut = join(dir, "cut.dump");
+    await writeFile(cut, content.slice(0, -3));
+    const truncated = await run([cut]);
+    expect(truncated.code).toBe(1);
+    expect(truncated.stdout).toBe("");
+    expect(await Bun.file(capture + ".list").text()).toBe(content.slice(0, -3));
+    expect(await Bun.file(capture + ".data").text()).toBe(content.slice(0, -3));
 
     await writeFile(join(dir, "bad.dump"), "not an archive");
     await writeFile(join(dir, "empty.dump"), "");
