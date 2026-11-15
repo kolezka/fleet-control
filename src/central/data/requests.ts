@@ -214,7 +214,34 @@ export class CentralRequests {
     if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
     return this.getRun(this.db, id);
   }
-  async runs(): Promise<Run[]> { return this.db<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs ORDER BY id`; }
+  // The runs a page of requests refers to: at most one per name given.
+  async runsById(ids: string[]): Promise<Run[]> {
+    const wanted = [...new Set(ids)];
+    if (!wanted.every(validEncoding)) throw new RequestError("invalid", "invalid request encoding");
+    if (!wanted.length) return [];
+    // Sent as text and parsed by the server: a parameter typed jsonb would be encoded a second time.
+    return this.db<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs WHERE id IN (SELECT jsonb_array_elements_text((${JSON.stringify(wanted)}::text)::jsonb)) ORDER BY id`;
+  }
+  // Every run, a page at a time in ID order. Not a snapshot: a run registered meanwhile can be missed.
+  async listRuns(page: { limit?: number; cursor?: string } = {}): Promise<{ runs: Run[]; nextCursor: string | null }> {
+    const limit = page.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new RequestError("invalid", "limit must be between 1 and 1000");
+    let after: string | null = null;
+    if (page.cursor !== undefined) {
+      try {
+        if (typeof page.cursor !== "string" || page.cursor.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(page.cursor)) throw new Error();
+        const text = Buffer.from(page.cursor, "base64url").toString("utf8");
+        if (Buffer.from(text).toString("base64url") !== page.cursor) throw new Error();
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed) || parsed.length !== 1 || !validEncoding(parsed[0])) throw new Error();
+        after = parsed[0];
+      } catch { throw new RequestError("invalid", "invalid cursor"); }
+    }
+    const rows = await this.db<Run[]>`SELECT id, orchestrator, phase, revision, phase_status AS "phaseStatus", updated_at AS "updatedAt" FROM central_runs WHERE (${after}::text IS NULL OR id > ${after}) ORDER BY id LIMIT ${limit + 1}`;
+    const runs = rows.slice(0, limit);
+    const last = runs.at(-1);
+    return { runs, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify([last.id])).toString("base64url") : null };
+  }
   async get(id: string): Promise<SupervisorRequest> {
     if (!validEncoding(id)) throw new RequestError("invalid", "invalid request encoding");
     return this.getRequest(this.db, id);

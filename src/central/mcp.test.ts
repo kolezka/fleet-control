@@ -77,6 +77,8 @@ function fakeRequests(local: Requests): CentralRequests {
   return new Proxy(local, {
     get(target, property) {
       if (property === "list") return async (filter: Parameters<Requests["list"]>[0]) => ({ requests: target.list(filter), nextCursor: null });
+      if (property === "runsById") return async (ids: string[]) => target.runs().filter((run) => ids.includes(run.id));
+      if (property === "listRuns") return async () => ({ runs: target.runs(), nextCursor: null });
       if (property === "gate") return async () => { throw new Error("unscoped gate not allowed for supervisors"); };
       if (property === "gateScoped") return async (runId: string, phase: string, revision: number, owner: string, guard: RequestMutationGuard) => {
         if (typeof guard !== "function") throw new Error("access denied");
@@ -269,6 +271,8 @@ test("request tools enforce role, principal ownership and revision scope", async
     const ownerTools = (await owner.client.listTools()).tools.map((tool) => tool.name);
     const operatorTools = (await alice.client.listTools()).tools.map((tool) => tool.name);
     expect(ownerTools).not.toContain("request_list");
+    expect(ownerTools).not.toContain("run_list");
+    expect(operatorTools).toContain("run_list");
     expect(ownerTools).not.toContain("request_resolve");
     expect(operatorTools).not.toContain("request_create");
     expect(operatorTools).not.toContain("request_gate");
@@ -286,6 +290,7 @@ test("request tools enforce role, principal ownership and revision scope", async
       ["request_withdraw", { requestId: req.id, actor: supervisor.name, reason: "steal" }],
       ["request_get", { requestId: req.id }],
       ["request_list", {}],
+      ["run_list", {}],
       ["request_resolve", { requestId: req.id, response: "approve", expectedRevision: 1 }],
     ] as [string, Record<string, unknown>][]) expect((await call(other.client, name, args)).isError).toBe(true);
     for (const [name, args, key, foreignId] of [
@@ -299,6 +304,8 @@ test("request tools enforce role, principal ownership and revision scope", async
     }
     expect(result(await call(alice.client, "request_get", { requestId: req.id })).request.id).toBe(req.id);
     expect(result(await call(alice.client, "request_list", {})).requests).toHaveLength(1);
+    expect(result(await call(alice.client, "request_list", {})).runs.map((run: { id: string; orchestrator: string }) => [run.id, run.orchestrator])).toEqual([["run-a", supervisor.name]]);
+    expect(result(await call(alice.client, "run_list", {})).runs.map((run: { id: string; orchestrator: string }) => [run.id, run.orchestrator])).toEqual([["run-a", supervisor.name]]);
     const answer = result(await call(alice.client, "request_resolve", { requestId: req.id, response: "approve", expectedRevision: 1, actor: "forged" })).request;
     expect(answer.resolvedBy).toBe("alice");
     expect(result(await call(owner.client, "request_gate", { runId: "run-a", phase: "plan", revision: 1 })).approved).toBe(true);

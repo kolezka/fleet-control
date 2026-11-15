@@ -9,9 +9,16 @@ type Requests = CentralRequests;
 // An operator reads everything and relays human answers under its own name.
 export function operatorRequests(requests: Requests, principal: Extract<Principal, { role: "operator" }>) {
   return {
+    // `runs` holds only the runs this page refers to, plus the run asked for; `runs()` pages through all of them.
     async list(filter: Parameters<Requests["list"]>[0]) {
       const page = await requests.list(filter);
-      return { runs: (await requests.runs()).map(displayRun), requests: page.requests.map(displayRequest), nextCursor: page.nextCursor };
+      const ids = page.requests.map((request) => request.runId);
+      if (filter?.runId !== undefined) ids.push(filter.runId);
+      return { runs: (await requests.runsById(ids)).map(displayRun), requests: page.requests.map(displayRequest), nextCursor: page.nextCursor };
+    },
+    async runs(page: Parameters<Requests["listRuns"]>[0]) {
+      const result = await requests.listRuns(page);
+      return { runs: result.runs.map(displayRun), nextCursor: result.nextCursor };
     },
     get: async (requestId: string) => displayRequest(await requests.get(requestId)),
     resolve: async (input: Omit<Parameters<Requests["resolve"]>[0], "actor">) => displayRequest(await requests.resolve({ ...input, actor: principal.name })),
