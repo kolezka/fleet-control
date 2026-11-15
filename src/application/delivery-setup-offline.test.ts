@@ -14,6 +14,7 @@ for (const failure of ["mkdtemp", "write"] as const) {
         events.push({ status, detail });
         return command = { ...command, status };
       },
+      deliveryOutcome: (id: string, status: CommandStatus, detail: string): Command => store.transition(id, status, "service", detail),
     };
     const io = {
       mkdtemp: async (_prefix: string) => { calls.push("mkdtemp"); if (failure === "mkdtemp") throw new Error("secret-token"); return "/fake/message-dir"; },
@@ -37,6 +38,7 @@ test("store transition failure propagates and still cleans up", async () => {
   const store = {
     get: () => command,
     transition: (_id: string, status: CommandStatus) => { if (status === "delivery_unknown") throw error; return { ...command, status }; },
+    deliveryOutcome: (id: string, status: CommandStatus): Command => store.transition(id, status),
   };
   const io = {
     mkdtemp: async (_prefix: string) => "/fake/message-dir",

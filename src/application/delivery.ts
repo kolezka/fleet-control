@@ -39,23 +39,24 @@ export class Deliverer {
     try {
       dir = await this.io.mkdtemp(join(tmpdir(), "fleet-control-msg-"));
     } catch {
-      return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+      return this.commands.deliveryOutcome(id, "delivery_unknown", "delivery setup failed");
     }
     try {
       const file = join(dir, `${c.id}.txt`);
       try {
         await this.io.write(file, messageFor(c));
       } catch {
-        return this.commands.transition(id, "delivery_unknown", "service", "delivery setup failed");
+        return this.commands.deliveryOutcome(id, "delivery_unknown", "delivery setup failed");
       }
       let result: SendResult;
       try {
         result = await this.send(c.target, file);
       } catch {
-        return this.commands.transition(id, "delivery_unknown", "service", "fleet send failed with an exception");
+        return this.commands.deliveryOutcome(id, "delivery_unknown", "fleet send failed with an exception");
       }
       const { status, detail } = classify(result, c.target);
-      return this.commands.transition(id, status, "service", detail);
+      // The recipient may have answered already; then the answer stays and this is recorded beside it.
+      return this.commands.deliveryOutcome(id, status, detail);
     } finally {
       try {
         await this.io.rm(dir);

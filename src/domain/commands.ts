@@ -33,9 +33,10 @@ export class CommandError extends Error {
 }
 
 // Who may move a command from which state. Delivery outcomes come only from the service itself.
+// The recipient may answer while a send is still in flight: the text can be visible before the sender returns.
 export const commandTransitions: Record<CommandStatus, CommandStatus[]> = {
   queued: ["delivering", "accepted", "rejected"],
-  delivering: ["delivered", "queued", "delivery_unknown"],
+  delivering: ["delivered", "queued", "delivery_unknown", "accepted", "rejected"],
   delivered: ["accepted", "rejected"],
   delivery_unknown: ["accepted", "rejected"],
   claimed: [],
@@ -47,4 +48,5 @@ export const commandTransitions: Record<CommandStatus, CommandStatus[]> = {
 };
 
 export const MAX_TEXT = 4000;
+export const MAX_ACTOR = 256;
 export const sessionNamePattern = /^[A-Za-z0-9._-]+$/;

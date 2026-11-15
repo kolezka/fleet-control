@@ -1,7 +1,7 @@
 // Durable command queue. Each state change is a row in command_events, so the history survives restarts.
 // Queued, delivered, accepted and completed are separate facts; none implies the next one.
 import type { Database } from "bun:sqlite";
-import { type CommandStatus, type Command, type CommandEvent, CommandError, commandTransitions, MAX_TEXT, sessionNamePattern } from "../domain/commands.ts";
+import { type CommandStatus, type Command, type CommandEvent, CommandError, commandTransitions, MAX_ACTOR, MAX_TEXT, sessionNamePattern } from "../domain/commands.ts";
 
 export class Commands {
   constructor(
@@ -28,11 +28,32 @@ export class Commands {
     )`);
   }
 
-  // A delivery cut off by a crash or restart may have reached the pane, so it becomes unknown, not queued.
+  // A delivery cut off by a crash or restart may have reached the pane, so its outcome is unknown, not queued.
+  // This covers a command the recipient answered before the sender returned: its status stays.
   reconcileAfterRestart(): string[] {
-    const stuck = this.list("delivering").map((c) => c.id);
-    for (const id of stuck) this.transition(id, "delivery_unknown", "service", "service restarted during delivery");
+    // SQLite returns the other columns from the row that holds MAX(seq).
+    const open = this.db.query<{ id: string; status: string }, []>(
+      `SELECT command_id AS id, status, MAX(seq) FROM command_events WHERE status IN (${deliveryEvents}) GROUP BY command_id`,
+    ).all().filter((row) => row.status === "delivering").map((row) => row.id);
+    const stuck = [...new Set([...this.list("delivering").map((c) => c.id), ...open])];
+    for (const id of stuck) this.deliveryOutcome(id, "delivery_unknown", "service restarted during delivery");
     return stuck;
+  }
+
+  // Records what the sender reported. If the recipient answered while the send was in flight,
+  // the answer stands and the outcome is kept as an event only.
+  deliveryOutcome(id: string, outcome: "delivered" | "delivery_unknown", detail: string): Command {
+    return this.db.transaction(() => {
+      const c = this.get(id);
+      if (c.status === "delivering") return this.transition(id, outcome, "service", detail);
+      const last = this.db.query<{ status: string }, [string]>(
+        `SELECT status FROM command_events WHERE command_id = ? AND status IN (${deliveryEvents}) ORDER BY seq DESC LIMIT 1`,
+      ).get(id);
+      if (last?.status !== "delivering") throw new CommandError("conflict", `${id} is ${c.status}; no delivery is in progress`);
+      if (!detail.isWellFormed()) throw new CommandError("invalid", "command event fields must contain valid Unicode");
+      this.event(id, outcome, "service", detail, this.now().toISOString());
+      return c;
+    })();
   }
 
   submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): { command: Command; created: boolean } {
@@ -55,6 +76,8 @@ export class Commands {
         }
         return { command: existing, created: false };
       }
+      // Checked after the replay lookup, so a record stored before this limit still replays.
+      if (actor.length > MAX_ACTOR) throw new CommandError("invalid", `actor is longer than ${MAX_ACTOR} characters`);
       const at = this.now().toISOString();
       const id = `cmd-${crypto.randomUUID()}`;
       this.db
@@ -75,6 +98,7 @@ export class Commands {
       if (!actor.isWellFormed() || !detail.isWellFormed()) {
         throw new CommandError("invalid", "command event fields must contain valid Unicode");
       }
+      if (actor.length > MAX_ACTOR) throw new CommandError("invalid", `actor is longer than ${MAX_ACTOR} characters`);
       const at = this.now().toISOString();
       this.db.query("UPDATE commands SET status = ?, updated_at = ? WHERE id = ?").run(to, at, id);
       this.event(id, to, actor, detail, at);
@@ -109,6 +133,9 @@ export class Commands {
     this.db.query("INSERT INTO command_events (command_id, status, actor, detail, at) VALUES (?, ?, ?, ?, ?)").run(id, status, actor, detail, at);
   }
 }
+
+// Events that open or close a delivery attempt.
+const deliveryEvents = "'queued', 'delivering', 'delivered', 'delivery_unknown'";
 
 const select = `SELECT id, idempotency_key AS idempotencyKey, target, actor, text, status,
   created_at AS createdAt, updated_at AS updatedAt FROM commands`;

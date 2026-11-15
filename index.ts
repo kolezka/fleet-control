@@ -23,7 +23,7 @@ const observer = "disabled" in observed ? undefined : observed;
 const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
 const commands = new Commands(store.db);
 const unknown = commands.reconcileAfterRestart();
-if (unknown.length) console.warn(`marked delivery_unknown after restart: ${unknown.join(", ")}`);
+if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
 const server = serve(
   {

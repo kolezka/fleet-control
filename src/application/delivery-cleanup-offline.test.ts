@@ -23,6 +23,7 @@ for (const outcome of ["delivered", "delivery_unknown", "store failure"] as cons
         events.push({ status, detail });
         return command = { ...command, status };
       },
+      deliveryOutcome: (id: string, status: CommandStatus, detail: string): Command => store.transition(id, status, "service", detail),
     };
     const io = {
       mkdtemp: async (_prefix: string) => "/fake/message-dir",
