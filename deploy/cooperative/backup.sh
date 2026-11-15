@@ -4,8 +4,9 @@
 # Dumps database "fleet" from the postgres container (custom format, file mode 0600, refuses to
 # overwrite), then lists the archive with pg_restore to check it is readable. With --check-restore
 # it also restores the archive into a throwaway database in the same server, compares the table
-# list and row counts of schema fleet_cooperative_v1 with the live database and drops the
-# throwaway database again. The live database is only read.
+# list, row counts and row content digests of schema fleet_cooperative_v1 with the live database
+# (schema-fingerprint.sql next to this script), prints one fingerprint of the restored schema and
+# drops the throwaway database again. Row contents are never printed. The live database is only read.
 # A backup still needs a second copy on another machine; this script does not copy it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,6 +14,8 @@ out="${1:?new archive path}"
 check_restore="${2:-}"
 [[ -z "$check_restore" || "$check_restore" == "--check-restore" ]] || { echo "unknown option: $check_restore" >&2; exit 2; }
 [[ -e "$out" ]] && { echo "refusing to overwrite $out" >&2; exit 1; }
+fingerprint_sql="$here/schema-fingerprint.sql"
+[[ -z "$check_restore" || -r "$fingerprint_sql" ]] || { echo "missing $fingerprint_sql" >&2; exit 1; }
 umask 077
 cd "$here"
 pg() { docker compose exec -T postgres "$@"; }
@@ -33,23 +36,33 @@ cleanup() { pg dropdb -U postgres --if-exists "$scratch" >/dev/null 2>&1 || echo
 trap cleanup EXIT
 pg createdb -U postgres "$scratch"
 pg pg_restore -U postgres -d "$scratch" --exit-on-error --no-owner --no-privileges < "$out"
-counts() {
-  # One query: a list of per-table counts joined with UNION ALL, run with \gexec.
-  pg psql -U postgres -d "$1" -XAtq -v ON_ERROR_STOP=1 <<SQL
-SELECT string_agg(format('SELECT %L || '' '' || count(*) FROM %I.%I', table_name, table_schema, table_name), ' UNION ALL ' ORDER BY table_name)
-FROM information_schema.tables WHERE table_schema = '$schema' AND table_type = 'BASE TABLE' \gexec
-SQL
-}
-live="$(counts fleet)"
-restored="$(counts "$scratch")"
-[[ -n "$live" ]] || { echo "no tables in $schema" >&2; exit 1; }
-tables="$(wc -l <<< "$live" | tr -d ' ')"
-if [[ "$(cut -d' ' -f1 <<< "$live")" != "$(cut -d' ' -f1 <<< "$restored")" ]]; then echo "restore check failed: table lists differ" >&2; exit 1; fi
+# One "<table> <row count> <digest>" line per table, then a last line "fingerprint <sha256>".
+# The file goes in on stdin: the container does not see this directory.
+fingerprint() { pg psql -U postgres -d "$1" -XAtq -v ON_ERROR_STOP=1 -v schema="$schema" < "$fingerprint_sql"; }
+# psql exits 3 on a failed query. Here 3 means "differs", so a failed read becomes 1.
+live="$(fingerprint fleet)" || { echo "restore check failed: could not read $schema in the live database" >&2; exit 1; }
+restored="$(fingerprint "$scratch")" || { echo "restore check failed: could not read $schema in the restored database" >&2; exit 1; }
+last_line='^fingerprint [0-9a-f]{64}$'
+restored_fingerprint="$(tail -n 1 <<< "$restored")"
+[[ "$(tail -n 1 <<< "$live")" =~ $last_line && "$restored_fingerprint" =~ $last_line ]] || { echo "restore check failed: unexpected fingerprint output" >&2; exit 1; }
+live="$(sed '$d' <<< "$live")"
+restored="$(sed '$d' <<< "$restored")"
+names() { sed 's/ [0-9]* [0-9a-f]*$//'; }
+if [[ "$(names <<< "$live")" != "$(names <<< "$restored")" ]]; then echo "restore check failed: table lists differ" >&2; exit 1; fi
+tables="$(wc -l <<< "$restored" | tr -d ' ')"
+# Restore the same archive on another machine and run schema-fingerprint.sql there: same value.
+echo "restored fingerprint ${restored_fingerprint#fingerprint } schema $schema tables $tables"
 if [[ "$live" == "$restored" ]]; then
-  echo "restore check ok: $tables tables, row counts equal to the live database"
+  echo "restore check ok: $tables tables, row counts and contents equal to the live database"
 else
-  # Writes after the dump make the live counts move on; show both for the operator to judge.
-  echo "restore check: $tables tables restored; row counts differ from live (writes since the dump?):"
-  diff <(echo "$live") <(echo "$restored") | sed -n 's/^[<>] /  /p' >&2 || true
+  differing="" detail=""
+  while IFS= read -r live_line <&3 && IFS= read -r restored_line <&4; do
+    [[ "$live_line" == "$restored_line" ]] && continue
+    differing+="${differing:+, }${live_line% * *}"
+    detail+="  live     $live_line"$'\n'"  restored $restored_line"$'\n'
+  done 3<<< "$live" 4<<< "$restored"
+  # Writes after the dump make the live database move on; show both sides for the operator to judge.
+  echo "restore check: $tables tables restored; row counts or contents differ from live in: $differing (writes since the dump?)"
+  printf '%s' "$detail" >&2
   exit 3
 fi
