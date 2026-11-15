@@ -194,7 +194,7 @@ The owner approved upgrading the installed test-fleet service. It now runs `main
 - **Before the swap:** the new checkout was built beside the running one (`git archive` of `735c1f8` plus the pinned submodule files, `bun install --frozen-lockfile`). The state database was copied with SQLite's online backup while the old service ran. The new code was started on `127.0.0.1:4879` against a scratch copy of that database and read the existing 2 commands, 1 run and 2 requests. The table definitions of both versions are the same text, so there is no migration.
 - **Swap:** `launchctl bootout`, old checkout renamed aside, new one moved into place, `READONLY_FLEET_BIN` removed from the plist so the service uses the pinned CLI inside its checkout, `fleet sync` to bring `watchdog.sh` in the test fleet directory to the pinned version, `launchctl bootstrap`.
 - **Checked afterwards, from `.4` itself with the orchestrator token:** no token 401, wrong token 401, plain HTTP and loopback do not answer, `/api/whoami` = `mini-orchestrator`. The earlier commands, run and requests are still there (one request still open). With a read-only terminal WebSocket open on `probe-shell`, a command submitted with a made-up actor was recorded as `mini-orchestrator`, went `queued`, `delivering`, `delivered`, and its text appeared in the viewer stream and in the pane. The same idempotency key returned the same command. After `launchctl kickstart -k` the service came back with all three commands and both requests.
-- **Kept for rollback on `.4`:** the old checkout at `~/Development/fleet-control-service.before-735c1f8`, and in `~/.config/fleet-control/rollback-735c1f8/` the old plist, the old `watchdog.sh` and `state.before-upgrade.db` (SQLite backup from before the swap, integrity check ok). Rollback was not exercised.
+- **Kept for rollback on `.4`:** in `~/.config/fleet-control/rollback-735c1f8/` the old plist, the old `watchdog.sh` and `state.before-upgrade.db` (SQLite backup from before the swap, integrity check ok). The old checkout (`fleet-control-service.before-735c1f8`) was deleted the same day on the owner's instruction. Before deleting, it was compared with git: it was commit `3c863f4` plus three doc files and one helper script, all of which exist in the repository history, and a rebuild from `3c863f4` with `bun install --frozen-lockfile` gave the same files. So the old release is rebuilt from git, not restored from a copy. Rollback was not exercised.
 - **Left behind:** the test session `probe-shell` (`cat`, no agent) was started for the check and still runs; it had been gone since the last reboot. One check command (`cmd-c703bf04`) is in the state database. `~/Development/agent-fleet-dev` is no longer used by the service and was not removed. The cooperative adapter on `.4` was not touched.
 - **Not shown by this:** a browser or the MacBook MCP client against the upgraded service, a real agent, the recipient answer during a send against a live fleet (only the store tests cover it), a reboot of `.4`.
 
@@ -203,13 +203,15 @@ Roll back:
 ```bash
 launchctl bootout gui/$(id -u)/pl.raqz.fleet-control
 mv ~/Development/fleet-control-service ~/Development/fleet-control-service.failed-735c1f8
-mv ~/Development/fleet-control-service.before-735c1f8 ~/Development/fleet-control-service
+mkdir ~/Development/fleet-control-service
+git -C <repository clone> archive 3c863f4 | tar -x -C ~/Development/fleet-control-service
+(cd ~/Development/fleet-control-service && bun install --frozen-lockfile)
 cp -p ~/.config/fleet-control/rollback-735c1f8/pl.raqz.fleet-control.plist ~/Library/LaunchAgents/
 cp -p ~/.config/fleet-control/rollback-735c1f8/watchdog.sh ~/.local/share/fleet-control/test-fleet/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pl.raqz.fleet-control.plist
 ```
 
-The state database needs no step: both versions use the same tables. The copy from before the swap lacks the one check command sent afterwards.
+The old plist points `READONLY_FLEET_BIN` at `~/Development/agent-fleet-dev`, which is still there and must stay for as long as this rollback is wanted. The state database needs no step: both versions use the same tables. The copy from before the swap lacks the one check command sent afterwards.
 
 ## Not implemented in this project
 
