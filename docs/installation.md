@@ -140,7 +140,9 @@ Update the service (run on `.4`, as done on 2026-11-15; evidence in [implementat
 5. Run `fleet sync` with `FLEET_CONF` set, so `watchdog.sh` in the fleet directory matches the CLI.
 6. `launchctl bootstrap gui/$(id -u) <plist>`. An unauthenticated `GET /api/sessions` must answer 401.
 
-Keep the old checkout and the copies until the new release has been used. If the old checkout is removed earlier, first check that it can be rebuilt from a commit in git (compare the files, run the frozen install once) and write that commit into the rollback steps. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to.
+Keep the old checkout and the copies until the new release has been used. If the old checkout is removed earlier, first check that it can be rebuilt from a commit in git (compare the files, run the frozen install once) and write that commit into the rollback steps. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to. The rollback of the 2026-11-15 update was drilled once in both directions; see the implementation status.
+
+Starting an agent with `fleet start` at the pinned CLI needs a Claude Code footer that says `bypass permissions on` or `for shortcuts`. `--permission-mode dontAsk` and auto mode show neither, and the start then fails after 90 s.
 
 ## launchd draft (history)
 

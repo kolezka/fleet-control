@@ -67,13 +67,38 @@ deploy/cooperative/backup.sh <new archive path> --check-restore
 
 It dumps database `fleet` from the postgres container (custom format, mode 0600, never
 overwrites) and lists the archive with `pg_restore`. With `--check-restore` it restores the archive
-into a throwaway database on the same server, compares table names and row counts of
-`fleet_cooperative_v1` with the live database and drops the throwaway database. Exit code 3 means
-the counts differ, usually because commands arrived after the dump; run it again when idle.
+into a throwaway database on the same server and compares `fleet_cooperative_v1` with the live
+database: table names, row counts and a digest of the row contents of every table. Then it drops
+the throwaway database. It prints table names, counts and digests, never rows. Exit code 3 means
+counts or contents differ, usually because commands arrived after the dump. The output names the
+tables; run it again when idle.
 
-The check does not compare grants or row contents, and the archive is not a backup until a
-second copy sits on another machine. Nothing schedules this script. There is no restore script:
-restoring over a live installation needs a stopped stack and a human decision.
+The check also prints one value for the whole restored schema, whether or not live matches:
+
+```
+restored fingerprint <sha256> schema fleet_cooperative_v1 tables <n>
+```
+
+To check the copy on a second machine, restore the archive there into a throwaway database and run
+`schema-fingerprint.sql` (the query `backup.sh` uses, so keep the two files together) with psql:
+
+```bash
+createdb restore_check
+pg_restore -d restore_check --exit-on-error --no-owner --no-privileges <archive>
+psql -X -d restore_check -f deploy/cooperative/schema-fingerprint.sql
+dropdb restore_check
+```
+
+The last line, `fingerprint <sha256>`, must equal the value `backup.sh` printed. With PostgreSQL in
+a container, prefix the tools with `docker exec -i <container>`, add `-U postgres`, and give
+`pg_restore` and `psql` their file on stdin (`< <archive>`, `< deploy/cooperative/schema-fingerprint.sql`)
+in place of the file argument. The query only reads. It works on any database: add
+`-v schema=<name>` for another schema. The query pins the settings that change how values print,
+but compare between servers of the same PostgreSQL major version.
+
+The check does not compare grants, sequences or table definitions, and the archive is not a backup
+until a second copy sits on another machine. Nothing schedules this script. There is no restore
+script: restoring over a live installation needs a stopped stack and a human decision.
 
 ### Recovery after a crash
 
