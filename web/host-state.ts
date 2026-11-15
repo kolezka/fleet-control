@@ -60,7 +60,7 @@ export function parseHostList(body: unknown): HostList | null {
           return r && typeof r.name === "string" && typeof r.url === "string" && /^https?:\/\//.test(r.url) ? [{ name: r.name, url: r.url }] : [];
         })
       : [];
-    return { mode: "direct", hosts: [{ id: LOCAL_ID, name: self.name, apiBase: "/api", direct: true }], peers };
+    return { mode: "direct", hosts: [{ id: LOCAL_ID, name: self.name, apiBase: "./api", direct: true }], peers };
   }
   return null;
 }

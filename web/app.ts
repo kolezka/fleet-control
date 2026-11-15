@@ -43,7 +43,7 @@ const WRITE_TIMEOUT_MS = 15000;
 async function hostCall(host: HostInfo, path: string, init: RequestInit = {}, timeoutMs = READ_TIMEOUT_MS): Promise<{ status: number | null; outcome: Outcome<unknown> }> {
   try {
     const res = await fetch(`${host.apiBase}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-    if (res.status === 401 && host.direct) location.assign("/login");
+    if (res.status === 401 && host.direct) location.assign("./login");
     const body = await res.json().catch(() => null);
     return { status: res.status, outcome: interpretResponse(res.status, body) };
   } catch (e) {
@@ -102,7 +102,7 @@ function renderNav() {
   // A single host service only links to other hosts' own services; it never reads their sessions.
   const peerLinks = peers.map((p) => `<section class="hostgroup peer" aria-label="${esc(p.name)}"><a class="hostbutton" href="${esc(p.url)}" target="_blank" rel="noopener">${HOST_ICON}<span class="hostidentity"><strong>${esc(p.name)}</strong><small>Own service · open</small></span></a></section>`).join("");
   const foot = mode === "gateway"
-    ? `${installer ? '<a class="footlink" href="/install">Install on this machine</a>' : ""}<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
+    ? `${installer ? '<a class="footlink" href="./install">Install on this machine</a>' : ""}<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
     : `<span>Service runs on this host</span><span>This browser is a read-only client</span>`;
   setHtml($("sidebar"), `<div class="sidebarhead"><span>Hosts</span><span>${fleet.order.length + peers.length}</span></div>${groups}${peerLinks}<div class="sidebarfoot">${foot}</div>`);
 }
@@ -116,7 +116,7 @@ type Pane = { stop(): void };
 const RETRY_MS = [1000, 2000, 5000, 10000, 30000];
 
 
-function openPane(s: Session, el: HTMLElement, apiBase: string): Pane {
+function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
   const status = el.closest(".terminal")!.querySelector(".termstate")!;
   let term: Terminal | null = null;
   let ws: WebSocket | null = null;
@@ -125,7 +125,9 @@ function openPane(s: Session, el: HTMLElement, apiBase: string): Pane {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const connect = () => {
-    const url = new URL(`${apiBase}/sessions/${encodeURIComponent(s.name)}/terminal?cols=80&rows=24`, location.href);
+    // A host service also takes the session as a query, which a prefix proxy can route on one path.
+    const path = host.direct ? `${host.apiBase}/terminal?session=${encodeURIComponent(s.name)}&cols=80&rows=24` : `${host.apiBase}/sessions/${encodeURIComponent(s.name)}/terminal?cols=80&rows=24`;
+    const url = new URL(path, location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const sock = new WebSocket(url);
     ws = sock;
@@ -212,7 +214,7 @@ function renderPanes(h: HostState | undefined) {
       box.innerHTML = running.map((s) =>
         `<article class="terminal" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span class="modelinfo"></span><span>tmux via fleet attach --read-only</span></footer></article>`,
       ).join("");
-      for (const s of running) panes.set(s.name, openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement, h.info.apiBase));
+      for (const s of running) panes.set(s.name, openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement, h.info));
     }
   }
   // Labels and emphasis change in place, so refreshes never reopen a viewer.
@@ -476,8 +478,8 @@ async function loadHostList() {
   if (hostListBusy) return;
   hostListBusy = true;
   try {
-    const res = await fetch("/api/hosts", { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
-    if (res.status === 401) { location.assign("/login"); return; }
+    const res = await fetch("./api/hosts", { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    if (res.status === 401) { location.assign("./login"); return; }
     const body = res.ok ? await res.json().catch(() => null) : null;
     const list = parseHostList(body);
     if (!list) { hostListError = `Cannot read the host list (${res.status}). Host state is unknown.`; render(); return; }

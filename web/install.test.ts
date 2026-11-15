@@ -91,7 +91,7 @@ test("apply stays disabled until the exact previewed options and a code are pres
 
   await p.type("config", "/p/client.json");
   await p.fire("optionsForm:submit");
-  expect(p.posts()).toEqual([{ path: "/api/install/plan", body: { role: "client", config: "/p/client.json" } }]);
+  expect(p.posts()).toEqual([{ path: "./api/install/plan", body: { role: "client", config: "/p/client.json" } }]);
   expect(p.element("plan").innerHTML).toContain("Plan for client");
   expect(p.element("apply").disabled).toBe(false);
 
@@ -117,7 +117,7 @@ test("apply sends the previewed options, digest and code once, then needs a new 
   await p.fire("optionsForm:submit");
   await p.type("applyCode", " code-from-file ");
   await p.fire("applyForm:submit");
-  expect(p.posts().at(-1)).toEqual({ path: "/api/install/apply", body: { role: "client", config: "/p/client.json", digest, code: "code-from-file" } });
+  expect(p.posts().at(-1)).toEqual({ path: "./api/install/apply", body: { role: "client", config: "/p/client.json", digest, code: "code-from-file" } });
   expect(p.element("applyCode").value).toBe("");
   expect(p.element("jobText").textContent).toContain("is running");
   expect(p.element("jobText").dataset.tone).toBe("warn");
