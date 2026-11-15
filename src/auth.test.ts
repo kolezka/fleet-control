@@ -69,6 +69,7 @@ describe("service with auth", () => {
     expect((await fetch(url("/api/commands"), { method: "POST", body: "{}" })).status).toBe(401);
     expect((await fetch(url("/mcp"), { method: "POST", body: "{}" })).status).toBe(401);
     expect((await fetch(url("/api/sessions/x/terminal"))).status).toBe(401);
+    expect((await fetch(url("/api/terminal?session=x"))).status).toBe(401);
     await expect(mcp(null)).rejects.toThrow();
     // the sign-in page itself stays reachable
     expect((await fetch(url("/login"))).status).toBe(200);

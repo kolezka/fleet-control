@@ -13,7 +13,7 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   const calls: { path: string; init?: RequestInit }[] = [];
   const fetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
-    const value = path === "/api/hosts" ? { hosts } : respond(path, init);
+    const value = path === "./api/hosts" ? { hosts } : respond(path, init);
     return { status: 200, ok: true, json: async () => value };
   };
   let source = await Bun.file(new URL("./app.ts", import.meta.url)).text();

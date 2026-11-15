@@ -31,7 +31,7 @@ test("host list: gateway shape, direct shape, and refusal of unsafe apiBase", ()
   expect(g?.hosts.map((h) => h.id)).toEqual(["a"]);
   const d = parseHostList({ self: { name: "mini", url: null }, peers: [{ name: "x", url: "http://h/" }, { name: "bad", url: "javascript:1" }] });
   expect(d?.mode).toBe("direct");
-  expect(d?.hosts[0]).toMatchObject({ apiBase: "/api", direct: true, name: "mini" });
+  expect(d?.hosts[0]).toMatchObject({ apiBase: "./api", direct: true, name: "mini" });
   expect(d?.peers).toEqual([{ name: "x", url: "http://h/" }]);
   expect(parseHostList({})).toBeNull();
 });

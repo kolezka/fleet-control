@@ -79,7 +79,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -116,6 +116,18 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     if (!auth) return h(req, srv, null);
     const who = auth.principal(req);
     return who ? h(req, srv, who) : unauthorized();
+  };
+
+  const openTerminal = (req: Request, server: any, who: Principal | null, session: string) => {
+    if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
+    if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
+    const url = new URL(req.url);
+    const size = clampSize(Number(url.searchParams.get("cols") ?? 80), Number(url.searchParams.get("rows") ?? 24));
+    if (!size || !/^[A-Za-z0-9._-]+$/.test(session)) {
+      return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
+    }
+    if (server.upgrade(req, { data: { session, ...size, principal: who?.name } })) return undefined;
+    return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
 
   const server: ReturnType<typeof Bun.serve<SocketData, Routes>> = Bun.serve<SocketData, Routes>({
@@ -246,19 +258,10 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       }),
       // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
       // a resize would resize the agent's window, since the viewer may be its only tmux client.
-      "/api/sessions/:name/terminal": {
-        GET: guard((req, server, who) => {
-          if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
-          if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
-          const url = new URL(req.url);
-          const size = clampSize(Number(url.searchParams.get("cols") ?? 80), Number(url.searchParams.get("rows") ?? 24));
-          if (!size || !/^[A-Za-z0-9._-]+$/.test(req.params.name)) {
-            return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
-          }
-          if (server.upgrade(req, { data: { session: req.params.name, ...size, principal: who?.name } })) return undefined;
-          return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
-        }),
-      },
+      "/api/sessions/:name/terminal": { GET: guard((req, server, who) => openTerminal(req, server, who, req.params.name)) },
+      // Same stream with the session in the query, so a proxy that routes WebSocket upgrades by exact
+      // path (the DeepSeek Harness panel) can carry every session over one path.
+      "/api/terminal": { GET: guard((req, server, who) => openTerminal(req, server, who, new URL(req.url).searchParams.get("session") ?? "")) },
     },
     websocket: {
       async open(ws) {

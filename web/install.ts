@@ -19,7 +19,7 @@ const currentKey = () => JSON.stringify(payload(form()));
 
 async function call(path: string, body?: unknown): Promise<{ status: number | null; body: unknown }> {
   try {
-    const res = await fetch("/api/install" + path, { signal: AbortSignal.timeout(TIMEOUT_MS), ...(body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+    const res = await fetch("./api/install" + path, { signal: AbortSignal.timeout(TIMEOUT_MS), ...(body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
     return { status: res.status, body: await res.json().catch(() => null) };
   } catch {
     return { status: null, body: null };
