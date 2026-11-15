@@ -98,13 +98,13 @@ LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` 
 
 | Item | Path on `.4` |
 | --- | --- |
-| Service checkout (rsync of the branch, no `.git`) | `~/Development/fleet-control-service` |
+| Service checkout (since 2026-11-15: `git archive` of `main` at `735c1f8` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`) | `~/Development/fleet-control-service` |
 | Plist | `~/Library/LaunchAgents/pl.raqz.fleet-control.plist` |
 | fleet.conf (must sit in `FLEET_DIR`: agent-fleet's `watchdog.sh` reads `$FLEET_DIR/fleet.conf`) | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
 | State database | `~/Library/Application Support/fleet-control/state.db` |
 | Tokens (hashes only), certificate, key, public CA, orchestrator token | `~/.config/fleet-control/` (dir 700, key and tokens 600) |
 | Log | `~/Library/Logs/fleet-control.log` |
-| fleet CLI with `attach --read-only` | `~/Development/agent-fleet-dev/scripts/fleet` |
+| fleet CLI (since 2026-11-15 the pinned copy inside the checkout; `READONLY_FLEET_BIN` was removed from the plist) | `~/Development/fleet-control-service/vendor/agent-fleet/scripts/fleet` |
 
 Certificate: issued by the MacBook's existing mkcert CA (`mkcert me@MacBook-Pro-me.local`, already trusted in the MacBook System keychain), SAN `IP:192.168.50.4`, valid until 2029-02-09. The CA private key never left the MacBook; `.4` has only the public `ca.pem` so local clients there can verify the server.
 
@@ -131,7 +131,16 @@ claude mcp remove --scope user fleet-control-mini
 The test session is not started by launchd. After a reboot of `.4` the service comes back but `probe-shell` does not:
 `tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"` (with `/opt/homebrew/bin` on PATH, `NO_COLOR` unset).
 
-Update the service from the worktree: `rsync -az --delete --exclude node_modules --exclude .git --exclude .agents ./ me@192.168.50.4:Development/fleet-control-service/`, then `bun install --frozen-lockfile` there and `kickstart -k`.
+Update the service (run on `.4`, as done on 2026-11-15; evidence in [implementation status](implementation-status.md)):
+
+1. Build the new checkout beside the running one: `git archive <commit> | tar -x -C <new>`, then `git -C vendor/agent-fleet archive HEAD | tar -x -C <new>/vendor/agent-fleet` with the submodule at the pinned commit, then `bun install --frozen-lockfile` in `<new>`.
+2. Copy the state database while the service runs: `sqlite3 <state.db> ".backup <copy>"`. Keep the old plist and `watchdog.sh` too.
+3. Start the new code on a loopback port against a scratch copy of that database and read `/api/commands` and `/api/requests`. Stop it again and check the port is free.
+4. `launchctl bootout gui/$(id -u)/pl.raqz.fleet-control`, rename the old checkout aside, move the new one into place.
+5. Run `fleet sync` with `FLEET_CONF` set, so `watchdog.sh` in the fleet directory matches the CLI.
+6. `launchctl bootstrap gui/$(id -u) <plist>`. An unauthenticated `GET /api/sessions` must answer 401.
+
+Keep the old checkout and the copies until the new release has been used. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to.
 
 ## launchd draft (history)
 
