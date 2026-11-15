@@ -32,7 +32,7 @@ Dependencies point one way: transport depends on application, application on dat
 | `src/central/test-fixtures/` | Helpers used only by tests |
 | `src/host-agent/domain/` | Delivery attempt and receipt types |
 | `src/host-agent/data/` | Journal, outbox and executor lease (SQLite) |
-| `src/host-agent/application/` | `DeliveryExecutor` (journals one delivery attempt and classifies its outcome). Parked: no runtime starts it |
+| `src/host-agent/application/` | `DeliveryExecutor` (journals one delivery attempt and classifies its outcome). Parked by owner decision: no runtime starts it |
 | `src/fleet/`, `src/observe/`, `src/terminal/`, `src/install/` | Adapters to the fleet CLI, Claude Code session files, the terminal viewer and the installer |
 | `web/` | The browser page |
 | `scripts/`, `deploy/` | Operational scripts and deployment files |
@@ -76,6 +76,6 @@ The guard is built by `identityFence` in `src/central/data/identity-fence.ts`, i
 
 ## Known gaps
 
-- `DeliveryExecutor` in `src/host-agent/application/`, the journal, outbox and executor lease in `src/host-agent/data/`, `src/host-agent/client.ts`, `src/central/data/attempts.ts` and the dispatch half of `src/central/agent-sockets.ts` are used only by tests. Starting them means central pushing text into terminals, which the cooperative pull design replaced. Three things are missing before that could run: the dispatch message carries no runtime instance ID although the executor requires one, nothing stops a second sender or process on the same target, and live terminal input needs the owner's authorization. Whether to wire, retire or keep these modules is an owner decision; see "Executor isolation is not established" in [central server status](central-server-status.md).
+- `DeliveryExecutor` in `src/host-agent/application/`, the journal, outbox and executor lease in `src/host-agent/data/`, `src/host-agent/client.ts`, `src/central/data/attempts.ts` and the dispatch half of `src/central/agent-sockets.ts` are used only by tests. Starting them means central pushing text into terminals, which the cooperative pull design replaced. On 2026-11-15 the owner chose to keep them parked: not wired and not removed. `src/parked-push-path.test.ts` fails if a runtime module imports one of them or calls `dispatch` on the socket registry. Three things are missing before the path could run: the dispatch message carries no runtime instance ID although the executor requires one, nothing stops a second sender or process on the same target, and live terminal input needs the owner's authorization. See "Executor isolation is not established" in [central server status](central-server-status.md).
 - The central transports still name store types in their dependency lists (`Pick<Store, method>`), so a test can inject a fake. A set of port types in `domain/` would remove those type imports; nothing depends on it today.
 - `src/client-gateway.ts` and `src/host-agent/cooperative-adapter.ts` have their own bounded readers. They are different contracts (one returns null over the limit, one takes an abort signal and a deadline) and belong to other programs.
