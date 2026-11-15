@@ -17,6 +17,7 @@ function fixture(send: Sender) {
       command = { ...command, status };
       return command;
     },
+    deliveryOutcome: (id: string, status: CommandStatus, detail: string): Command => store.transition(id, status, "service", detail),
   };
   return { deliverer: new Deliverer(store as unknown as Commands, send), events, command: () => command };
 }

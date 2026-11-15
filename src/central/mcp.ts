@@ -70,10 +70,15 @@ function registerRequestTools(server: McpServer, requests: CentralRequests, prin
   if (principal.role === "operator") {
     const operator = operatorRequests(requests, principal);
     server.registerTool("request_list", {
-      description: "List runs and requests, optionally filtered by run and status.",
+      description: "List requests, optionally filtered by run and status, with the runs those requests belong to. Use run_list for every run.",
       inputSchema: { runId: z.string().min(1).optional(), status: z.enum(["open", "resolved", "acknowledged", "stale", "withdrawn"]).optional(), limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().optional() },
       annotations: { readOnlyHint: true },
     }, async (filter) => attempt(async () => operator.list(filter)));
+    server.registerTool("run_list", {
+      description: "List every run, a page at a time in ID order.",
+      inputSchema: { limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    }, async (page) => attempt(async () => operator.runs(page)));
     server.registerTool("request_get", {
       description: "Read one request.", inputSchema: { requestId: z.string().min(1) }, annotations: { readOnlyHint: true },
     }, async ({ requestId }) => attempt(async () => ({ request: await operator.get(requestId) })));

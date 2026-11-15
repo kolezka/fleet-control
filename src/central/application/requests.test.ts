@@ -11,17 +11,28 @@ const owner = runOwner(supervisor);
 
 test("the owner record names the whole identity and is shown as the supervisor's name", async () => {
   expect(owner).toBe("central-supervisor\n" + JSON.stringify(["sup", "p-1", "host", "session"]));
+  const asked: unknown[] = [];
   const requests = {
-    list: async () => ({ requests: [{ id: "r-1", origin: owner }], nextCursor: "next" }),
-    runs: async () => [{ id: "run-1", orchestrator: owner }, { id: "run-2", orchestrator: "someone" }],
+    list: async () => ({ requests: [{ id: "r-1", runId: "run-1", origin: owner }, { id: "r-2", runId: "run-1", origin: "someone" }], nextCursor: "next" }),
+    runsById: async (ids: string[]) => { asked.push(ids); return [{ id: "run-1", orchestrator: owner }]; },
+    listRuns: async (page: unknown) => { asked.push(page); return { runs: [{ id: "run-1", orchestrator: owner }, { id: "run-2", orchestrator: "someone" }], nextCursor: "more" }; },
     get: async () => ({ id: "r-1", origin: owner }),
   } as unknown as CentralRequests;
   const use = operatorRequests(requests, operator);
   expect(await use.list({})).toEqual({
-    runs: [{ id: "run-1", orchestrator: "sup" }, { id: "run-2", orchestrator: "someone" }],
-    requests: [{ id: "r-1", origin: "sup" }],
+    runs: [{ id: "run-1", orchestrator: "sup" }],
+    requests: [{ id: "r-1", runId: "run-1", origin: "sup" }, { id: "r-2", runId: "run-1", origin: "someone" }],
     nextCursor: "next",
   } as never);
+  // Only the runs of the page are looked up, and the run asked for even when the page is empty of it.
+  expect(asked).toEqual([["run-1", "run-1"]]);
+  await use.list({ runId: "run-9" });
+  expect(asked[1]).toEqual(["run-1", "run-1", "run-9"]);
+  expect(await use.runs({ limit: 2, cursor: "c" })).toEqual({
+    runs: [{ id: "run-1", orchestrator: "sup" }, { id: "run-2", orchestrator: "someone" }],
+    nextCursor: "more",
+  } as never);
+  expect(asked[2]).toEqual({ limit: 2, cursor: "c" });
   expect(await use.get("r-1")).toEqual({ id: "r-1", origin: "sup" } as never);
 });
 

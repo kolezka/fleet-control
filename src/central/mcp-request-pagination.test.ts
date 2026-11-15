@@ -14,10 +14,21 @@ const rows = [
   { id: "e", runId: "run-a", status: "open", createdAt: "2026-01-02T00:00:00.000Z" },
 ].map((row) => ({ ...row, id: `req-00000000-0000-4000-8000-${row.id.padStart(12, "0")}`, origin: "supervisor", evidence: "[]", allowedResponses: "[]" }));
 
+const runs = ["run-a", "run-b", "run-c", "run-d", "run-e"].map((id) => ({ id, orchestrator: "supervisor" }));
+const runQueries: { query: string; values: unknown[] }[] = [];
+
 function database(): SQL {
   return (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
-    if (query.includes("FROM central_runs")) return [{ id: "run-a", orchestrator: "supervisor" }];
+    if (query.includes("FROM central_runs")) {
+      runQueries.push({ query, values });
+      if (query.includes("jsonb_array_elements_text")) {
+        const wanted = JSON.parse(values[0] as string) as string[];
+        return runs.filter((run) => wanted.includes(run.id));
+      }
+      const [after, , limit] = values as [string | null, unknown, number];
+      return runs.filter((run) => after === null || run.id > after).slice(0, limit);
+    }
     if (!query.includes("FROM central_requests")) throw new Error(`Unexpected query: ${query}`);
     const [runId, , status, , createdAt, , id, limit] = values as [string | null, unknown, string | null, unknown, string | null, unknown, string | null, number];
     return rows.filter((row) => (!runId || row.runId === runId) && (!status || row.status === status) && (!createdAt || row.createdAt > createdAt || (row.createdAt === createdAt && row.id > id!)))
@@ -56,11 +67,50 @@ test("request_list continues filtered pages through the MCP surface", async () =
     const empty = parse(await call({ runId: "run-b", status: "withdrawn", limit: 2 }));
     expect(empty.requests).toEqual([]);
     expect(empty.nextCursor).toBeNull();
+    // An empty page still names the run that was asked for.
+    expect(empty.runs.map((run: { id: string }) => run.id)).toEqual(["run-b"]);
+    const mixed = parse(await call({ limit: 2 }));
+    expect(mixed.requests.map((request: { runId: string }) => request.runId)).toEqual(["run-a", "run-b"]);
+    expect(mixed.runs.map((run: { id: string }) => run.id)).toEqual(["run-a", "run-b"]);
+    // No request_list call read the run table without naming the runs it wanted.
+    expect(runQueries.length).toBeGreaterThan(0);
+    expect(runQueries.every(({ query }) => query.includes("jsonb_array_elements_text"))).toBe(true);
     for (const changed of [{ ...filter, runId: "run-b" }, { ...filter, status: "withdrawn" }, { status: "open", limit: 2 }]) {
       const response = await call({ ...changed, cursor: first.nextCursor });
       expect(response.isError).toBe(true);
       expect((response.content as { text: string }[])[0]!.text).toMatch(/invalid.*cursor/i);
     }
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("run_list pages through every run and rejects bad cursors and limits", async () => {
+  const { client, server } = await connect();
+  try {
+    const call = (args: Record<string, unknown>) => client.callTool({ name: "run_list", arguments: args });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = parse(await call({ limit: 2, ...(cursor === undefined ? {} : { cursor }) }));
+      expect(page.runs.length).toBeLessThanOrEqual(2);
+      seen.push(...page.runs.map((run: { id: string }) => run.id));
+      cursor = page.nextCursor ?? undefined;
+      pages++;
+    } while (cursor !== undefined && pages < 10);
+    expect(seen).toEqual(runs.map((run) => run.id));
+    expect(pages).toBe(3);
+    expect(parse(await call({})).runs).toHaveLength(runs.length);
+    expect(parse(await call({ limit: 5 })).nextCursor).toBeNull();
+    const requestCursor = parse(await client.callTool({ name: "request_list", arguments: { limit: 1 } })).nextCursor;
+    for (const bad of ["", "!", "a", Buffer.from("[]").toString("base64url"), Buffer.from('["a","b"]').toString("base64url"), Buffer.from("[1]").toString("base64url"), requestCursor, "A".repeat(4097)]) {
+      const response = await call({ cursor: bad });
+      expect(response.isError).toBe(true);
+      expect((response.content as { text: string }[])[0]!.text).toMatch(/invalid cursor/i);
+    }
+    for (const limit of [0, 1001, 1.5]) expect((await call({ limit })).isError).toBe(true);
   } finally {
     await client.close();
     await server.close();
