@@ -140,7 +140,7 @@ Update the service (run on `.4`, as done on 2026-11-15; evidence in [implementat
 5. Run `fleet sync` with `FLEET_CONF` set, so `watchdog.sh` in the fleet directory matches the CLI.
 6. `launchctl bootstrap gui/$(id -u) <plist>`. An unauthenticated `GET /api/sessions` must answer 401.
 
-Keep the old checkout and the copies until the new release has been used. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to.
+Keep the old checkout and the copies until the new release has been used. If the old checkout is removed earlier, first check that it can be rebuilt from a commit in git (compare the files, run the frozen install once) and write that commit into the rollback steps. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to.
 
 ## launchd draft (history)
 
