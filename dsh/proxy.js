@@ -18,10 +18,12 @@ const MAX_REWRITE_BYTES = 8 * 1024 * 1024
  * Reads the panel settings. The token file holds one Fleet Control token for a principal of
  * its own; it is read at start and never sent to the browser.
  */
-export function readSettings(env = process.env) {
-  const upstream = env.FLEET_CONTROL_PANEL_URL
-  const tokenFile = env.FLEET_CONTROL_PANEL_TOKEN_FILE
-  if (!upstream || !tokenFile) return { error: 'Set FLEET_CONTROL_PANEL_URL and FLEET_CONTROL_PANEL_TOKEN_FILE for the DSH process.' }
+export function readSettings(env = process.env, config = {}) {
+  // The plugin row in cordis.patch.yml wins, so no change to how DSH is started is needed.
+  const upstream = config.url ?? env.FLEET_CONTROL_PANEL_URL
+  const tokenFile = config.tokenFile ?? env.FLEET_CONTROL_PANEL_TOKEN_FILE
+  const caFile = config.caFile ?? env.FLEET_CONTROL_PANEL_CA
+  if (!upstream || !tokenFile) return { error: 'Set url and tokenFile in the plugin config, or FLEET_CONTROL_PANEL_URL and FLEET_CONTROL_PANEL_TOKEN_FILE for the DSH process.' }
   let url
   try {
     url = new URL(upstream)
@@ -35,7 +37,7 @@ export function readSettings(env = process.env) {
   let ca
   try {
     token = readFileSync(tokenFile, 'utf8').trim()
-    ca = env.FLEET_CONTROL_PANEL_CA ? readFileSync(env.FLEET_CONTROL_PANEL_CA, 'utf8') : undefined
+    ca = caFile ? readFileSync(caFile, 'utf8') : undefined
   } catch {
     return { error: 'The token or CA file could not be read.' }
   }
