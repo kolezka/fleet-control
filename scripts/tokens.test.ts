@@ -85,6 +85,22 @@ test("a held lock refuses after the wait and leaves the file and lock alone", ()
   expect(readdirSync(dir)).toEqual(["tokens"]);
 });
 
+test("the refusal says whether the process that holds the lock still runs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokens-")); dirs.push(dir);
+  const file = join(dir, "tokens");
+  writeFileSync(file, base, { mode: 0o600 });
+  // The lock names its writer while a change runs.
+  expect(withLock(file, () => readFileSync(`${file}.lock`, "utf8"), 100)).toBe(`${process.pid}\n`);
+  writeFileSync(`${file}.lock`, `${process.pid}\n`);
+  expect(() => withLock(file, () => 1, 100)).toThrow(`process ${process.pid} holds it; wait for it to finish`);
+  const gone = Bun.spawnSync(["/bin/sh", "-c", "echo $$"]).stdout.toString().trim();
+  writeFileSync(`${file}.lock`, `${gone}\n`);
+  expect(() => withLock(file, () => 1, 100)).toThrow(`its process ${gone} is not running; remove that file and retry`);
+  // Never removed by the tool, even when stale.
+  expect(readdirSync(dir).sort()).toEqual(["tokens", "tokens.lock"]);
+  expect(readFileSync(file, "utf8")).toBe(base);
+});
+
 test("add creates a new file", () => {
   const dir = mkdtempSync(join(tmpdir(), "tokens-")); dirs.push(dir);
   const file = join(dir, "tokens");

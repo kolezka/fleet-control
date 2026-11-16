@@ -37,15 +37,27 @@ export function change(action: Change["action"], name: string, text: string, tok
 // Two changes at once would each read the old file and the later rename would drop the other's
 // principal, whose printed token then never works. A lock file next to the tokens file serialises them.
 export const LOCK_WAIT_MS = 5000;
+
+// Says whether the process named in the lock still runs. The lock is never removed here: two waiters
+// clearing a stale lock at once could each delete the other's fresh one.
+function holder(lock: string): string {
+  let pid = NaN;
+  try { pid = Number(readFileSync(lock, "utf8").trim()); } catch {}
+  if (!Number.isSafeInteger(pid) || pid < 1) return "if no change is running, remove that file and retry";
+  try { process.kill(pid, 0); } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ESRCH") return `its process ${pid} is not running; remove that file and retry`;
+  }
+  return `process ${pid} holds it; wait for it to finish`;
+}
 export function withLock<T>(file: string, run: () => T, waitMs = LOCK_WAIT_MS): T {
   const lock = `${file}.lock`;
   const until = Date.now() + waitMs;
   let fd: number;
   for (;;) {
-    try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600); break; }
+    try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600); writeSync(fd, `${process.pid}\n`); break; }
     catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      if (Date.now() >= until) throw new AuthConfigError(`another change holds ${lock}; if none is running, remove that file and retry`);
+      if (Date.now() >= until) throw new AuthConfigError(`another change holds ${lock}; ${holder(lock)}`);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
   }
