@@ -452,9 +452,12 @@ async function refresh(hostId: string, kind: ReadKind) {
     const { outcome } = await hostCall(host, "/sessions");
     result = outcome.ok ? parseSessions(outcome.data) : outcome;
   } else {
-    // Only the newest commands are shown. A host released before latest= answers 400; then read the whole list.
-    const [rq, newest] = await Promise.all([hostCall(host, "/requests"), hostCall(host, `/commands?latest=${SHOWN_COMMANDS}`)]);
-    const cm = newest.status === 400 ? await hostCall(host, "/commands") : newest;
+    // Only what is shown is read. A host released before latest= and view= answers 400; then read the whole list.
+    const [current, newest] = await Promise.all([hostCall(host, "/requests?view=current"), hostCall(host, `/commands?latest=${SHOWN_COMMANDS}`)]);
+    const [rq, cm] = await Promise.all([
+      current.status === 400 ? hostCall(host, "/requests") : current,
+      newest.status === 400 ? hostCall(host, "/commands") : newest,
+    ]);
     result = parseCoord(rq.outcome, cm.outcome);
   }
   apply(finishRead(fleet, hostId, kind, begun.token, result, new Date().toISOString()));

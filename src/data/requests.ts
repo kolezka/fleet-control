@@ -284,6 +284,21 @@ export class Requests {
     ).all(runId ?? null, filter.status ?? null).map(decode);
   }
 
+  // What the page shows: the last run by id, its approvals for the current phase and revision, every open
+  // request and the newest one. Each part is capped at limit rows, newest kept; requests come oldest first.
+  current(limit = 1000): { runs: Run[]; requests: SupervisorRequest[] } {
+    const run = this.db.query<Run, []>(`${runSelect} ORDER BY id DESC LIMIT 1`).get();
+    const newest = (where: string, ...args: (string | number)[]) =>
+      this.db.query<Row, (string | number)[]>(`${reqSelect} WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...args, limit);
+    const rows = [
+      ...newest("status = 'open'"),
+      ...newest("1 = 1").slice(0, 1),
+      ...(run ? newest("run_id = ? AND phase = ? AND revision = ? AND kind = 'approval'", run.id, run.phase, run.revision) : []),
+    ];
+    const unique = [...new Map(rows.map((r) => [r.id, r])).values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { runs: run ? [run] : [], requests: unique.map(decode) };
+  }
+
   // limit -1 means no limit (SQLite).
   events(afterSeq = 0, limit = -1) {
     return this.db.query<{ seq: number; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string }, [number, number]>(

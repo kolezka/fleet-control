@@ -106,8 +106,8 @@ test("browser pins submitted command inspection outside the first history page",
 
 test("browser unmapped host keeps legacy requests and command reads", async () => {
   const { supervisor, ...legacy } = host;
-  const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [] } : path.endsWith("/requests") ? { requests: [], runs: [] } : { commands: [] });
-  expect(b.calls.some(c => c.path.endsWith("/requests"))).toBe(true);
+  const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] });
+  expect(b.calls.some(c => c.path.endsWith("/requests?view=current"))).toBe(true);
   expect(b.element("phaseState").textContent).toContain("No run registered");
 });
 test("browser preserves unknown send key on malformed success and mapping replacement rejects late inspection", async () => {
@@ -178,4 +178,14 @@ test("browser falls back to the full list when an older host refuses latest", as
   const reads = b.calls.filter(c => c.path.includes("/commands")).map(c => c.path);
   expect(reads).toEqual(["/api/hosts/h/commands?latest=6", "/api/hosts/h/commands"]);
   expect(b.element("exchangeRows").innerHTML).toContain("t5");
+});
+test("browser reads the current request view and falls back to the full list on 400", async () => {
+  const run = { id: "run-1", orchestrator: "orch", phase: "one", revision: 1, phaseStatus: "working", updatedAt: "t" };
+  for (const old of [false, true]) {
+    const b = await browser([direct], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/commands") ? { commands: [] }
+      : old && path.includes("view=") ? { __status: 400, error: { kind: "invalid", message: "unknown query parameter view" } } : { runs: [run], requests: [] });
+    const reads = b.calls.filter(c => c.path.includes("/requests")).map(c => c.path);
+    expect(reads).toEqual(old ? ["/api/hosts/h/requests?view=current", "/api/hosts/h/requests"] : ["/api/hosts/h/requests?view=current"]);
+    expect(b.element("phaseState").textContent).toContain("one · revision 1");
+  }
 });

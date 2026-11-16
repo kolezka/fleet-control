@@ -16,6 +16,7 @@ export function requestUseCases(requests: Requests, principal?: string) {
 
     // The page and the request_list tool both show the runs next to the requests.
     overview: (filter: Parameters<Requests["list"]>[0] = {}) => ({ runs: requests.runs(), requests: requests.list(filter) }),
+    current: () => requests.current(),
 
     // One page of requests with only the runs it refers to, plus the run asked for. runPage pages through every run.
     page: (filter: Parameters<Requests["listPage"]>[0] = {}) => {
