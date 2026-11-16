@@ -38,7 +38,7 @@ pgTest("cooperative MCP fences identity, claims and lifecycle over isolated Post
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await server.connect(st); await client.connect(ct);
     const tools = await client.listTools();
-    expect(tools.tools.map((t) => t.name).sort()).toEqual(["cooperative_claim", "cooperative_report"]);
+    expect(tools.tools.map((t) => t.name).sort()).toEqual(["cooperative_claim", "cooperative_report", "cooperative_wait"]);
     expect(JSON.stringify(tools)).not.toContain(credential.token);
     const call = (name: string, args: Record<string, unknown>) => client!.callTool({ name, arguments: args });
     expect(body(await call("cooperative_claim", { requestId: "empty" })).command).toBeNull();

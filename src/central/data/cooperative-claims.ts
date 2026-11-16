@@ -39,6 +39,22 @@ export class CooperativeClaims {
     });
   }
 
+  // True when this slot has a command that a claim would take now. Reads no command text,
+  // and an inactive incarnation is refused like a claim, so a replaced process learns nothing.
+  async pending(principal: Principal, credential: IncarnationCredential): Promise<boolean> {
+    if (!principal || principal.role !== "supervisor") throw new Error("access denied");
+    const identity = supervisorIdentity(principal);
+    credential = credential && { incarnationId: credential.incarnationId, token: credential.token };
+    return (this.runner ?? ((operation) => this.db.begin(operation)))(async (tx) => {
+      if (!await this.incarnations.lockForClaim(tx, identity, credential)) throw new Error("access denied");
+      const [row] = await tx<{ pending: boolean }[]>`SELECT EXISTS (SELECT 1 FROM central_commands AS command
+        WHERE host_id = ${identity.hostId} AND target = ${identity.session} AND status = 'queued'
+          AND NOT EXISTS (SELECT 1 FROM central_delivery_attempts WHERE command_id = command.id)
+          AND NOT EXISTS (SELECT 1 FROM central_cooperative_claims WHERE command_id = command.id)) AS pending`;
+      return row?.pending === true;
+    });
+  }
+
   async claim(principal: Principal, credential: IncarnationCredential, claimRequestId: string, safeResponse?: (command: CentralCommand | null) => boolean): Promise<CentralCommand | null> {
     const validate = (command: CentralCommand | null) => {
       if (!safeResponse) return;

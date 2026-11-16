@@ -62,7 +62,7 @@ pgTest("loopback cooperative flow separates submission, claim and lifecycle insp
     expect(initialized.result.protocolVersion).toBe("2025-03-26");
     expect(initialized.result.serverInfo.name).toBeTruthy();
     const tools = await rpc("tools/list");
-    expect(tools.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["cooperative_claim", "cooperative_report"]);
+    expect(tools.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["cooperative_claim", "cooperative_report", "cooperative_wait"]);
     const legacy = await call("command_respond", { id: "ignored", decision: "accepted" });
     expect(legacy.result?.isError ?? Boolean(legacy.error)).toBe(true);
 
