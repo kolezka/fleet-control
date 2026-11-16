@@ -4,7 +4,7 @@ Pending owner decisions, collected 2026-11-16 (main at e9872be). Each item links
 
 The installed services run older code: the host service on `.4` runs `59965a3`, the cooperative central on `.15` and both adapters run `86585c0`. Candidates are rehearsed on loopback only (see "Not yet released" in [implementation-status.md](implementation-status.md)).
 
-- **1a (recommended):** host service only on `.4`, candidate `59bac7b`.
+- **1a (recommended):** host service only on `.4`, candidate `05b18aa`.
 - **1b:** 1a plus cooperative central on `.15` and the adapter on `.4`, candidate `dbb0e3c`.
 - **1c:** not yet.
 
