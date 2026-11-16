@@ -1,4 +1,5 @@
 // Service options from the environment, shared by index.ts and the dev script.
+import { createPrivateKey, X509Certificate } from "node:crypto";
 import { Auth } from "./auth.ts";
 import type { Peer, ServeOptions } from "./server.ts";
 
@@ -21,8 +22,36 @@ export async function serveOptionsFromEnv(env = process.env): Promise<ServeOptio
     peers: parsePeers(env.FLEET_CONTROL_PEERS),
     auth: env.FLEET_CONTROL_TOKENS ? await Auth.fromFile(env.FLEET_CONTROL_TOKENS) : undefined,
     allowedHosts: (env.FLEET_CONTROL_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean),
-    tls: env.FLEET_CONTROL_TLS_CERT && env.FLEET_CONTROL_TLS_KEY
-      ? { cert: await file(env.FLEET_CONTROL_TLS_CERT), key: await file(env.FLEET_CONTROL_TLS_KEY) }
-      : undefined,
+    tls: await tlsFromEnv(env, file),
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const CERT_WARN_DAYS = 30;
+
+// Only one of the two paths set used to start plain HTTP silently. Now it refuses, as does an
+// expired or not yet valid certificate, or a key that does not match. Near expiry it warns.
+export async function tlsFromEnv(
+  env: Record<string, string | undefined>,
+  file: (path: string) => Promise<string>,
+  now = new Date(),
+  warn: (message: string) => void = (m) => console.warn(m),
+): Promise<{ cert: string; key: string } | undefined> {
+  const certPath = env.FLEET_CONTROL_TLS_CERT;
+  const keyPath = env.FLEET_CONTROL_TLS_KEY;
+  if (!certPath && !keyPath) return undefined;
+  if (!certPath || !keyPath) throw new Error("FLEET_CONTROL_TLS_CERT and FLEET_CONTROL_TLS_KEY must be set together");
+  const [cert, key] = await Promise.all([file(certPath), file(keyPath)]);
+  let x509: X509Certificate;
+  try { x509 = new X509Certificate(cert); } catch { throw new Error("FLEET_CONTROL_TLS_CERT is not a PEM certificate"); }
+  let privateKey;
+  try { privateKey = createPrivateKey(key); } catch { throw new Error("FLEET_CONTROL_TLS_KEY is not a PEM private key"); }
+  if (!x509.checkPrivateKey(privateKey)) throw new Error("FLEET_CONTROL_TLS_KEY does not match FLEET_CONTROL_TLS_CERT");
+  const from = new Date(x509.validFrom);
+  const to = new Date(x509.validTo);
+  if (now < from) throw new Error(`TLS certificate is not valid until ${from.toISOString()}`);
+  if (now >= to) throw new Error(`TLS certificate expired at ${to.toISOString()}`);
+  const days = Math.floor((to.getTime() - now.getTime()) / DAY_MS);
+  if (days < CERT_WARN_DAYS) warn(`TLS certificate expires in ${days} days (${to.toISOString()}); make a new one`);
+  return { cert, key };
 }

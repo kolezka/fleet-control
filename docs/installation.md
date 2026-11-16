@@ -110,6 +110,8 @@ LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` 
 
 Certificate: issued by the MacBook's existing mkcert CA (`mkcert me@MacBook-Pro-me.local`, already trusted in the MacBook System keychain), SAN `IP:192.168.50.4`, valid until 2029-02-09. The CA private key never left the MacBook; `.4` has only the public `ca.pem` so local clients there can verify the server.
 
+At start the service checks `FLEET_CONTROL_TLS_CERT` and `FLEET_CONTROL_TLS_KEY` (`tlsFromEnv` in `src/config.ts`): both or neither must be set, the key must match the certificate, and an expired or not yet valid certificate stops the start. Before, only one of the two set meant plain HTTP without a warning. Less than 30 days before expiry it logs a warning at each start; it does not renew anything. The installed `.4` service has not been restarted with this check.
+
 Principals: `macbook-session` (MCP from the MacBook), `web-mariusz` (browser), `mini-orchestrator` (test orchestrator on `.4`). Plain tokens are only in `~/.config/fleet-control/token-*` on the machine that uses them.
 
 MacBook MCP registration (user scope, in `~/.claude.json`): `fleet-control-mini` → `https://192.168.50.4:4871/mcp` with the bearer header. `claude mcp list` reports it connected. Other Node/Bun clients need `NODE_EXTRA_CA_CERTS` pointing at the mkcert CA.
