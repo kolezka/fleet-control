@@ -25,8 +25,12 @@ afterAll(async () => {
 
 const open = () => {
   const ws = new WebSocket(`ws://${new URL(server.url).host}/api/sessions/probe/terminal?cols=80&rows=24`, { headers: { origin: server.url.origin } } as never);
-  const result = new Promise<"open" | "refused">((resolve) => { ws.onopen = () => resolve("open"); ws.onerror = () => resolve("refused"); });
-  const closed = new Promise<void>((resolve) => { ws.onclose = () => resolve(); });
+  let first: ((v: "open" | "refused") => void) | undefined;
+  const result = new Promise<"open" | "refused">((resolve) => { first = resolve; });
+  // A refused viewer opens and closes at once with 1013; an accepted one gets the stub's first output.
+  ws.onmessage = () => first?.("open");
+  ws.onerror = () => first?.("refused");
+  const closed = new Promise<{ code: number; reason: string }>((resolve) => { ws.onclose = (e) => { first?.("refused"); resolve({ code: e.code, reason: e.reason }); }; });
   return { ws, result, closed };
 };
 
@@ -36,9 +40,9 @@ test("a third viewer is refused while two are open, and a closed one frees its s
   expect([await first.result, await second.result]).toEqual(["open", "open"]);
   const third = open();
   expect(await third.result).toBe("refused");
-  const status = await fetch(new URL("/api/sessions/probe/terminal", server.url), {
-    headers: { origin: server.url.origin, upgrade: "websocket", connection: "Upgrade", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" },
-  });
+  expect(await third.closed).toEqual({ code: 1013, reason: "too many open terminal viewers" });
+  // A plain request over the cap (no upgrade) still gets the JSON refusal.
+  const status = await fetch(new URL("/api/sessions/probe/terminal", server.url), { headers: { origin: server.url.origin } });
   expect(status.status).toBe(503);
   expect((await status.json() as { error: { kind: string } }).error.kind).toBe("busy");
 
