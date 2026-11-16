@@ -1,5 +1,6 @@
 // What the web API and the MCP tools do with runs and supervisor requests on the host.
 import type { Requests } from "../data/requests.ts";
+import { EVENT_PAGE } from "./commands.ts";
 
 // Without auth, names are self-declared and the orchestrator check only stops mistakes.
 // With auth, `principal` is the authenticated caller and replaces them, so a worker token cannot write the phase record.
@@ -17,6 +18,6 @@ export function requestUseCases(requests: Requests, principal?: string) {
     overview: (filter: Parameters<Requests["list"]>[0] = {}) => ({ runs: requests.runs(), requests: requests.list(filter) }),
 
     gate: (runId: string, phase: string, revision: number) => requests.gate(runId, phase, revision),
-    eventsAfter: (afterSeq: number) => requests.events(afterSeq),
+    eventsAfter: (afterSeq: number, limit = EVENT_PAGE) => requests.events(afterSeq, limit),
   };
 }
