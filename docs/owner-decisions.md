@@ -33,6 +33,12 @@ Starts an agent when cooperative work is waiting. Needs 1b first (the installed 
 3. Per-session hold later, together with input leases?
 4. Cancelling running work and budgets stay outside Fleet Control for now?
 
-## 6. Other open decisions without a proposal yet
+## 6. Service manager ([service-manager-design.md](service-manager-design.md))
 
-From "Open decisions" in [implementation-status.md](implementation-status.md): LaunchDaemon instead of LaunchAgent for a real fleet (2), whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), supervisor wakeup when busy (4), subagent mapping (5), frontend framework (9), and which real fleet on `.4` the service should serve.
+1. Keep the LaunchAgent on `.4` with automatic login? Recommended: yes.
+2. Enable `autorestart` on `.4` so it comes back after a power cut (host setting)?
+3. If `.15` ever gets a host service: `systemd --user` with linger (needs root)?
+
+## 7. Other open decisions without a proposal yet
+
+From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), supervisor wakeup when busy (4), subagent mapping (5), frontend framework (9), and which real fleet on `.4` the service should serve.
