@@ -8,6 +8,9 @@ import { classify } from "../domain/delivery.ts";
 // A fleet send that hangs is killed with its children; the delivery stays unknown, never delivered.
 const dir = await mkdtemp(join(tmpdir(), "sender-timeout-"));
 afterAll(() => rm(dir, { recursive: true, force: true }));
+// 1.5 s, not 300 ms: under a loaded full suite the stub shell can still be starting at 300 ms,
+// so it is killed before it writes its pid file and the check has nothing to read.
+const HANG_TIMEOUT_MS = 1_500;
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test("a hung send is killed at the timeout, with the child holding its pipes, and stays unknown", async () => {
@@ -17,7 +20,7 @@ test("a hung send is killed at the timeout, with the child holding its pipes, an
   await writeFile(bin, `#!/bin/sh\necho "$2: delivered"\nsleep 30 & echo $! > "${pidFile}"\nwait\n`);
   await chmod(bin, 0o700);
   const started = Date.now();
-  const result = await fleetSender(bin, "unused", undefined, 300)("alpha", "file");
+  const result = await fleetSender(bin, "unused", undefined, HANG_TIMEOUT_MS)("alpha", "file");
   expect(Date.now() - started).toBeLessThan(5_000);
   expect(result).toEqual({ exitCode: -1, stdout: "", stderr: "" });
   expect(classify(result, "alpha").status).toBe("delivery_unknown");

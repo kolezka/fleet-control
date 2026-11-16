@@ -8,6 +8,9 @@ import { psProcesses, runProbe, tmuxPanePids } from "./claude.ts";
 // with its children, and fail instead of returning partial output.
 const dir = await mkdtemp(join(tmpdir(), "probe-bounds-"));
 afterAll(() => rm(dir, { recursive: true, force: true }));
+// 1.5 s, not 300 ms: under a loaded full suite the stub shell can still be starting at 300 ms,
+// so it is killed before it writes its pid file and the check has nothing to read.
+const HANG_TIMEOUT_MS = 1_500;
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test("a hung probe is killed with the child holding its pipe and fails", async () => {
@@ -16,7 +19,7 @@ test("a hung probe is killed with the child holding its pipe and fails", async (
   await writeFile(bin, `#!/bin/sh\necho 123\nsleep 30 & echo $! > "${pidFile}"\nwait\n`);
   await chmod(bin, 0o700);
   const started = Date.now();
-  await expect(runProbe([bin], { timeoutMs: 300 })).rejects.toThrow("timed out; process killed");
+  await expect(runProbe([bin], { timeoutMs: HANG_TIMEOUT_MS })).rejects.toThrow("timed out; process killed");
   expect(Date.now() - started).toBeLessThan(5_000);
   await Bun.sleep(50);
   expect(alive(Number((await readFile(pidFile, "utf8")).trim()))).toBe(false);
