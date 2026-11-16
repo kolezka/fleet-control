@@ -166,9 +166,15 @@ export class ServeRefused extends Error {}
 async function refuseBeforeDatabase<T>(check: () => Promise<T>, Refused: typeof ActivationRefused = ActivationRefused): Promise<T> {
   try { return await check(); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new Refused("incarnation file already exists; activate runs once per file (see the recovery notes in deploy/cooperative/README.md)", { cause: error });
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "EEXIST" && Refused === ActivationRefused) throw new Refused("incarnation file already exists; activate runs once per file (see the recovery notes in deploy/cooperative/README.md)", { cause: error });
     // A JSON parse message can quote file content, so it never reaches the operator.
     if (error instanceof SyntaxError) throw new Refused("credentials file is not valid JSON", { cause: error });
+    // System errors quote the path; the code is enough to look further in private.
+    if (typeof code === "string" && /^E[A-Z]+$/.test(code)) {
+      const what = code === "ENOENT" ? "a configured file or directory does not exist" : code === "EACCES" || code === "EPERM" ? "a configured file cannot be opened" : code === "EEXIST" ? "a file to create already exists" : "a configured file cannot be read";
+      throw new Refused(`${what} (${code})`, { cause: error });
+    }
     throw new Refused(error instanceof Error ? error.message : "invalid input", { cause: error });
   }
 }

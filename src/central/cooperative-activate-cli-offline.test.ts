@@ -46,6 +46,21 @@ test("activate never prints credentials content or the runtime password", async 
   for (const r of [result, bad]) { expect(r.stderr).not.toContain("leaked-token-value"); expect(r.stderr).not.toContain("secret-runtime-password"); }
 });
 
+test("activate names a missing file without printing its path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fc-activate-missing-"));
+  try {
+    const missing = join(dir, "nowhere", "runtime-url");
+    const child = Bun.spawn([process.execPath, service, "activate"], {
+      env: { PATH: process.env.PATH ?? "", COOPERATIVE_RUNTIME_URL_FILE: missing, COOPERATIVE_CREDENTIALS_FILE: join(dir, "c"), COOPERATIVE_INCARNATION_FILE: join(dir, "i") },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stderr.trim()).toBe("cooperative activation refused: a configured file or directory does not exist (ENOENT)");
+    expect(stderr).not.toContain(dir);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("activate still reports a database failure without detail", async () => {
   const result = await activate({ credentials: credentials(["mini"]) });
   expect(result.stderr).toBe("cooperative activation failed");
