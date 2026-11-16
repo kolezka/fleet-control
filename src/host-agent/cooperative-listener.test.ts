@@ -167,7 +167,7 @@ test("shutdown times out without claiming to cancel an upstream effect", async (
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let calls = 0;
   let finished = false;
-  const listener = createCooperativeListener({ handler: async () => { calls++; enter(); await gate; finished = true; return new Response("done"); }, shutdownTimeoutMs: 50 });
+  const listener = createCooperativeListener({ handler: async () => { calls++; enter(); await gate; finished = true; return new Response("done"); }, shutdownTimeoutMs: 500 });
   const url = `http://127.0.0.1:${listener.port}/`;
   const request = fetch(url).then(() => "response", () => "closed");
   try {
@@ -176,15 +176,16 @@ test("shutdown times out without claiming to cancel an upstream effect", async (
     const stop = listener.stop();
     void stop.then(() => { settled = true; });
     expect(listener.stop()).toBe(stop);
+    // Well inside the 500 ms timeout even on a loaded machine (it was 15 ms against 50 ms).
     await Bun.sleep(15);
     expect(settled).toBe(false);
-    expect(await Promise.race([stop.then(() => "stopped"), Bun.sleep(2000).then(() => "timeout")])).toBe("stopped");
+    expect(await Promise.race([stop.then(() => "stopped"), Bun.sleep(5000).then(() => "timeout")])).toBe("stopped");
     expect(finished).toBe(false);
     expect(await request).toBe("closed");
     await expect(fetch(url)).rejects.toThrow();
     expect(calls).toBe(1);
     release();
-    await Bun.sleep(20);
+    for (let i = 0; i < 200 && !finished; i++) await Bun.sleep(10);
     expect(finished).toBe(true);
     expect(calls).toBe(1);
   } finally { release(); await listener.stop(); }
