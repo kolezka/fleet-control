@@ -13,6 +13,9 @@ const stub = async (name: string, body: string) => {
   await chmod(path, 0o700);
   return path;
 };
+// 1.5 s, not 300 ms: under a loaded full suite the stub shell can still be starting at 300 ms,
+// so it is killed before it writes its pid file and the check has nothing to read.
+const HANG_TIMEOUT_MS = 1_500;
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), "fleet-cli-bounds-")); });
@@ -22,7 +25,7 @@ test("a hung fleet status is killed at the timeout and reported, not waited on",
   const pidFile = join(dir, "pid");
   const bin = await stub("hang", `echo $$ > "${pidFile}"; exec sleep 30`);
   const started = Date.now();
-  const error = await new FleetCli({ fleetBin: bin, confPath: join(dir, "fleet.conf"), timeoutMs: 300 }).status().catch((e) => e);
+  const error = await new FleetCli({ fleetBin: bin, confPath: join(dir, "fleet.conf"), timeoutMs: HANG_TIMEOUT_MS }).status().catch((e) => e);
   expect(Date.now() - started).toBeLessThan(5_000);
   expect(error).toBeInstanceOf(FleetError);
   expect(error.kind).toBe("cli_failed");
@@ -34,7 +37,7 @@ test("a child that keeps the pipes open is killed with the fleet process", async
   const pidFile = join(dir, "child");
   const bin = await stub("child", `sleep 30 & echo $! > "${pidFile}"; wait`);
   const started = Date.now();
-  const error = await new FleetCli({ fleetBin: bin, confPath: join(dir, "fleet.conf"), timeoutMs: 300 }).status().catch((e) => e);
+  const error = await new FleetCli({ fleetBin: bin, confPath: join(dir, "fleet.conf"), timeoutMs: HANG_TIMEOUT_MS }).status().catch((e) => e);
   expect(Date.now() - started).toBeLessThan(5_000);
   expect(error.message).toBe("fleet status timed out; process killed");
   await Bun.sleep(50);
