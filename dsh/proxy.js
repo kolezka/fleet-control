@@ -117,9 +117,13 @@ export function respond(connection, settings, req, res) {
   req.pipe(upstream)
 }
 
-/** Points Bun's absolute bundle paths below the prefix. Nothing else in the page is absolute. */
+// Development builds live under /_bun/, production builds at /chunk-*. Nothing else in the page is absolute.
+const BUNDLE_PATHS = ['/_bun/', '/chunk-']
+
+/** Points Bun's absolute bundle paths below the prefix. */
 export function rewrite(text) {
-  return text.replaceAll('"/_bun/', '"' + PANEL_PREFIX + '/_bun/').replaceAll("'/_bun/", "'" + PANEL_PREFIX + '/_bun/')
+  for (const path of BUNDLE_PATHS) for (const quote of ['"', "'"]) text = text.replaceAll(quote + path, quote + PANEL_PREFIX + path)
+  return text
 }
 
 /** Read-only terminal: Fleet Control closes the socket on any client message, so bytes pass as is. */
