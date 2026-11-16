@@ -295,5 +295,5 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 1. Done against the pinned CLI (2026-11-11): with the page's read-only viewer open, `fleet send` returns `delivered` (`src/terminal/viewer-send.test.ts`). Done with a real Claude Code agent (2026-11-12, `scripts/viewer-agent-smoke.ts`). Done on 2026-11-15: the installed `.4` service was upgraded and delivers with the viewer open (see "Upgrade of the 192.168.50.4 service"). Before that its `index.ts` was dated 2026-11-09 and its agent-fleet copy had the `watchdog.sh` from before the paste-keys fix.
 2. Done for the test fleet on `.4` (see above). Next: decide which real fleet on `.4` the service should serve, now that the real-agent check above and the `.4` upgrade are done.
 3. phased-delivery writes its phase record and requests through MCP; one real run on a test repository.
-4. Input lease design, then implementation.
+4. Input lease: design written in [input-lease-design.md](input-lease-design.md) (2026-11-16, not implemented). Implementation needs owner authorization for live terminal input and answers to the open questions there.
 5. A host service on `.15`: not installed, and it needs its own authorization. The cooperative central and adapter deployed there are separate; see [deploy-15-plan.md](deploy-15-plan.md).
