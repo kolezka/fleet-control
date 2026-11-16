@@ -20,7 +20,7 @@ type Fake = ReturnType<typeof fakeHost>;
 
 function fakeHost(label: string, token: string) {
   const seen: Seen[] = [];
-  const sockets: { closeFromHost(code: number): void; received: unknown[] }[] = [];
+  const sockets: { closeFromHost(code: number, reason?: string): void; received: unknown[] }[] = [];
   let hang = false;
   let big = false;
   let redirectTo = "";
@@ -59,7 +59,7 @@ function fakeHost(label: string, token: string) {
     },
     websocket: {
       open(ws) {
-        const rec = { received: [] as unknown[], closeFromHost: (c: number) => ws.close(c, "host closing") };
+        const rec = { received: [] as unknown[], closeFromHost: (c: number, reason = "host closing") => ws.close(c, reason) };
         (ws as any).rec = rec;
         sockets.push(rec);
         ws.sendBinary(new Uint8Array([0x1b, 0x5b, 0x00, 0xff, 0xfe, 0x80]));
@@ -131,10 +131,10 @@ function openWs(path: string, headers: Record<string, string> = { origin: page()
   const ws = new WebSocket(`ws://127.0.0.1:${gw.port}${path}`, { headers } as never);
   ws.binaryType = "arraybuffer";
   const frames: (string | ArrayBuffer)[] = [];
-  let closed: { code: number } | null = null;
+  let closed: { code: number; reason: string } | null = null;
   const opened = new Promise<boolean>((r) => { ws.onopen = () => r(true); ws.onerror = () => r(false); });
   ws.onmessage = (e) => frames.push(e.data);
-  const closedP = new Promise<{ code: number }>((r) => { ws.onclose = (e) => { closed = { code: e.code }; r(closed); }; });
+  const closedP = new Promise<{ code: number; reason: string }>((r) => { ws.onclose = (e) => { closed = { code: e.code, reason: e.reason }; r(closed); }; });
   return { ws, frames, opened, closedP, get closed() { return closed; } };
 }
 const until = async (f: () => boolean, ms = 2000) => {
@@ -553,6 +553,17 @@ describe("terminal relay", () => {
     a.sockets[0]!.closeFromHost(1000);
     const closed = await c.closedP;
     expect([1000, 1011]).toContain(closed.code);
+  });
+
+  test("the host's close code and a short printable reason reach the page; anything else is replaced", async () => {
+    for (const [reason, seen] of [["token revoked", "token revoked"], ["bad\u0007bell", "upstream closed"], ["x".repeat(121), "upstream closed"]] as const) {
+      const c = openWs(path);
+      await c.opened;
+      await until(() => a.sockets.length >= 1);
+      a.sockets.at(-1)!.closeFromHost(1008, reason);
+      expect(await c.closedP).toEqual({ code: 1008, reason: seen });
+      a.sockets.length = 0;
+    }
   });
 
   test("browser close tears down the upstream socket", async () => {

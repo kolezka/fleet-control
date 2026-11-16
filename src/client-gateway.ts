@@ -265,11 +265,13 @@ type Relay = {
   client: Bun.ServerWebSocket<Relay> | null;
   queue: (string | ArrayBuffer)[];
   queued: number;
-  upClosed: { code: number } | null;
+  upClosed: { code: number; reason: string } | null;
   done: boolean;
 };
 
 const closeCode = (c: number) => ([1000, 1001, 1008, 1009, 1011, 1012, 1013].includes(c) ? c : 1011);
+// The host's close reason (e.g. "token revoked") tells the page why; only short printable text passes.
+const closeReason = (r: string) => (/^[\x20-\x7e]{1,120}$/.test(r) ? r : "upstream closed");
 
 export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   const timeoutMs = opts.timeoutMs ?? 10_000;
@@ -509,9 +511,9 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       ws.onerror = () => {};
       ws.onclose = (e) => {
         clearTimeout(timer);
-        relay.upClosed = { code: e.code };
+        relay.upClosed = { code: e.code, reason: closeReason(e.reason) };
         if (!opened) return done(null);
-        relay.client?.close(closeCode(e.code), "upstream closed");
+        relay.client?.close(closeCode(e.code), relay.upClosed.reason);
       };
     });
   }
@@ -542,7 +544,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
         relay.client = ws;
         for (const m of relay.queue.splice(0)) forward(relay, ws, m);
         relay.queued = 0;
-        if (relay.upClosed) ws.close(closeCode(relay.upClosed.code), "upstream closed");
+        if (relay.upClosed) ws.close(closeCode(relay.upClosed.code), relay.upClosed.reason);
       },
       // The terminal is read-only: input would be typing into an agent. Never forwarded.
       message(ws) {

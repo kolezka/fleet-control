@@ -8,7 +8,7 @@ import {
   type Command, type CommandIntent, type Fleet, type HostInfo, type HostState, type Model, type Outcome, type Peer, type ReadKind, type Req, type Session,
   beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand, isCommand,
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
-  interpretResponse, paneKey, parseCoord, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
+  interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -165,7 +165,7 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
       if (stopped || sock !== ws) return;
       // 1000: the viewer ended normally (session gone). 1008: the server refused us. Neither is retried.
       if (e.code === 1000 || e.code === 1008) {
-        status.textContent = e.code === 1000 ? "Viewer ended" : `Refused (${e.code})`;
+        status.textContent = terminalClosedText(e.code, e.reason);
         return;
       }
       const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]!;

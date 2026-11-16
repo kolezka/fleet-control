@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand,
   beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
-  interpretResponse, paneKey, parseCoord, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
+  interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
   type Fleet, type HostInfo, type Session,
 } from "./host-state.ts";
 
@@ -296,4 +296,10 @@ test("inspection selection and cursor scope reject stale completions and failed 
   f = finishPageRead(fail.fleet, fail.handle!, down, "t");
   expect(f.hosts.a!.inspectionRead.status).toBe("unknown");
   expect(f.hosts.a!.inspection).toBeNull();
+});
+
+test("a terminal closed for a revoked token says so; other refusals keep their code", () => {
+  expect(terminalClosedText(1008, "token revoked")).toBe("Access revoked · sign in again");
+  expect(terminalClosedText(1008, "read-only terminal: client messages are not accepted")).toBe("Refused (1008)");
+  expect(terminalClosedText(1000, "token revoked")).toBe("Viewer ended");
 });

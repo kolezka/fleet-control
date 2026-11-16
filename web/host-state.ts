@@ -401,3 +401,11 @@ export function finishPageRead(f: Fleet, a: PageHandle, result: Outcome<CommandP
   const events = a.cursor && h.inspection ? [...h.inspection.events, ...d.events] : d.events;
   return patch(f, a.hostId, { inspection: { ...d, events }, inspectionCursor: d.nextCursor, inspectionRead: next });
 }
+
+// Status text for a terminal close the pane does not retry (1000 and 1008). A revoked token gets its
+// own text, so the user knows to sign in again rather than wait for a reconnect that never comes.
+export function terminalClosedText(code: number, reason: string): string {
+  if (code === 1000) return "Viewer ended";
+  if (code === 1008 && reason === "token revoked") return "Access revoked · sign in again";
+  return `Refused (${code})`;
+}
