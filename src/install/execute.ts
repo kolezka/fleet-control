@@ -3,6 +3,7 @@ import { lstat, open, mkdir, access } from "node:fs/promises";
 import { dirname, join, parse as parsePath } from "node:path";
 import { X509Certificate } from "node:crypto";
 import { createCooperativeAdapter } from "../host-agent/cooperative-adapter.ts";
+import { parseWakerConfig } from "../host-agent/waker.ts";
 import { loadGatewayConfig, parseGatewayConfig, parseGatewayCentralConfig } from "../client-gateway.ts";
 import { absolute, InstallError, type Plan } from "./plan.ts";
 
@@ -70,6 +71,14 @@ export async function validateConfig(role: string, path: string): Promise<void> 
     const central = parseGatewayCentralConfig(config, dirname(path));
     for (const tokenPath of [...hosts.map(host => host.tokenFile), ...(central ? [central.tokenFile] : [])]) await privateText(tokenPath);
     await loadGatewayConfig(path);
+    return;
+  }
+  if (role === "waker") {
+    let waker;
+    try { waker = parseWakerConfig(config); } catch { throw new InstallError("invalid configuration"); }
+    // Only the program is checked here; its own MCP configuration is the agent's business.
+    await safePath(waker.command[0]!);
+    await access(waker.command[0]!, constants.X_OK);
     return;
   }
   const keys = ["centralUrl", "localToken", "supervisorToken", "incarnationFile"];
