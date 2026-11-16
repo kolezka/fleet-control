@@ -4,6 +4,7 @@
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Observation } from "../domain/model.ts";
+import { drainDeadline, readBounded } from "../fleet/bounded-read.ts";
 
 export const OBSERVATION_SOURCE = "claude-code transcript";
 const TAIL_BYTES = 512 * 1024;
@@ -138,22 +139,19 @@ export async function runProbe(
   const limit = options.outputLimit ?? PROBE_OUTPUT_LIMIT;
   const p = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: options.env, detached: true });
   let stopped: string | null = null;
+  const drain = drainDeadline();
   const stop = (why: string) => {
     stopped ??= why;
     try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); }
+    drain.arm();
   };
   const timer = setTimeout(() => stop("timed out"), options.timeoutMs ?? PROBE_TIMEOUT_MS);
+  void p.exited.then(() => drain.arm());
   try {
-    const chunks: Uint8Array[] = [];
-    let length = 0;
-    for await (const chunk of p.stdout) {
-      length += chunk.byteLength;
-      if (length > limit) { stop("output too large"); break; }
-      chunks.push(chunk);
-    }
+    const { bytes } = await readBounded(p.stdout, limit, drain.reached, { onOverflow: () => stop("output too large") });
     const code = await p.exited;
     if (stopped) throw new Error(`${argv[0]} ${stopped}; process killed`);
-    return { code, out: new TextDecoder().decode(Buffer.concat(chunks)) };
+    return { code, out: new TextDecoder().decode(bytes) };
   } finally {
     clearTimeout(timer);
   }
