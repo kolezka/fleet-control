@@ -122,6 +122,8 @@ script: restoring over a live installation needs a stopped stack and a human dec
   database and no incarnation file was left. The reason names the problem, such as a missing
   `COOPERATIVE_SUPERVISOR_SESSION` when several supervisors are configured. A bare
   `cooperative activation failed` came from the database step; treat it like a crash above.
+- **`provision` refused**: `cooperative provisioning refused: <reason>` means no role or schema
+  was touched. An existing `service/runtime-url` is kept; see "During `provision`" above.
 - **`serve` refused**: `cooperative service startup refused: <reason>` means the listener never
   opened and the database was not reached; fix the named setting and start again. A bare
   `cooperative service startup failed` came from the database or the listener.
