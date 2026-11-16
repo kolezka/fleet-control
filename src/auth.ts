@@ -49,6 +49,16 @@ export class Auth {
     return new Auth(parseTokens(await Bun.file(path).text()));
   }
 
+  // Swap in a reread tokens file. Checked in full first, so a bad file leaves the old tokens working.
+  replace(next: Auth): void {
+    this.hashes.clear();
+    for (const [name, hash] of next.hashes) this.hashes.set(name, hash);
+  }
+
+  names(): string[] {
+    return [...this.hashes.keys()];
+  }
+
   check(token: string | null | undefined): Principal | null {
     if (!token || token.length > 512) return null;
     const h = sha256(token);
