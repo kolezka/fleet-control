@@ -102,7 +102,10 @@ export type ServeOptions = {
   auth?: Auth; // required unless hostname is loopback
   allowedHosts?: string[]; // extra Host header values for MCP, e.g. "192.168.50.4:4871"
   tls?: { cert: string; key: string }; // PEM text
+  maxViewers?: number; // open terminal sockets at once, each one a PTY process; default MAX_VIEWERS
 };
+
+export const MAX_VIEWERS = 16;
 
 export const MAX_REQUEST_BODY = 256 * 1024;
 
@@ -132,6 +135,11 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     return who ? h(req, srv, who) : unauthorized();
   };
 
+  // Every socket starts a PTY process, so the number open at once is capped. A slot is taken at the
+  // upgrade and given back when the socket closes.
+  const maxViewers = opts.maxViewers ?? MAX_VIEWERS;
+  if (!Number.isSafeInteger(maxViewers) || maxViewers < 1) throw new Error("maxViewers must be a positive integer");
+  let viewers = 0;
   const openTerminal = (req: Request, server: any, who: Principal | null, session: string) => {
     if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
     if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
@@ -140,7 +148,8 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     if (!size || !/^[A-Za-z0-9._-]+$/.test(session)) {
       return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
     }
-    if (server.upgrade(req, { data: { session, ...size, principal: who?.name } })) return undefined;
+    if (viewers >= maxViewers) return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
+    if (server.upgrade(req, { data: { session, ...size, principal: who?.name } })) { viewers++; return undefined; }
     return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
 
@@ -308,6 +317,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         ws.close(1008, "read-only terminal: client messages are not accepted");
       },
       close(ws) {
+        if (!ws.data.closed) viewers--;
         ws.data.closed = true;
         ws.data.viewer?.close();
       },
