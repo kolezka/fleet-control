@@ -268,3 +268,23 @@ test("host-provided strings never become markup anywhere on the page", async () 
   expect(html).not.toMatch(/<x-evil/);
   expect(html).not.toMatch(/"x-evil-[a-z]+=/);
 });
+
+test("a pane says live only after output, so a busy host never flashes live", async () => {
+  const timers: { fn: () => void; ms: number }[] = [];
+  const legacy = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [{ name: "probe", host: null, role: null, registered: true, running: true, model: { state: "not_applicable" } }] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] }, [], timers);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const status = () => b.element("terminals:child:parent:child").textContent as string;
+  const sock = b.sockets[0] as any;
+  sock.onopen();
+  expect(status()).not.toContain("live");
+  sock.onclose({ code: 1013, reason: "too many open terminal viewers" });
+  expect(status()).toContain("too many open viewers");
+  expect(status()).not.toContain("live");
+  timers.find(t => t.ms === 30_000)!.fn();
+  const next = b.sockets[1] as any;
+  next.onopen();
+  expect(status()).not.toContain("live");
+  next.onmessage({ data: new TextEncoder().encode("x").buffer });
+  expect(status()).toBe("Read-only · live");
+});

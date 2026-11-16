@@ -136,8 +136,10 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
     const dec = new TextDecoder();
     let pending = "";
     let fresh = true;
-    sock.onopen = () => { status.textContent = "Read-only · live"; };
+    // A host over its viewer cap accepts the socket and closes it at once, so "live" waits for output.
+    sock.onopen = () => { status.textContent = "Read-only · connected, waiting for output"; };
     sock.onmessage = (e) => {
+      if (sock === ws && !stopped) status.textContent = "Read-only · live";
       let text = dec.decode(e.data as ArrayBuffer, { stream: true });
       if (fresh) {
         pending += text;
