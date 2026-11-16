@@ -511,7 +511,9 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       ws.onerror = () => {};
       ws.onclose = (e) => {
         clearTimeout(timer);
-        relay.upClosed = { code: e.code, reason: closeReason(e.reason) };
+        // The host revoked the gateway's own token, not the browser's, so signing in again would not help.
+        const reason = e.code === 1008 && e.reason === "token revoked" ? "gateway token revoked" : closeReason(e.reason);
+        relay.upClosed = { code: e.code, reason };
         if (!opened) return done(null);
         relay.client?.close(closeCode(e.code), relay.upClosed.reason);
       };

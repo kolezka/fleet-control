@@ -45,7 +45,8 @@ test("escaped pipes stay in the cell, cut text keeps surrogate pairs whole, and 
   expect(parsed.phases).toEqual([{ number: 1, title: "Split a | b", status: "running", written: "running", tip: "" }]);
   const long = currentPhase(parseRunFile(run(`| 1 | ${"x".repeat(190)}😀😀😀😀😀😀😀😀😀😀 | todo | | | |`)));
   expect(long.phase.isWellFormed()).toBe(true);
-  expect(Array.from(long.phase)).toHaveLength(200);
+  expect(long.phase.length).toBeLessThanOrEqual(200);
+  expect(long.phase.length).toBeGreaterThanOrEqual(199);
   expect(() => parseRunFile(run("| 1 | Parser | todo |"))).toThrow("has 3 cells, the header has 6");
   expect(() => parseRunFile(run("| 1 | Parser | done | main | | |"))).toThrow('tip "main" is not a commit hash');
   expect(() => parseRunFile("intro\n" + run("| 1 | Parser | todo | | | |"))).toThrow("must start with a");

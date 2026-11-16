@@ -555,8 +555,9 @@ describe("terminal relay", () => {
     expect([1000, 1011]).toContain(closed.code);
   });
 
+  // A host revoking "token revoked" means the gateway's own host token, so the page must not tell the user to sign in.
   test("the host's close code and a short printable reason reach the page; anything else is replaced", async () => {
-    for (const [reason, seen] of [["token revoked", "token revoked"], ["bad\u0007bell", "upstream closed"], ["x".repeat(121), "upstream closed"]] as const) {
+    for (const [reason, seen] of [["token revoked", "gateway token revoked"], ["read-only terminal", "read-only terminal"], ["bad\u0007bell", "upstream closed"], ["x".repeat(121), "upstream closed"]] as const) {
       const c = openWs(path);
       await c.opened;
       await until(() => a.sockets.length >= 1);

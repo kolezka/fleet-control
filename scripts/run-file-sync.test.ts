@@ -92,6 +92,8 @@ test("a token goes over http only to this machine, and the URL may not carry cre
   expect(serviceUrl(undefined, true).href).toBe("http://127.0.0.1:4871/mcp");
   expect(serviceUrl("https://192.168.50.4:4871", true).href).toBe("https://192.168.50.4:4871/mcp");
   expect(serviceUrl("http://192.168.50.4:4871", false).href).toBe("http://192.168.50.4:4871/mcp");
+  expect(serviceUrl("https://proxy.example/hostA", true).href).toBe("https://proxy.example/hostA/mcp");
+  expect(serviceUrl("https://proxy.example/hostA/", true).href).toBe("https://proxy.example/hostA/mcp");
   expect(() => serviceUrl("http://192.168.50.4:4871", true)).toThrow("only over https");
   expect(() => serviceUrl("https://me:pw@192.168.50.4:4871", true)).toThrow("credentials");
 });

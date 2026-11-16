@@ -614,7 +614,12 @@ let releaseTimer: ReturnType<typeof setTimeout> | undefined;
 document.addEventListener("visibilitychange", () => {
   if (!visible()) {
     clearTimeout(releaseTimer);
-    releaseTimer = setTimeout(() => { stopPanes(); renderedPanes = ""; }, HIDDEN_RELEASE_MS);
+    releaseTimer = setTimeout(() => {
+      stopPanes();
+      renderedPanes = "";
+      // Old panes would still say "live"; the sessions refresh on showing draws new ones.
+      $("terminals").textContent = "Terminals paused while the tab was hidden";
+    }, HIDDEN_RELEASE_MS);
     return;
   }
   clearTimeout(releaseTimer);
