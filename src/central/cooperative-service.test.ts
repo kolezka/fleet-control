@@ -56,7 +56,7 @@ test("activate refuses an existing incarnation file before touching the database
     await initService({ COOPERATIVE_STATE_DIR: join(dir, "s"), COOPERATIVE_PORT: "1", COOPERATIVE_SUPERVISOR_HOST: "h" });
     await writeFile(credentials, await Bun.file(join(dir, "s", STATE_LAYOUT.credentials)).text(), { mode: 0o600 });
     await writeFile(incarnation, "keep", { mode: 0o600 });
-    await expect(activateService({ COOPERATIVE_RUNTIME_URL_FILE: runtimeUrl, COOPERATIVE_CREDENTIALS_FILE: credentials, COOPERATIVE_INCARNATION_FILE: incarnation })).rejects.toThrow("EEXIST");
+    await expect(activateService({ COOPERATIVE_RUNTIME_URL_FILE: runtimeUrl, COOPERATIVE_CREDENTIALS_FILE: credentials, COOPERATIVE_INCARNATION_FILE: incarnation })).rejects.toThrow("incarnation file already exists");
     expect(await Bun.file(incarnation).text()).toBe("keep");
     await writeFile(join(dir, "other-url"), "postgres://postgres:x@127.0.0.1:1/fleet", { mode: 0o600 });
     await expect(activateService({ COOPERATIVE_RUNTIME_URL_FILE: join(dir, "other-url"), COOPERATIVE_CREDENTIALS_FILE: credentials, COOPERATIVE_INCARNATION_FILE: join(dir, "new.json") })).rejects.toThrow("service runtime role");

@@ -118,6 +118,10 @@ script: restoring over a live installation needs a stopped stack and a human dec
   `service/runtime-url` with mode 0600.
 - **During `activate`**: an empty `client/incarnation.json` may remain, and the previous incarnation
   may already be fenced. Delete the empty file, run `activate` again and restart the host adapter.
+- **`activate` refused**: `cooperative activation refused: <reason>` means nothing reached the
+  database and no incarnation file was left. The reason names the problem, such as a missing
+  `COOPERATIVE_SUPERVISOR_SESSION` when several supervisors are configured. A bare
+  `cooperative activation failed` came from the database step; treat it like a crash above.
 
 ### Persistent adapters and tailnet access
 
