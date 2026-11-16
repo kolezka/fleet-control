@@ -100,7 +100,7 @@ LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` 
 
 | Item | Path on `.4` |
 | --- | --- |
-| Service checkout (since 2026-11-15: `git archive` of `main` at `735c1f8` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`) | `~/Development/fleet-control-service` |
+| Service checkout (since 2026-11-16: `git archive` of `main` at `59965a3` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`; 735c1f8 from 2026-11-15 before that) | `~/Development/fleet-control-service` |
 | Plist | `~/Library/LaunchAgents/pl.raqz.fleet-control.plist` |
 | fleet.conf (must sit in `FLEET_DIR`: agent-fleet's `watchdog.sh` reads `$FLEET_DIR/fleet.conf`) | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
 | State database | `~/Library/Application Support/fleet-control/state.db` |
