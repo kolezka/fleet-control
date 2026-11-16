@@ -27,6 +27,9 @@ export class Commands {
       detail TEXT NOT NULL,
       at TEXT NOT NULL
     )`);
+    // The page polls the newest commands and reads one command's events; without these both scan every row.
+    db.run("CREATE INDEX IF NOT EXISTS commands_created ON commands (created_at, id)");
+    db.run("CREATE INDEX IF NOT EXISTS command_events_command ON command_events (command_id, seq)");
   }
 
   // A delivery cut off by a crash or restart may have reached the pane, so its outcome is unknown, not queued.
