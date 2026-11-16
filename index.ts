@@ -1,6 +1,6 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
-import { portFromEnv, serveOptionsFromEnv } from "./src/config.ts";
+import { portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv } from "./src/config.ts";
 import { Commands } from "./src/data/commands.ts";
 import { Deliverer } from "./src/application/delivery.ts";
 import { fleetSender } from "./src/fleet/sender.ts";
@@ -25,6 +25,8 @@ const commands = new Commands(store.db);
 const unknown = commands.reconcileAfterRestart();
 if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
+const options = await serveOptionsFromEnv();
+reloadTokensOnHangup(options.auth);
 const server = serve(
   {
     fleet: new FleetCli({ fleetBin, confPath }),
@@ -34,6 +36,6 @@ const server = serve(
     control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
   },
   portFromEnv(process.env.PORT),
-  await serveOptionsFromEnv(),
+  options,
 );
 console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);

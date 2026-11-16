@@ -1,6 +1,6 @@
 // Service options from the environment, shared by index.ts and the dev script.
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { Auth } from "./auth.ts";
+import { Auth, AuthConfigError } from "./auth.ts";
 import type { Peer, ServeOptions } from "./server.ts";
 
 // FLEET_CONTROL_PEERS="me-desktop=http://100.64.0.5:4871,other=https://host:4871"
@@ -45,6 +45,26 @@ export async function serveOptionsFromEnv(env = process.env): Promise<ServeOptio
     allowedHosts: (env.FLEET_CONTROL_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean),
     tls: await tlsFromEnv(env, file),
   };
+}
+
+// SIGHUP rereads FLEET_CONTROL_TOKENS. Requests check the token each time, so a revoked token stops
+// working at once; an open terminal viewer keeps running until it closes.
+export async function reloadTokens(auth: Auth, path: string, log: (line: string) => void = console.log): Promise<boolean> {
+  try {
+    auth.replace(await Auth.fromFile(path));
+    log(`tokens reloaded: ${auth.names().length} principal(s)`);
+    return true;
+  } catch (error) {
+    const why = error instanceof AuthConfigError ? error.message : "file could not be read";
+    log(`tokens reload refused, previous tokens kept: ${why}`);
+    return false;
+  }
+}
+
+export function reloadTokensOnHangup(auth: Auth | undefined, env = process.env): void {
+  const path = env.FLEET_CONTROL_TOKENS;
+  if (!auth || !path) return;
+  process.on("SIGHUP", () => void reloadTokens(auth, path));
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

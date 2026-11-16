@@ -110,7 +110,7 @@ mkdir -p ~/.config/fleet-control && chmod 700 ~/.config/fleet-control
 pbpaste > ~/.config/fleet-control/token-web-mariusz && chmod 600 ~/.config/fleet-control/token-web-mariusz
 ```
 
-The token name is recorded as the author of everything that client does. To change tokens without editing the file by hand, use `scripts/tokens.ts` on the host, then restart the service, which reads the file only at start:
+The token name is recorded as the author of everything that client does. To change tokens without editing the file by hand, use `scripts/tokens.ts` on the host, then tell the service to reread the file:
 
 ```bash
 ~/.bun/bin/bun scripts/tokens.ts list ~/.config/fleet-control/tokens
@@ -118,7 +118,15 @@ The token name is recorded as the author of everything that client does. To chan
 ~/.bun/bin/bun scripts/tokens.ts revoke macbook-session ~/.config/fleet-control/tokens
 ```
 
-`rotate` replaces one hash and keeps the other lines and comments; the old token stops working at the restart. `revoke` refuses to remove the last principal, because the service would not start without one. Each change is checked the way the service checks the file and written atomically with mode 0600; a refused change leaves the file as it was. Token files are local to each host: rotating on one host does not touch another.
+Then reload, without dropping connections:
+
+```bash
+launchctl kill HUP gui/$(id -u)/pl.raqz.fleet-control
+```
+
+The service logs `tokens reloaded: N principal(s)`. If the file is unreadable or invalid it logs `tokens reload refused, previous tokens kept: <reason>` and keeps the old tokens. A removed token stops working on its next request; a terminal viewer already open keeps running until it closes. Releases before this change (the `.4` service runs `59965a3`) have no SIGHUP handler, so a HUP ends the process; use `launchctl kickstart -k` there.
+
+`rotate` replaces one hash and keeps the other lines and comments; the old token stops working at the reload. `revoke` refuses to remove the last principal, because the service would not start without one. Each change is checked the way the service checks the file and written atomically with mode 0600; a refused change leaves the file as it was. Token files are local to each host: rotating on one host does not touch another.
 
 ## 6. Try it in the foreground
 

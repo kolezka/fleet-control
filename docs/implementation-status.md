@@ -252,7 +252,7 @@ The installed services run older code. A new release needs the owner's approval;
 - Push event stream (the page polls every 3 s for requests and commands, 15 s for sessions, only while its tab is visible; showing the tab refreshes at once).
 - Model observers for harnesses other than Claude Code, and for remote (`REMOTE_SSH`) fleets, which each host's own service should observe.
 - Supervisor replacement, reboot recovery of in-flight commands beyond `delivering` → `delivery_unknown`, event retention, and scheduled backups. A manual backup (`scripts/host-backup.ts`) and a read-only restore check of it (`scripts/host-restore-check.ts`) exist; neither is scheduled, and no restore onto a host has been run.
-- Per-principal permissions (every principal can do everything except write another orchestrator's phase). Tokens are added, rotated and revoked with `scripts/tokens.ts` (checked, atomic, 0600); a change takes effect at the next service restart, and there is no expiry or overlap window for a rotated token.
+- Per-principal permissions (every principal can do everything except write another orchestrator's phase). Tokens are added, rotated and revoked with `scripts/tokens.ts` (checked, atomic, 0600); the service rereads the file on SIGHUP and keeps the old tokens if the new file is invalid (released hosts before this change need a restart). There is no expiry or overlap window for a rotated token.
 
 The mockup's send button writes only browser memory. The live page (`web/`) posts to the service.
 

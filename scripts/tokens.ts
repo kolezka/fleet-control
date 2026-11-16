@@ -3,7 +3,7 @@
 //        bun scripts/tokens.ts revoke <principal> <tokens-file>
 //        bun scripts/tokens.ts list <tokens-file>
 // The new token is printed once on stdout. The file is checked, then replaced atomically with mode 0600.
-// The running service reads the file at start, so restart it for a change to take effect.
+// The running service rereads the file on SIGHUP (releases before that only at start).
 import { chmodSync, closeSync, constants, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { AuthConfigError, newToken, parseTokens, tokenLine } from "../src/auth.ts";
 
@@ -70,8 +70,8 @@ if (import.meta.main) {
         console.error("Token (shown once, give it to the client, do not store it on the host):");
         console.log(result.token);
       }
-      console.error(`${action === "revoke" ? "Revoked" : action === "rotate" ? "Rotated" : "Added"} ${a} in ${b}. Restart the service for it to take effect.`);
-      if (action === "rotate") console.error("The old token stops working at that restart.");
+      console.error(`${action === "revoke" ? "Revoked" : action === "rotate" ? "Rotated" : "Added"} ${a} in ${b}. Send the service SIGHUP (or restart it) for it to take effect.`);
+      if (action === "rotate") console.error("The old token stops working at that reload.");
     } else usage();
   } catch (e) {
     console.error(e instanceof AuthConfigError ? `refused: ${e.message}` : `failed: ${(e as Error).message}`);
