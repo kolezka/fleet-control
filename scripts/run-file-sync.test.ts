@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Commands } from "../src/data/commands.ts";
@@ -7,6 +7,7 @@ import { Deliverer } from "../src/application/delivery.ts";
 import { Requests } from "../src/data/requests.ts";
 import { Store } from "../src/data/store.ts";
 import { serve } from "../src/server.ts";
+import { readTokenFile } from "./run-file-sync.ts";
 
 const fleet = { screen: async () => "", status: async () => ({ sessions: [] }) } as never;
 let server: ReturnType<typeof serve>;
@@ -49,6 +50,17 @@ test("run.md drives the run record: dry run writes nothing, apply registers, a p
   writeFileSync(file, runMd("| 1 | Parser | done | abc1234 | | |\n| 2 | Docs | running | | | |"));
   expect((await run("--apply")).text).toBe('did update run-1 r1 to "phase 2: Docs" / "running; 1 of 2 done"; now r2, 1 open request(s) became stale');
   expect(requests.get(open.id).status).toBe("stale");
+});
+
+test("a token file readable by others is refused before connecting; a private one is read", () => {
+  const tokenFile = join(dir, "token");
+  writeFileSync(tokenFile, "secret-token-value\n", { mode: 0o644 });
+  chmodSync(tokenFile, 0o644);
+  expect(() => readTokenFile(tokenFile)).toThrow("private file");
+  chmodSync(tokenFile, 0o600);
+  expect(readTokenFile(tokenFile)).toBe("secret-token-value");
+  writeFileSync(tokenFile, "two tokens\n");
+  expect(() => readTokenFile(tokenFile)).toThrow("one token");
 });
 
 test("an unreadable run.md and a foreign orchestrator are refused without writing", async () => {
