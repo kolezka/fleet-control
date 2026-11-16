@@ -48,6 +48,11 @@ Starts an agent when cooperative work is waiting. Needs 1b first (the installed 
 
 1. Stay with plain TypeScript and add a test that every value written into `innerHTML` is escaped? Recommended: yes.
 
-## 9. Other open decisions without a proposal yet
+## 9. Subagents ([subagent-mapping-design.md](subagent-mapping-design.md))
 
-From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), subagent mapping (5), and which real fleet on `.4` the service should serve.
+1. Keep Agent subagents out of the session list and command targets, visible only through the run record? Recommended: yes.
+2. Mirror the worker name, the orchestrator's checks and the review verdict from `run.md` as separate labelled parts of the phase status? Recommended: yes.
+
+## 10. Other open decisions without a proposal yet
+
+From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), and which real fleet on `.4` the service should serve.
