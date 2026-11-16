@@ -204,6 +204,8 @@ type Target =
   | { kind: "mcp" };
 
 const NUM = /^[0-9]{1,4}$/;
+// Keyset paging on the host lists: the host checks the range and the cursor itself.
+const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
 
 // The allowlist. Anything not matched here is a 404; nothing else is forwarded.
 function matchRoute(seg: string[]): Target | null {
@@ -215,10 +217,10 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "terminal") return { kind: "ws", upstream: `/api/sessions/${b}/terminal`, query: { cols: NUM, rows: NUM } };
-  if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"]);
+  if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"], PAGE_QUERY);
   if (seg.length === 3 && a === "commands" && ok(b) && c === "cooperative") return http(`/api/commands/${b}/cooperative`, ["GET"]);
   if (seg.length === 2 && a === "commands" && ok(b)) return http(`/api/commands/${b}`, ["GET"]);
-  if (seg.length === 1 && a === "requests") return http("/api/requests", ["GET"]);
+  if (seg.length === 1 && a === "requests") return http("/api/requests", ["GET"], PAGE_QUERY);
   if (seg.length === 3 && a === "requests" && ok(b) && c === "resolve") return http(`/api/requests/${b}/resolve`, ["POST"]);
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;
