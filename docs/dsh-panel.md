@@ -24,17 +24,21 @@ Fleet Control still runs as its own service and its page keeps working on its ow
 
    Restart the host service so it reads the new line.
 
-2. Set these variables for the DSH process: `FLEET_CONTROL_PANEL_URL` (the host service, https, or http on loopback), `FLEET_CONTROL_PANEL_TOKEN_FILE` and, for a private certificate authority, `FLEET_CONTROL_PANEL_CA`.
-
-3. Load the plugin through `~/.dsh/cordis.patch.yml`:
+2. Load the plugin through `~/.dsh/cordis.patch.yml`. `url` is the host service (https, or http on loopback), `tokenFile` the file from step 1 and `caFile` the certificate authority for a private certificate. The paths are not secrets; the token stays in its file.
 
    ```yaml
    - insert:
        - id: fleet-control-panel
          name: "file:///absolute/path/to/fleet-control/dsh/index.js"
+         config:
+           url: https://192.168.50.4:4871
+           tokenFile: /Users/me/.config/fleet-control/token-dsh-panel
+           caFile: /Users/me/.config/fleet-control/ca.pem
    ```
 
-Without the variables the plugin still loads; the page route then answers 503 with what is missing.
+   The environment variables `FLEET_CONTROL_PANEL_URL`, `FLEET_CONTROL_PANEL_TOKEN_FILE` and `FLEET_CONTROL_PANEL_CA` are read when the config leaves a field out.
+
+Without settings the plugin still loads; the page route then answers 503 with what is missing.
 
 ## Limits
 

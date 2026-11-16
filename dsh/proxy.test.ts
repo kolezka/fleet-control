@@ -77,6 +77,20 @@ test("settings refuse plain http off loopback and a missing token", () => {
   expect(readSettings({ FLEET_CONTROL_PANEL_URL: "https://192.168.50.4:4871", FLEET_CONTROL_PANEL_TOKEN_FILE: "/nonexistent" }).error).toMatch(/could not be read/);
 });
 
+test("plugin config wins over the environment", async () => {
+  const file = `${process.env.TMPDIR ?? "/tmp"}/fc-panel-token-${process.pid}`;
+  await Bun.write(file, token + "\n");
+  try {
+    const s = readSettings({ FLEET_CONTROL_PANEL_URL: "http://192.168.50.4:4871", FLEET_CONTROL_PANEL_TOKEN_FILE: "/nonexistent" }, { url: "https://192.168.50.4:4871/ignored/path", tokenFile: file });
+    expect(s.error).toBeUndefined();
+    expect(s.upstream?.href).toBe("https://192.168.50.4:4871/");
+    expect(s.token).toBe(token);
+    expect(readSettings({}, { url: "https://h.example", tokenFile: file, caFile: "/nonexistent" }).error).toMatch(/could not be read/);
+  } finally {
+    await Bun.file(file).delete();
+  }
+});
+
 test("rewrite touches only Bun bundle paths", () => {
   expect(rewrite('<script src="/_bun/client/a.js"></script><a href="./install">')).toBe('<script src="/fleet-control/_bun/client/a.js"></script><a href="./install">');
 });
