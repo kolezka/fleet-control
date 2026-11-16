@@ -58,41 +58,62 @@ const defaultRequestTimeoutMs = 30_000;
 const shutdownMarginMs = 2_000;
 
 export async function startCooperativeAdapter(env: Record<string, string | undefined> = process.env, requestTimeoutMs = defaultRequestTimeoutMs) {
+  // Each step names a fixed reason. Messages never carry file content, paths or tokens.
+  let reason = "invalid configuration";
+  const step = async <T>(label: string, run: () => T | Promise<T>): Promise<T> => { reason = label; return run(); };
   try {
-    const path = env.COOPERATIVE_ADAPTER_CONFIG_FILE;
-    if (!path) throw new Error("invalid configuration");
-    const config = await readPrivateJson(path);
+    const path = await step("COOPERATIVE_ADAPTER_CONFIG_FILE must be an absolute path", () => {
+      const value = env.COOPERATIVE_ADAPTER_CONFIG_FILE;
+      if (!value || !isAbsolute(value)) throw new Error("invalid configuration");
+      return value;
+    });
+    const config = await step("adapter config file is missing, a symlink, not owned by this user, not mode 0600, too large or not JSON", () => readPrivateJson(path));
     const base = ["centralUrl", "localToken", "supervisorToken", "incarnationFile"] as const;
-    if (!exactObject(config, [...base]) && !exactObject(config, [...base, "centralCaFile"])) throw new Error("invalid configuration");
-    const central = new URL(config.centralUrl);
-    if (central.protocol !== "https:" && !(central.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(central.hostname))) throw new Error("invalid configuration");
-    const portText = env.COOPERATIVE_ADAPTER_PORT;
-    if (portText !== undefined && (!/^\d+$/.test(portText) || Number(portText) < 0 || Number(portText) > 65535)) throw new Error("invalid configuration");
-    const port = portText === undefined ? 0 : Number(portText);
+    const central = await step("adapter config needs exactly centralUrl, localToken, supervisorToken, incarnationFile and optional centralCaFile, all strings", () => {
+      if (!exactObject(config, [...base]) && !exactObject(config, [...base, "centralCaFile"])) throw new Error("invalid configuration");
+      return config;
+    });
+    const centralUrl = await step("centralUrl must be https, or http on 127.0.0.1 or [::1]", () => {
+      const url = new URL(central.centralUrl);
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname))) throw new Error("invalid configuration");
+      return url;
+    });
+    const port = await step("COOPERATIVE_ADAPTER_PORT must be a whole number 0..65535", () => {
+      const portText = env.COOPERATIVE_ADAPTER_PORT;
+      if (portText !== undefined && (!/^\d+$/.test(portText) || Number(portText) < 0 || Number(portText) > 65535)) throw new Error("invalid configuration");
+      return portText === undefined ? 0 : Number(portText);
+    });
     // Optional PEM CA for a private central. Public, so no mode rule; HTTPS only.
-    const caFile = (config as { centralCaFile?: string }).centralCaFile;
+    const caFile = (central as { centralCaFile?: string }).centralCaFile;
     let ca: string | undefined;
     if (caFile !== undefined) {
-      if (!isAbsolute(caFile) || central.protocol !== "https:") throw new Error("invalid configuration");
-      ca = await readPublicPem(caFile);
-      new X509Certificate(ca);
+      ca = await step("centralCaFile must be an absolute path to a small regular PEM certificate file (not a symlink) and centralUrl must be https", async () => {
+        if (!isAbsolute(caFile) || centralUrl.protocol !== "https:") throw new Error("invalid configuration");
+        const pem = await readPublicPem(caFile);
+        new X509Certificate(pem);
+        return pem;
+      });
     }
-    const incarnation = await readPrivateJson(config.incarnationFile);
-    if (!exactObject(incarnation, ["incarnationId", "token"])) throw new Error("invalid configuration");
-    const handler = createCooperativeAdapter({
-      centralUrl: config.centralUrl,
-      localToken: config.localToken,
-      supervisorToken: config.supervisorToken,
+    const incarnation = await step("incarnation file must be an absolute path to a private file holding exactly incarnationId and token", async () => {
+      if (!isAbsolute(central.incarnationFile)) throw new Error("invalid configuration");
+      const value = await readPrivateJson(central.incarnationFile);
+      if (!exactObject(value, ["incarnationId", "token"])) throw new Error("invalid configuration");
+      return value;
+    });
+    const handler = await step("adapter settings were refused (tokens or central URL)", () => createCooperativeAdapter({
+      centralUrl: central.centralUrl,
+      localToken: central.localToken,
+      supervisorToken: central.supervisorToken,
       incarnationId: incarnation.incarnationId,
       incarnationToken: incarnation.token,
       centralFetch: (input, init) => fetch(input, ca ? { ...init, tls: { ca } } as RequestInit : init),
       allowLoopbackHttp: true,
       requestTimeoutMs,
-    });
-    const listener = createCooperativeListener({ handler, port, shutdownTimeoutMs: requestTimeoutMs + shutdownMarginMs });
+    }));
+    const listener = await step("could not listen on 127.0.0.1 at the chosen port (in use?)", () => createCooperativeListener({ handler, port, shutdownTimeoutMs: requestTimeoutMs + shutdownMarginMs }));
     return { url: `http://127.0.0.1:${listener.port}`, stop: listener.stop };
   } catch {
-    throw new Error("cooperative adapter startup failed");
+    throw new Error(`cooperative adapter startup failed: ${reason}`);
   }
 }
 
@@ -102,5 +123,5 @@ if (import.meta.main) {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     console.log(JSON.stringify({ url: running.url }));
-  }).catch(() => { console.error("cooperative adapter startup failed"); process.exitCode = 1; });
+  }).catch((error) => { console.error(error instanceof Error && error.message.startsWith("cooperative adapter startup failed") ? error.message : "cooperative adapter startup failed"); process.exitCode = 1; });
 }
