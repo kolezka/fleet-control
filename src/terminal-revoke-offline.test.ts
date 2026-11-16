@@ -66,3 +66,15 @@ test("a reload closes terminals opened with a revoked or rotated token and keeps
   fresh.ws.close();
   await fresh.closed;
 });
+
+test("stopping the server ends its subscription to token reloads", async () => {
+  const shared = await Auth.fromFile(tokens);
+  const size = () => (shared as unknown as { listeners: Set<unknown> }).listeners.size;
+  const a = serve({ fleet, store: new Store(":memory:") }, 0, { auth: shared });
+  const b = serve({ fleet, store: new Store(":memory:") }, 0, { auth: shared });
+  expect(size()).toBe(2);
+  await a.stop(true);
+  expect(size()).toBe(1);
+  await b.stop(true);
+  expect(size()).toBe(0);
+});

@@ -143,7 +143,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   let viewers = 0;
   // Open terminal sockets, so a token reload can close the ones whose token was revoked or rotated.
   const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void }>();
-  auth?.onReplace(() => {
+  const unsubscribe = auth?.onReplace(() => {
     for (const ws of sockets) if (ws.data.principal && !auth.current(ws.data.principal)) ws.close(1008, "token revoked");
   });
   const openTerminal = (req: Request, server: any, who: Principal | null, session: string) => {
@@ -351,5 +351,8 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     },
     fetch: () => Response.json({ error: { kind: "not_found", message: "not found" } }, { status: 404 }),
   });
+  // A stopped server must not stay subscribed to a shared Auth, or every later reload still reaches it.
+  const stop = server.stop.bind(server);
+  server.stop = (force?: boolean) => { unsubscribe?.(); return stop(force); };
   return server;
 }
