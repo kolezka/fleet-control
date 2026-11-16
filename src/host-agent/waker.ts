@@ -50,8 +50,13 @@ export function adapterWait(config: WakerConfig, fetcher: typeof fetch = fetch):
 }
 
 // Runs until stopped. Errors back off up to a minute and are logged without detail from central.
+// Agents started in a row while work stays queued. Without command ids the waker cannot tell a busy
+// queue from an agent that never claims (wrong MCP config), so each further start waits longer.
+export const RESTART_PAUSES_MS = [0, 30_000, 120_000, 600_000];
+
 export async function runWaker(config: WakerConfig, deps: WakerDeps, stopped: () => boolean): Promise<void> {
   let failures = 0;
+  let streak = 0;
   while (!stopped()) {
     let pending: boolean;
     try {
@@ -64,7 +69,15 @@ export async function runWaker(config: WakerConfig, deps: WakerDeps, stopped: ()
       await deps.sleep(delay);
       continue;
     }
-    if (!pending || stopped()) continue;
+    if (!pending) { streak = 0; continue; }
+    if (stopped()) continue;
+    const pause = RESTART_PAUSES_MS[Math.min(streak, RESTART_PAUSES_MS.length - 1)]!;
+    if (pause > 0) {
+      deps.log(`work still waiting after ${streak} agent run(s); next start in ${pause / 1000}s`);
+      await deps.sleep(pause);
+      if (stopped()) continue;
+    }
+    streak++;
     deps.log("work waiting; starting agent");
     const started = performance.now();
     let code: number;
@@ -76,7 +89,9 @@ export async function runWaker(config: WakerConfig, deps: WakerDeps, stopped: ()
 }
 
 async function runCommand(command: string[]): Promise<number> {
-  const child = Bun.spawn(command, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+  // The agent does not need to know where the waker's private config is.
+  const { COOPERATIVE_WAKER_CONFIG_FILE: _, ...env } = process.env;
+  const child = Bun.spawn(command, { stdin: "ignore", stdout: "inherit", stderr: "inherit", env });
   return await child.exited;
 }
 

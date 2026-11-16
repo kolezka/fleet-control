@@ -127,6 +127,9 @@ script: restoring over a live installation needs a stopped stack and a human dec
 - **`serve` refused**: `cooperative service startup refused: <reason>` means the listener never
   opened and the database was not reached; fix the named setting and start again. A bare
   `cooperative service startup failed` came from the database or the listener.
+- A reason ending in an error code, such as `a configured file or directory does not exist (ENOENT)`,
+  comes from the file system. It does not print the path; check the `COOPERATIVE_*_FILE` settings
+  of that command.
 
 ### Persistent adapters and tailnet access
 
@@ -166,7 +169,10 @@ without polling by the agent and without typing into any terminal:
    claims and reports itself with `cooperative_claim` and `cooperative_report`.
 3. Then it waits again. One agent runs at a time; it is never killed or restarted for an outcome. An
    agent that fails or exits within five seconds is started again only after a pause, and wait errors
-   back off up to a minute.
+   back off up to a minute. While work stays queued across agent runs, each further start waits longer
+   (30 s, 2 min, then 10 min), so an agent that never claims (for example a wrong MCP config) cannot
+   start paid runs every few seconds; the count resets once the queue is empty. The agent does not
+   inherit `COOPERATIVE_WAKER_CONFIG_FILE`.
 
 A new command therefore reaches an idle host within about a second plus the agent's start time.
 

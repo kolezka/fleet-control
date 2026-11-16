@@ -44,6 +44,21 @@ test("waker backs off after failures and after an agent that exits at once", asy
   expect(sleeps).toEqual([2000, 4000, 30000]);
 });
 
+test("waker waits longer before each agent start while work stays queued, and resets once the queue is empty", async () => {
+  const sleeps: number[] = [];
+  const answers = [true, true, true, true, true, false, true];
+  let runs = 0;
+  await runWaker(config, {
+    wait: async () => answers.shift()!,
+    run: async () => { runs++; await Bun.sleep(1); return 0; },
+    sleep: async (ms) => { sleeps.push(ms); },
+    log: () => {},
+  }, () => answers.length === 0 && runs >= 6);
+  // Each run ends within 5 s here, so a 5 s pause follows it; the growing pause comes before the next start.
+  expect(runs).toBe(6);
+  expect(sleeps.filter((ms) => ms !== 5000)).toEqual([30000, 120000, 600000, 600000]);
+});
+
 test("adapterWait calls cooperative_wait through the adapter with the local token and reads pending", async () => {
   const seen: { url: string; auth: string | null; body: any }[] = [];
   const fake = (async (url: string, init: RequestInit) => {
