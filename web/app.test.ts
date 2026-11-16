@@ -250,3 +250,21 @@ test("browser reads the current request view and falls back to the full list on 
     expect(b.element("phaseState").textContent).toContain("one · revision 1");
   }
 });
+
+// Every value a host or gateway sends can be hostile. None may become markup or break out of an attribute.
+test("host-provided strings never become markup anywhere on the page", async () => {
+  const evil = (tag: string) => `<x-evil-${tag}>"x-evil-${tag}="1'`;
+  const hostile = { id: "a", name: evil("hostname"), apiBase: "/api/hosts/a" };
+  const session = { name: evil("session"), host: evil("sessionhost"), role: evil("role"), registered: true, running: true, model: { state: "observed", model: evil("model"), source: evil("source"), observedAt: "2026-11-16T08:00:00Z" } };
+  const run = { id: evil("run"), orchestrator: evil("orch"), phase: evil("phase"), revision: 1, phaseStatus: evil("phasestatus"), updatedAt: "t" };
+  const request = { id: evil("req"), runId: run.id, phase: run.phase, revision: 1, kind: "approval", question: evil("question"), proposedAction: evil("action"), scope: evil("scope"),
+    evidence: [evil("evidence")], allowedResponses: [evil("answer")], status: "open", response: evil("response"), resolvedBy: evil("resolver"), resolutionNote: evil("note") };
+  const cmd = { id: evil("cmd"), target: evil("target"), actor: evil("actor"), text: evil("text"), status: evil("status"), response: evil("cmdresponse"), createdAt: "t", updatedAt: "t" };
+  const b = await browser([hostile], path => path.endsWith("/sessions") ? { sessions: [session] } : path.includes("/requests") ? { runs: [run], requests: [request] } : { commands: [cmd] });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const html = ["sidebar", "requests", "workflowSteps", "exchangeRows"].map(id => b.element(id).innerHTML).join("\n");
+  // The fixture must reach every panel, or the check below proves nothing.
+  for (const tag of ["hostname", "session", "model", "question", "evidence", "answer", "text", "actor", "status", "phase"]) expect(html).toContain("x-evil-" + tag);
+  expect(html).not.toMatch(/<x-evil/);
+  expect(html).not.toMatch(/"x-evil-[a-z]+=/);
+});
