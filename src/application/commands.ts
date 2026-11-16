@@ -1,13 +1,15 @@
 // What the web API and the MCP tools do with the host command queue. Both call these, so they cannot drift.
 import type { Commands } from "../data/commands.ts";
+import { MAX_PAGE, PAGE } from "../data/page.ts";
 import type { Command, CommandEvent, CommandStatus } from "../domain/commands.ts";
 import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
 
-// Polling reads of all events return pages, like the command and request lists.
-export const EVENT_PAGE = 100;
-export const MAX_EVENT_PAGE = 1000;
+// Lists and polling reads of all events return pages of the same size.
+export { MAX_PAGE, PAGE } from "../data/page.ts";
+export const EVENT_PAGE = PAGE;
+export const MAX_EVENT_PAGE = MAX_PAGE;
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
 export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer }, principal?: string) {
@@ -30,6 +32,7 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
     },
 
     list: (status?: CommandStatus): Command[] => commands.list(status),
+    page: (page: Parameters<Commands["listPage"]>[0] = {}) => commands.listPage(page),
 
     // Events of every command after a cursor, for polling, at most limit per call.
     eventsAfter: (afterSeq: number, limit = EVENT_PAGE): CommandEvent[] => commands.events(undefined, afterSeq, limit),

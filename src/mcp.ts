@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { CommandError, MAX_TEXT } from "./domain/commands.ts";
-import { commandUseCases, EVENT_PAGE, MAX_EVENT_PAGE } from "./application/commands.ts";
+import { commandUseCases, EVENT_PAGE, MAX_EVENT_PAGE, MAX_PAGE, PAGE } from "./application/commands.ts";
 import { requestUseCases } from "./application/requests.ts";
 import { RequestError } from "./domain/requests.ts";
 
@@ -19,6 +19,10 @@ const eventPage = <E extends { seq: number }>(events: E[], limit: number) =>
 const eventInput = {
   afterSeq: z.number().int().min(0).default(0),
   limit: z.number().int().min(1).max(MAX_EVENT_PAGE).default(EVENT_PAGE),
+};
+const pageInput = {
+  limit: z.number().int().min(1).max(MAX_PAGE).default(PAGE),
+  cursor: z.string().max(4096).optional(),
 };
 const attempt = async (f: () => unknown) => { try { return json(await f()); } catch (e) { return failure(e); } };
 
@@ -61,10 +65,10 @@ export function buildMcpServer(deps: ControlDeps, principal?: string) {
   });
 
   server.registerTool("command_list", {
-    description: "List commands, optionally by status (queued, delivered, delivery_unknown, accepted, rejected, running, completed, failed).",
-    inputSchema: { status: z.enum(["queued", "delivering", "delivered", "delivery_unknown", "accepted", "rejected", "running", "completed", "failed"]).optional() },
+    description: "List commands oldest first, optionally by status, at most limit (default 100, max 1000). Pass nextCursor back as cursor with the same status for the next page.",
+    inputSchema: { status: z.enum(["queued", "delivering", "delivered", "delivery_unknown", "accepted", "rejected", "running", "completed", "failed"]).optional(), ...pageInput },
     annotations: { readOnlyHint: true },
-  }, async ({ status }) => json({ commands: queue.list(status) }));
+  }, async (a) => attempt(() => queue.page(a)));
 
   server.registerTool("command_events", {
     description: "Read command status events after a cursor (seq), oldest first, at most limit (default 100, max 1000). nextAfterSeq is set when the page is full; poll again from it.",
@@ -143,10 +147,16 @@ function registerRequestTools(server: McpServer, requests: ReturnType<typeof req
   }, async (a) => attempt(() => ({ request: requests.withdraw(a) })));
 
   server.registerTool("request_list", {
-    description: "List requests, optionally for one run and status (open, resolved, acknowledged, stale, withdrawn), with the runs.",
-    inputSchema: { runId: z.string().optional(), status: z.enum(["open", "resolved", "acknowledged", "stale", "withdrawn"]).optional() },
+    description: "List requests oldest first, optionally for one run and status (open, resolved, acknowledged, stale, withdrawn), at most limit (default 100, max 1000), with the runs those requests belong to. Pass nextCursor back as cursor with the same filter. Use run_list for every run.",
+    inputSchema: { runId: z.string().optional(), status: z.enum(["open", "resolved", "acknowledged", "stale", "withdrawn"]).optional(), ...pageInput },
     annotations: { readOnlyHint: true },
-  }, async (a) => attempt(() => requests.overview(a)));
+  }, async (a) => attempt(() => requests.page(a)));
+
+  server.registerTool("run_list", {
+    description: "List every run in ID order, at most limit (default 100, max 1000). Pass nextCursor back as cursor for the next page.",
+    inputSchema: pageInput,
+    annotations: { readOnlyHint: true },
+  }, async (a) => attempt(() => requests.runPage(a)));
 
   server.registerTool("request_gate", {
     description: "Report the recorded approval response for this run, phase and revision. This is not proof of human approval and does not authorize execution.",

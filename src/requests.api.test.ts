@@ -93,7 +93,7 @@ test("a worker cannot write the phase record over MCP", async () => {
 test("request tools are listed next to command tools", async () => {
   const client = await connect();
   const names = (await client.listTools()).tools.map((t) => t.name);
-  for (const n of ["run_register", "phase_update", "request_create", "request_resolve", "request_acknowledge", "request_withdraw", "request_list", "request_gate", "request_events"]) {
+  for (const n of ["run_register", "phase_update", "request_create", "request_resolve", "request_acknowledge", "request_withdraw", "request_list", "run_list", "request_gate", "request_events"]) {
     expect(names).toContain(n);
   }
   await client.close();
