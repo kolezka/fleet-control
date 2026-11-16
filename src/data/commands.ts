@@ -124,6 +124,12 @@ export class Commands {
     return { commands, nextCursor: rows.length > limit && last ? encodeCursor([last.createdAt, last.id, status]) : null };
   }
 
+  // The newest commands, returned oldest first like list(). The page shows only the last few.
+  latest(limit: number): Command[] {
+    const n = pageLimit(invalid, limit);
+    return this.db.query<Command, [number]>(`SELECT * FROM (${select} ORDER BY created_at DESC, id DESC LIMIT ?) ORDER BY createdAt, id`).all(n);
+  }
+
   list(status?: CommandStatus): Command[] {
     return status
       ? this.db.query<Command, [string]>(`${select} WHERE status = ? ORDER BY created_at, id`).all(status)

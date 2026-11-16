@@ -14,7 +14,8 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   const fetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
     const value = path === "./api/hosts" ? { hosts } : respond(path, init);
-    return { status: 200, ok: true, json: async () => value };
+    const status = (value as { __status?: number } | null)?.__status ?? 200;
+    return { status, ok: status < 300, json: async () => value };
   };
   let source = await Bun.file(new URL("./app.ts", import.meta.url)).text();
   source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = class {};");
@@ -161,4 +162,20 @@ test("page styles bound the supervisor panel column and keep Send inside it", as
   const css = (await Bun.file(new URL("./live.css", import.meta.url)).text()).replace(/\s+/g, "");
   expect(css).toContain(".coordination{grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}");
   expect(css).toContain(".coordinationheadh2,.composerfooterbutton{flex-shrink:0}");
+});
+
+const direct = { id: "h", name: "H", apiBase: "/api/hosts/h" };
+const many = Array.from({ length: 6 }, (_, i) => ({ id: "c" + i, target: "main", actor: "web-ui", text: "t" + i, status: "queued", createdAt: "t", updatedAt: "t" }));
+test("browser polls only the newest commands it shows", async () => {
+  const b = await browser([direct], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { runs: [], requests: [] } : { commands: many });
+  const reads = b.calls.filter(c => c.path.includes("/commands")).map(c => c.path);
+  expect(reads).toEqual(["/api/hosts/h/commands?latest=6"]);
+  expect(b.element("exchangeRows").innerHTML).toContain("t5");
+});
+test("browser falls back to the full list when an older host refuses latest", async () => {
+  const b = await browser([direct], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { runs: [], requests: [] }
+    : path.includes("latest=") ? { __status: 400, error: { kind: "invalid", message: "unknown query parameter latest" } } : { commands: many });
+  const reads = b.calls.filter(c => c.path.includes("/commands")).map(c => c.path);
+  expect(reads).toEqual(["/api/hosts/h/commands?latest=6", "/api/hosts/h/commands"]);
+  expect(b.element("exchangeRows").innerHTML).toContain("t5");
 });

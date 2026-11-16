@@ -32,6 +32,7 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
     },
 
     list: (status?: CommandStatus): Command[] => commands.list(status),
+    latest: (limit: number): Command[] => commands.latest(limit),
     page: (page: Parameters<Commands["listPage"]>[0] = {}) => commands.listPage(page),
 
     // Events of every command after a cursor, for polling, at most limit per call.

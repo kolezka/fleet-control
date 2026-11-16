@@ -37,6 +37,7 @@ export function modelDetail(m: Model): string {
 
 const READ_TIMEOUT_MS = 8000;
 const WRITE_TIMEOUT_MS = 15000;
+const SHOWN_COMMANDS = 6;
 
 // One call to one host. A 401 from a single host service means this page has no sign-in: go to /login.
 // Through a gateway a 401 is that upstream host's answer, so it only makes that host unknown.
@@ -332,7 +333,7 @@ function renderWorkflow(h: HostState | undefined) {
 
 function renderExchange(h: HostState | undefined) {
   if (h?.info.supervisor) { renderCooperativeExchange(h); return; }
-  const cmds: Command[] = h ? h.coord.commands.slice(-6) : [];
+  const cmds: Command[] = h ? h.coord.commands.slice(-SHOWN_COMMANDS) : [];
   setHtml($("exchangeRows"), cmds.map((c) =>
     `<li><div class="exchangemeta"><strong>${esc(c.actor)} → ${esc(c.target)}</strong><time>${esc(time(c.updatedAt))}</time></div><p>${esc(c.text)}</p>` +
     (c.response ? `<p>${esc(c.response)}</p>` : "") +
@@ -451,7 +452,9 @@ async function refresh(hostId: string, kind: ReadKind) {
     const { outcome } = await hostCall(host, "/sessions");
     result = outcome.ok ? parseSessions(outcome.data) : outcome;
   } else {
-    const [rq, cm] = await Promise.all([hostCall(host, "/requests"), hostCall(host, "/commands")]);
+    // Only the newest commands are shown. A host released before latest= answers 400; then read the whole list.
+    const [rq, newest] = await Promise.all([hostCall(host, "/requests"), hostCall(host, `/commands?latest=${SHOWN_COMMANDS}`)]);
+    const cm = newest.status === 400 ? await hostCall(host, "/commands") : newest;
     result = parseCoord(rq.outcome, cm.outcome);
   }
   apply(finishRead(fleet, hostId, kind, begun.token, result, new Date().toISOString()));
