@@ -4,6 +4,7 @@
 //
 //   bun scripts/run-file-sync.ts <run.md> --run-id <id> --orchestrator <name> [--apply]
 //   FLEET_CONTROL_URL (default http://127.0.0.1:4871), FLEET_CONTROL_TOKEN_FILE (optional, 0600, one token)
+import { readFileSync, statSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { currentPhase, parseRunFile } from "../src/domain/run-file.ts";
@@ -21,6 +22,17 @@ export function plan(runFile: string, run: Run | undefined): Plan {
 }
 
 type Call = (name: string, args: Record<string, unknown>) => Promise<unknown>;
+
+// The token file must be a small regular file owned by this user and readable by nobody else.
+export function readTokenFile(path: string): string {
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > 1024) {
+    throw new Error("token file must be a private file (0600, owned by you)");
+  }
+  const token = readFileSync(path, "utf8").trim();
+  if (!/^\S+$/.test(token)) throw new Error("token file must hold one token");
+  return token;
+}
 
 export async function sync(runFile: string, runId: string, orchestrator: string, apply: boolean, call: Call): Promise<string> {
   const listed = await call("request_list", { runId, limit: 1 }) as { runs: Run[] };
@@ -43,9 +55,9 @@ if (import.meta.main) {
     process.exit(2);
   }
   const tokenFile = process.env.FLEET_CONTROL_TOKEN_FILE;
-  const token = tokenFile ? (await Bun.file(tokenFile).text()).trim() : undefined;
   const client = new Client({ name: "run-file-sync", version: "0" });
   try {
+    const token = tokenFile ? readTokenFile(tokenFile) : undefined;
     const url = new URL("/mcp", process.env.FLEET_CONTROL_URL ?? "http://127.0.0.1:4871");
     await client.connect(new StreamableHTTPClientTransport(url, token ? { requestInit: { headers: { authorization: `Bearer ${token}` } } } : undefined));
     const call: Call = async (name, a) => {
