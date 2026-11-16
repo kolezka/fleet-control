@@ -72,6 +72,9 @@ async function withLiveDatabase(body: (fixture: Fixture) => Promise<void>): Prom
       "CREATE TABLE " + schema + ".events (seq int PRIMARY KEY, body jsonb NOT NULL, at timestamptz NOT NULL)",
       "INSERT INTO " + schema + ".commands VALUES ('c1', '" + cells[0] + "', NULL), ('c2', '" + cells[1] + "', '')",
       "INSERT INTO " + schema + ".events VALUES (1, '{\"detail\": \"" + cells[2] + "\"}', '2026-11-15T10:00:00Z')",
+      "CREATE INDEX events_at ON " + schema + ".events (at)",
+      "CREATE SEQUENCE " + schema + ".ids",
+      "SELECT setval('" + schema + ".ids', 41)",
     ].join("; "));
     const rows = async () => [
       await live!.unsafe("SELECT * FROM " + schema + ".commands ORDER BY id"),
@@ -123,6 +126,7 @@ test.skipIf(!url)("identical restore passes and prints the fingerprint psql give
     expect(await fingerprint()).toBe("fingerprint " + printed);
     for (const cell of cells) expect(result.output).not.toContain(cell);
     expect(scratchOf(result.log)).toBeDefined();
+    expect(result.output).toMatch(/^restored definition [0-9a-f]{64} schema fleet_cooperative_v1$/m);
   });
 }, 60_000);
 
@@ -154,3 +158,21 @@ test.skipIf(!url)("a different row count still exits 3", async () => {
     for (const cell of cells) expect(result.output).not.toContain(cell);
   });
 }, 60_000);
+
+test.skipIf(!url)("equal rows but a lost index or sequence value exits 3 and names the definition", async () => {
+  for (const [change, live, restored] of [
+    ["DROP INDEX " + schema + ".events_at", "  live     index CREATE INDEX events_at", undefined],
+    ["SELECT setval('" + schema + ".ids', 7)", "  live     sequence ids bigint increment 1 last 41", "  restored sequence ids bigint increment 1 last 7"],
+  ] as const) {
+    await withLiveDatabase(async ({ cells, run }) => {
+      const result = await run(change);
+      expect(result.code).toBe(3);
+      expect(result.output).toContain("restore check: definitions differ from live");
+      expect(result.output).not.toContain("restore check ok");
+      const lines = result.output.split("\n");
+      expect(lines.some((line) => line.startsWith(live))).toBe(true);
+      if (restored) expect(lines).toContain(restored);
+      for (const cell of cells) expect(result.output).not.toContain(cell);
+    });
+  }
+}, 120_000);

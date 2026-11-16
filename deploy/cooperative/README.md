@@ -96,8 +96,15 @@ in place of the file argument. The query only reads. It works on any database: a
 `-v schema=<name>` for another schema. The query pins the settings that change how values print,
 but compare between servers of the same PostgreSQL major version.
 
-The check does not compare grants, sequences or table definitions, and the archive is not a backup
-until a second copy sits on another machine. Nothing schedules this script. There is no restore
+After the rows it compares the definitions of the schema with `schema-definition.sql`: columns
+with types, defaults and NOT NULL, constraints, indexes, triggers, a digest of each function, and
+each sequence with its current value. A restore that lost an index or reset a sequence exits 3 and
+shows the differing lines (definitions only, no rows). The check prints
+`restored definition <sha256> schema fleet_cooperative_v1`; run `schema-definition.sql` the same
+way as above on the second machine for the same value.
+
+The check does not compare owners or grants (the restore drops them on purpose), and the archive is
+not a backup until a second copy sits on another machine. Nothing schedules this script. There is no restore
 script: restoring over a live installation needs a stopped stack and a human decision.
 
 ### Recovery after a crash

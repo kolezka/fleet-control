@@ -5,8 +5,9 @@
 # overwrite), then lists the archive with pg_restore to check it is readable. With --check-restore
 # it also restores the archive into a throwaway database in the same server, compares the table
 # list, row counts and row content digests of schema fleet_cooperative_v1 with the live database
-# (schema-fingerprint.sql next to this script), prints one fingerprint of the restored schema and
-# drops the throwaway database again. Row contents are never printed. The live database is only read.
+# (schema-fingerprint.sql next to this script), then its column, constraint, index, trigger,
+# function and sequence definitions (schema-definition.sql), prints one fingerprint of the restored
+# schema and drops the throwaway database again. Row contents are never printed. The live database is only read.
 # A backup still needs a second copy on another machine; this script does not copy it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +16,9 @@ check_restore="${2:-}"
 [[ -z "$check_restore" || "$check_restore" == "--check-restore" ]] || { echo "unknown option: $check_restore" >&2; exit 2; }
 [[ -e "$out" ]] && { echo "refusing to overwrite $out" >&2; exit 1; }
 fingerprint_sql="$here/schema-fingerprint.sql"
+definition_sql="$here/schema-definition.sql"
 [[ -z "$check_restore" || -r "$fingerprint_sql" ]] || { echo "missing $fingerprint_sql" >&2; exit 1; }
+[[ -z "$check_restore" || -r "$definition_sql" ]] || { echo "missing $definition_sql" >&2; exit 1; }
 umask 077
 cd "$here"
 pg() { docker compose exec -T postgres "$@"; }
@@ -50,6 +53,17 @@ restored="$(sed '$d' <<< "$restored")"
 names() { sed 's/ [0-9]* [0-9a-f]*$//'; }
 if [[ "$(names <<< "$live")" != "$(names <<< "$restored")" ]]; then echo "restore check failed: table lists differ" >&2; exit 1; fi
 tables="$(wc -l <<< "$restored" | tr -d ' ')"
+# Columns, constraints, indexes, triggers, functions and sequence values (schema-definition.sql).
+definition() { pg psql -U postgres -d "$1" -XAtq -v ON_ERROR_STOP=1 -v schema="$schema" < "$definition_sql"; }
+live_definition="$(definition fleet)" || { echo "restore check failed: could not read definitions in the live database" >&2; exit 1; }
+restored_definition="$(definition "$scratch")" || { echo "restore check failed: could not read definitions in the restored database" >&2; exit 1; }
+if [[ "$live_definition" != "$restored_definition" ]]; then
+  # Definitions hold no row contents, so the differing lines can be shown.
+  echo "restore check: definitions differ from live (columns, constraints, indexes, triggers, functions or sequence values)"
+  diff <(sed '$d' <<< "$live_definition") <(sed '$d' <<< "$restored_definition") | sed -n 's/^</  live    /p; s/^>/  restored/p' >&2 || true
+  exit 3
+fi
+echo "restored definition ${restored_definition##*definition } schema $schema"
 # Restore the same archive on another machine and run schema-fingerprint.sql there: same value.
 echo "restored fingerprint ${restored_fingerprint#fingerprint } schema $schema tables $tables"
 if [[ "$live" == "$restored" ]]; then
