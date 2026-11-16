@@ -1,5 +1,6 @@
 // Thin adapter over the existing agent-fleet CLI. It never talks to tmux or SSH itself.
 import { FleetError, type FleetSessionStatus, type FleetStatus, type FleetReader } from "../domain/fleet.ts";
+import { drainDeadline, readBounded } from "./bounded-read.ts";
 
 const sessionName = /^[A-Za-z0-9._-]+$/;
 
@@ -9,17 +10,6 @@ type RunResult = { exitCode: number; stdout: string; stderr: string };
 // its process forever, and a runaway one must not fill memory.
 export const CLI_TIMEOUT_MS = 20_000;
 export const CLI_OUTPUT_LIMIT = 8 * 1024 * 1024;
-
-async function readLimited(stream: ReadableStream<Uint8Array>, limit: number, onOverflow: () => void): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  for await (const chunk of stream) {
-    length += chunk.byteLength;
-    if (length > limit) { onOverflow(); break; }
-    chunks.push(chunk);
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks));
-}
 
 export class FleetCli implements FleetReader {
   constructor(
@@ -38,19 +28,24 @@ export class FleetCli implements FleetReader {
       detached: true,
     });
     let stopped: "timed out" | "output too large" | null = null;
+    const drain = drainDeadline();
     const stop = (why: "timed out" | "output too large") => {
       stopped ??= why;
       try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+      drain.arm();
     };
     const timer = setTimeout(() => stop("timed out"), timeoutMs);
+    void proc.exited.then(() => drain.arm());
     try {
-      const [stdout, stderr, exitCode] = await Promise.all([
-        readLimited(proc.stdout, limit, () => stop("output too large")),
-        readLimited(proc.stderr, limit, () => stop("output too large")),
+      const onOverflow = () => stop("output too large");
+      const [out, err, exitCode] = await Promise.all([
+        readBounded(proc.stdout, limit, drain.reached, { onOverflow }),
+        readBounded(proc.stderr, limit, drain.reached, { onOverflow }),
         proc.exited,
       ]);
       if (stopped) throw new FleetError("cli_failed", `fleet ${args[0]} ${stopped}; process killed`, { exitCode });
-      return { exitCode, stdout, stderr };
+      const text = (b: Uint8Array) => new TextDecoder().decode(b);
+      return { exitCode, stdout: text(out.bytes), stderr: text(err.bytes) };
     } finally {
       clearTimeout(timer);
     }

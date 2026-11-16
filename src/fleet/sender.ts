@@ -1,27 +1,18 @@
 // Sends one message file to a session through the existing `fleet send`. Its own guards stay in force.
 import type { Sender } from "../domain/delivery.ts";
+import { drainDeadline, readBounded } from "./bounded-read.ts";
 
 const OUTPUT_LIMIT = 64 * 1024;
 // fleet send waits for the pane itself (a few seconds at most). A run that takes longer has hung,
 // for example on ssh; it is killed and the outcome stays unknown, never retried.
 export const SEND_TIMEOUT_MS = 120_000;
 
-async function captureOutput(stream: ReadableStream<Uint8Array>): Promise<string | null> {
-  const reader = stream.getReader();
-  const bytes = new Uint8Array(OUTPUT_LIMIT);
-  let length = 0;
-  let overflow = false;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    const retained = Math.min(value.byteLength, OUTPUT_LIMIT - length);
-    bytes.set(value.subarray(0, retained), length);
-    length += retained;
-    if (retained < value.byteLength) overflow = true;
-  }
+// A stream cut at the drain deadline counts as complete: whatever the sender printed arrived before it exited.
+async function captureOutput(stream: ReadableStream<Uint8Array>, until: Promise<void>): Promise<string | null> {
+  const { bytes, overflow } = await readBounded(stream, OUTPUT_LIMIT, until, { keepDraining: true });
   if (overflow) return null;
   try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length));
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return null;
   }
@@ -39,11 +30,14 @@ export function fleetSender(fleetBin: string, confPath: string, spawn: SpawnSend
       detached: true,
     });
     let timedOut = false;
+    const drain = drainDeadline();
     const timer = setTimeout(() => {
       timedOut = true;
       if (p.pid !== undefined) try { process.kill(-p.pid, "SIGKILL"); } catch { /* already gone */ }
+      drain.arm();
     }, timeoutMs);
-    const settled = await Promise.allSettled([captureOutput(p.stdout), captureOutput(p.stderr), p.exited]).finally(() => clearTimeout(timer));
+    void p.exited.then(() => drain.arm(), () => drain.arm());
+    const settled = await Promise.allSettled([captureOutput(p.stdout, drain.reached), captureOutput(p.stderr, drain.reached), p.exited]).finally(() => clearTimeout(timer));
     if (timedOut) return { exitCode: -1, stdout: "", stderr: "" };
     const [stdout, stderr, exitCode] = settled;
     // Never expose a valid-looking success prefix when either stream is incomplete or invalid.
