@@ -220,6 +220,17 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/pl.raqz.fleet-control.pl
 
 The old plist points `READONLY_FLEET_BIN` at `~/Development/agent-fleet-dev`, which the commands above rebuild from the submodule. The state database needs no step: both versions use the same tables. The copy from before the swap lacks the check commands sent afterwards.
 
+## DeepSeek Harness panel on 192.168.50.4 (2026-11-16, approved)
+
+The owner approved four steps after PR #95. The service now runs `main` at `59965a3` (PR #95 and #96). Steps and settings are in [dsh-panel.md](dsh-panel.md).
+
+- **Upgrade:** built beside the running service as before (`git archive` plus the pinned submodule `3bd26d8`, `bun install --frozen-lockfile`). State database copied with SQLite's online backup (integrity ok, 9 commands, 2 requests). Swap with `launchctl bootout` and `bootstrap`. Afterwards: 401 without a token, `/api/whoami` = `mini-orchestrator`, stored commands readable, and a WebSocket on the new `/api/terminal?session=probe-shell` received terminal data.
+- **Own principal:** `dsh-panel` was added to the token file, with its token in `~/.config/fleet-control/token-dsh-panel` (0600). `/api/whoami` with it = `dsh-panel`. The panel's commands are recorded under that name.
+- **DSH config:** one row in `~/.dsh/cordis.patch.yml` between `# FLEET_CONTROL_PANEL_START` and `_END`, with `url`, `tokenFile` and `caFile` in the plugin config, so the DSH LaunchAgent plist was not edited. DSH loaded it without a restart: `/fleet-control/` on port 3080 answers 401 without a DSH login.
+- **Browser (headless Chromium on `.4`, logged into DSH):** the right sidebar lists "Fleet Control"; opened, it shows the page with the host `mac-mini`, `probe-shell` and the supervisor panel. In a conversation the view tabs read Chat, Trajectory, Context, Fleet, Statistics, Fleet Control; that tab shows the same page full size. Page, styles, script and `/api` calls went through `/fleet-control/`. Selecting `probe-shell` attached read-only tmux viewers (`tmux list-clients` showed them read-only); after the browser closed, 0 clients were left.
+- **Kept for rollback:** `~/.config/fleet-control/rollback-59965a3/` (state copy, token file before the new principal, plist), the old release as `~/Development/fleet-control-service.before-59965a3`, and `~/.dsh/cordis.patch.yml.bak-20261116-fleet-control-panel`. To remove the panel, delete the marked block from `cordis.patch.yml` and the `dsh-panel` line from the token file.
+- **Not shown by this:** sending an instruction from the panel, the MacBook or Safari as DSH client, a DSH restart, the screenshots' visual quality (the session model cannot read images).
+
 ## Not implemented in this project
 
 - A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. This project installed no host service on `.15`.

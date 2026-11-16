@@ -44,4 +44,4 @@ Without settings the plugin still loads; the page route then answers 503 with wh
 
 - The terminal path of the page needs the host service built from this change; an older service answers 404 on `/api/terminal` and the panel shows the terminal as disconnected.
 - Through a client gateway (`client.ts`) the panel is not supported yet: the gateway uses the path form for terminals.
-- `dsh/proxy.test.ts` runs the proxy against a real host service with auth and a stand-in for the DSH login check. The tabs themselves are checked by hand in the DSH web app.
+- `dsh/proxy.test.ts` runs the proxy against a real host service with auth and a stand-in for the DSH login check. The tabs were checked by hand in the DSH web app on 192.168.50.4 (see implementation-status.md).
