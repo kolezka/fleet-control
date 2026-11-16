@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, parseTokens, tokenLine } from "../src/auth.ts";
-import { change } from "./tokens.ts";
+import { change, withLock } from "./tokens.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -56,6 +56,32 @@ test("a refused change leaves the file untouched", () => {
   expect(out.stdout.toString()).toBe("");
   expect(readFileSync(file, "utf8")).toBe(base);
   expect(run(["revoke", "web", join(dir, "missing")]).exitCode).toBe(1);
+  expect(readdirSync(dir)).toEqual(["tokens"]);
+});
+
+test("concurrent changes all land, and every printed token works", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokens-")); dirs.push(dir);
+  const file = join(dir, "tokens");
+  expect(run(["add", "seed", file]).exitCode).toBe(0);
+  const runs = Array.from({ length: 12 }, (_, i) => Bun.spawn(["bun", "scripts/tokens.ts", "add", `p${i}`, file], { stdout: "pipe", stderr: "pipe" }));
+  const results = await Promise.all(runs.map(async (p) => ({ code: await p.exited, token: (await new Response(p.stdout).text()).trim() })));
+  expect(results.map((r) => r.code)).toEqual(Array(12).fill(0));
+  const auth = new Auth(parseTokens(readFileSync(file, "utf8")));
+  expect(auth.names()).toHaveLength(13);
+  for (const r of results) expect(auth.check(r.token)).not.toBeNull();
+  expect(readdirSync(dir)).toEqual(["tokens"]);
+});
+
+test("a held lock refuses after the wait and leaves the file and lock alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tokens-")); dirs.push(dir);
+  const file = join(dir, "tokens");
+  writeFileSync(file, base, { mode: 0o600 });
+  writeFileSync(`${file}.lock`, "");
+  expect(() => withLock(file, () => 1, 100)).toThrow("remove that file");
+  expect(readFileSync(file, "utf8")).toBe(base);
+  expect(readdirSync(dir).sort()).toEqual(["tokens", "tokens.lock"]);
+  rmSync(`${file}.lock`);
+  expect(withLock(file, () => 2, 100)).toBe(2);
   expect(readdirSync(dir)).toEqual(["tokens"]);
 });
 
