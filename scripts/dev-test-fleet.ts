@@ -8,7 +8,7 @@ import { FleetCli } from "../src/fleet/cli.ts";
 import { Requests } from "../src/data/requests.ts";
 import { createTestFleet } from "../src/fleet/fixture.ts";
 import { observerForConf } from "../src/observe/claude.ts";
-import { serveOptionsFromEnv } from "../src/config.ts";
+import { portFromEnv, serveOptionsFromEnv } from "../src/config.ts";
 import { serve } from "../src/server.ts";
 import { Store } from "../src/data/store.ts";
 
@@ -27,7 +27,7 @@ const server = serve({
   observer,
   terminal: { fleetBin, confPath: fleet.confPath },
   control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, fleet.confPath)), requests: new Requests(store.db) },
-}, Number(process.env.PORT ?? 4871), await serveOptionsFromEnv());
+}, portFromEnv(process.env.PORT, 4871, true), await serveOptionsFromEnv());
 console.log(`test fleet ${fleet.socket} · session ${fleet.session} · ${server.url} · MCP ${server.url}mcp`);
 const stop = async () => { server.stop(true); await fleet.cleanup(); process.exit(0); };
 process.on("SIGINT", stop);

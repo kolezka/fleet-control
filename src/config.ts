@@ -26,9 +26,12 @@ export function parsePeers(raw: string | undefined): Peer[] {
 
 // PORT unset or empty means 4871. Anything else must be 1..65535: an empty or zero port used to
 // bind a random port, which no client could find.
-export function portFromEnv(raw: string | undefined, fallback = 4871): number {
+// allowZero is for entry points whose tests ask for a random port with PORT=0.
+export function portFromEnv(raw: string | undefined, fallback = 4871, allowZero = false): number {
   if (raw === undefined || raw === "") return fallback;
-  if (!/^[1-9][0-9]{0,4}$/.test(raw) || Number(raw) > 65535) throw new Error(`PORT must be 1..65535, got "${raw}"`);
+  if (allowZero && raw === "0") return 0;
+  const range = allowZero ? "0..65535" : "1..65535";
+  if (!/^[1-9][0-9]{0,4}$/.test(raw) || Number(raw) > 65535) throw new Error(`PORT must be ${range}, got "${raw}"`);
   return Number(raw);
 }
 

@@ -2,15 +2,18 @@
 // host's own Fleet Control service. Config: FLEET_CONTROL_CLIENT_CONFIG or the first CLI argument.
 import { GatewayConfigError, loadGatewayConfig, startGateway } from "./src/client-gateway.ts";
 import { createInstaller, localContext } from "./src/install/web.ts";
+import { portFromEnv } from "./src/config.ts";
 
 const configPath = process.argv[2] ?? process.env.FLEET_CONTROL_CLIENT_CONFIG;
 if (!configPath) {
   console.error("usage: bun client.ts <config.json>  (or set FLEET_CONTROL_CLIENT_CONFIG)");
   process.exit(1);
 }
-const port = Number(process.env.PORT ?? 4870);
-if (!Number.isInteger(port) || port < 0 || port > 65535) {
-  console.error("PORT must be an integer between 0 and 65535");
+let port: number;
+try {
+  port = portFromEnv(process.env.PORT, 4870, true);
+} catch (e) {
+  console.error((e as Error).message);
   process.exit(1);
 }
 
