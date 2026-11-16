@@ -1,5 +1,5 @@
 // Pure view logic for the installer page: request payloads, reply parsing and markup.
-export type Role = "central" | "adapter" | "client";
+export type Role = "central" | "adapter" | "client" | "waker";
 export type Form = { role: Role; config: string; state: string; hostId: string; port: string };
 export type PlanView = { role: string; port: number | null; notes: string[]; commands: { argv: string[]; inspect: boolean }[]; unit: { path: string; content: string } | null };
 export type Job = { state: "idle" } | { state: "running" | "succeeded" | "failed"; role: string; digest: string; startedAt: string; finishedAt?: string; message?: string };
@@ -9,6 +9,7 @@ export const roles: { id: Role; name: string; detail: string }[] = [
   { id: "client", name: "Client", detail: "Gateway user service" },
   { id: "adapter", name: "Adapter", detail: "Host adapter user service" },
   { id: "central", name: "Central", detail: "Fresh Compose setup" },
+  { id: "waker", name: "Waker", detail: "Starts the agent when work waits" },
 ];
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const text = (v: unknown): v is string => typeof v === "string";
@@ -19,7 +20,8 @@ export function payload(form: Form): Record<string, unknown> {
   const out: Record<string, unknown> = { role: form.role };
   if (form.role === "central") { out.state = form.state.trim(); out.hostId = form.hostId.trim(); }
   else out.config = form.config.trim();
-  const port = form.port.trim();
+  // The waker has no listener, so it never sends a port.
+  const port = form.role === "waker" ? "" : form.port.trim();
   if (port) out.port = /^[0-9]{1,5}$/.test(port) ? Number(port) : port;
   return out;
 }

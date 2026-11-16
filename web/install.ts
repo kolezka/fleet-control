@@ -4,7 +4,7 @@ import { applyGate, errorText, jobView, parseInfo, parseJob, parsePlan, payload,
 
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
 const TIMEOUT_MS = 15000;
-const defaults: Record<Role, { port: string; config: string }> = { client: { port: "4870", config: "/absolute/private/client.json" }, adapter: { port: "4882", config: "/absolute/private/adapter.json" }, central: { port: "4881", config: "" } };
+const defaults: Record<Role, { port: string; config: string }> = { client: { port: "4870", config: "/absolute/private/client.json" }, adapter: { port: "4882", config: "/absolute/private/adapter.json" }, central: { port: "4881", config: "" }, waker: { port: "", config: "/absolute/private/waker.json" } };
 const managers: Record<string, string> = { darwin: "macOS, launchd user agent", linux: "Linux, systemd user service" };
 
 let role: Role = "client";
@@ -31,6 +31,7 @@ function render() {
   $("roleTitle").textContent = roles.find((r) => r.id === role)!.name;
   $("fieldConfig").hidden = role === "central";
   $("fieldState").hidden = $("fieldHostId").hidden = role !== "central";
+  $("fieldPort").hidden = role === "waker";
   $("config").setAttribute("placeholder", defaults[role].config);
   $("port").setAttribute("placeholder", defaults[role].port);
   const key = currentKey();
