@@ -24,6 +24,8 @@ export class Store {
       source TEXT NOT NULL,
       observed_at TEXT NOT NULL
     )`);
+    // A row is added per new model turn and the session list reads the latest one per session on every refresh.
+    this.db.run("CREATE INDEX IF NOT EXISTS model_observations_session ON model_observations (session, id)");
   }
 
   upsertSession(s: SessionRecord) {
