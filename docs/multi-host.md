@@ -55,7 +55,7 @@ Mapped command reads and submissions use only central. They never fall back to t
 
 The command list is a bounded oldest-first page, not a recent-activity feed or a snapshot. Use explicit continuation to read more. Cooperative inspection displays the stored reservation and supervisor reports separately: `claimed` means reserved, not executed; an inactive incarnation does not prove failure, and settlement does not prove completion. Failed inspection leaves the outcome unknown. A newly submitted command can be inspected even when it is outside the first list page.
 
-Approvals, workflow phase changes and legacy MCP operations are unavailable through a mapped panel. No automatic retry, requeue, successor command or idle-agent wakeup is introduced. An uncertain submit must retain its original destination, payload and idempotency key for any manual retry. Local users who can call the gateway still hold its configured authority; it is not a human-approval boundary.
+Approvals, workflow phase changes and legacy MCP operations are unavailable through a mapped panel. No automatic retry, requeue or successor command is introduced. Waking an idle supervisor is a host concern (see the waker in [deploy/cooperative](../deploy/cooperative/README.md#waking-the-supervisor)), not something the panel does. An uncertain submit must retain its original destination, payload and idempotency key for any manual retry. Local users who can call the gateway still hold its configured authority; it is not a human-approval boundary.
 
 ## Navigation and decisions
 

@@ -137,6 +137,41 @@ activate explicitly for that host/session into a new private incarnation file, a
 load the new credentials. Never reuse or move another host's incarnation file. Do not rotate an
 incarnation merely to restart an adapter.
 
+### Waking the supervisor
+
+Without a running agent nothing claims a queued command. `src/host-agent/waker.ts` closes that gap
+without polling by the agent and without typing into any terminal:
+
+1. It calls the MCP tool `cooperative_wait` through the local adapter. Central holds the call for up
+   to 20 seconds and answers `{ "pending": true }` as soon as this host and session have a queued
+   command. The answer carries no command id or text and claims nothing; a replaced incarnation is
+   refused like a claim.
+2. When work is waiting it starts the configured agent command and waits for it to exit. The agent
+   claims and reports itself with `cooperative_claim` and `cooperative_report`.
+3. Then it waits again. One agent runs at a time; it is never killed or restarted for an outcome. An
+   agent that fails or exits within five seconds is started again only after a pause, and wait errors
+   back off up to a minute.
+
+A new command therefore reaches an idle host within about a second plus the agent's start time.
+
+Config, a private 0600 file named by `COOPERATIVE_WAKER_CONFIG_FILE`:
+
+```json
+{
+  "adapterUrl": "http://127.0.0.1:4882/mcp",
+  "localToken": "<the adapter's local token>",
+  "command": ["/absolute/path/to/agent", "..."],
+  "waitSeconds": 20
+}
+```
+
+`command[0]` must be absolute. The agent gets no token from the waker; give it its own MCP config
+pointing at the same adapter, with the same local token, as `scripts/real-agent-smoke.ts` does for
+Claude Code (`--mcp-config`) and DSH (`dshPatch`). Tell it to claim until the queue is empty and
+then exit. Run the waker as its own user service next to the adapter (launchd on macOS, a systemd
+user unit on Linux). It is not installed on `.4` or `.15`; doing so starts real agents and needs
+the owner's approval.
+
 ### Limits
 
 - Central remains HTTP on host loopback behind the optional tailnet HTTPS proxy.

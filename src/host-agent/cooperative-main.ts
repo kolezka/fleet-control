@@ -6,7 +6,7 @@ import { createCooperativeAdapter } from "./cooperative-adapter.ts";
 import { createCooperativeListener } from "./cooperative-listener.ts";
 
 // Loopback listener for a trusted host. Same-UID processes can access its credentials.
-async function readPrivateJson(path: string): Promise<unknown> {
+export async function readPrivateJson(path: string): Promise<unknown> {
   if (!isAbsolute(path)) throw new Error("invalid configuration");
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {

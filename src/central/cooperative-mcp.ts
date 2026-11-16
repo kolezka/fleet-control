@@ -4,7 +4,7 @@ import { CommandError } from "../domain/commands.ts";
 import type { Principal, IncarnationCredential } from "./domain/identity.ts";
 import type { CooperativeClaims } from "./data/cooperative-claims.ts";
 import type { CooperativeLifecycle } from "./data/cooperative-lifecycle.ts";
-import { cooperativeSupervisor } from "./application/cooperative.ts";
+import { cooperativeSupervisor, MAX_WAIT_SECONDS } from "./application/cooperative.ts";
 
 // The caller must authenticate the principal and obtain the credential out of band.
 // This server must not be mounted alongside legacy supervisor mutation routes.
@@ -38,6 +38,10 @@ export function buildCooperativeMcpServer(
     description: "Atomically reserve one eligible queued command for this supervisor. Reuse requestId to retry, including an empty result. A claim is not acceptance or execution.",
     inputSchema: { requestId: z.string().min(1).max(256) },
   }, async ({ requestId }) => attempt(async () => ({ command: await supervisor.claim(requestId) })));
+  server.registerTool("cooperative_wait", {
+    description: `Wait up to waitSeconds (0 to ${MAX_WAIT_SECONDS}) until this supervisor has a queued command, without claiming it or reading its text. Returns pending true or false.`,
+    inputSchema: { waitSeconds: z.number().int().min(0).max(MAX_WAIT_SECONDS) },
+  }, async ({ waitSeconds }, extra) => attempt(async () => supervisor.wait(waitSeconds, extra?.signal)));
   server.registerTool("cooperative_report", {
     description: "Report a lifecycle transition for a command claimed by this incarnation. Reuse requestId only for the same report. Reports do not change the frozen command row.",
     inputSchema: { commandId: z.string().min(1).max(256), requestId: z.string().min(1).max(256), status: z.enum(["accepted", "rejected", "running", "completed", "failed"]), detail: z.string().max(65536) },

@@ -10,7 +10,14 @@ import type { IncarnationCredential, Principal } from "../domain/identity.ts";
 
 // The caller must authenticate the principal, validate the credential and pass private copies of both.
 // `refuse` lists other secrets the caller holds for this request; ones shorter than 16 characters are not checked.
-export function cooperativeSupervisor(deps: { claims: CooperativeClaims; lifecycle: CooperativeLifecycle }, identity: Principal, incarnation: IncarnationCredential, refuse?: readonly string[]) {
+// Longest wait a supervisor may ask for. It stays under the adapter's 30 second request deadline.
+export const MAX_WAIT_SECONDS = 20;
+const POLL_MS = 1000;
+
+type Clock = { now: () => number; sleep: (ms: number) => Promise<void> };
+const realClock: Clock = { now: () => performance.now(), sleep: (ms) => Bun.sleep(ms) };
+
+export function cooperativeSupervisor(deps: { claims: CooperativeClaims; lifecycle: CooperativeLifecycle; clock?: Clock }, identity: Principal, incarnation: IncarnationCredential, refuse?: readonly string[]) {
   const refused = [incarnation.token, ...(refuse ?? []).filter((secret) => typeof secret === "string" && secret.length >= 16)];
   const sensitive = (value: string) => refused.some((secret) => value.includes(secret));
 
@@ -21,6 +28,20 @@ export function cooperativeSupervisor(deps: { claims: CooperativeClaims; lifecyc
         const response = JSON.stringify({ command });
         return !response.includes(incarnation.token) && !response.includes(incarnation.incarnationId);
       });
+    },
+
+    // Waits up to waitSeconds for work on this slot without claiming it, so an idle host process
+    // can start an agent only when there is something to do. The agent still claims for itself.
+    async wait(waitSeconds: number, signal?: AbortSignal) {
+      if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > MAX_WAIT_SECONDS) throw new Error("invalid wait");
+      const clock = deps.clock ?? realClock;
+      const deadline = clock.now() + waitSeconds * 1000;
+      while (true) {
+        if (await deps.claims.pending(identity, incarnation)) return { pending: true };
+        const left = deadline - clock.now();
+        if (left <= 0 || signal?.aborted) return { pending: false };
+        await clock.sleep(Math.min(POLL_MS, left));
+      }
     },
 
     async report(commandId: string, requestId: string, status: CooperativeStatus, detail: string) {

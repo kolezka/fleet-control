@@ -70,7 +70,7 @@ test("roles isolate MCP tools and fail closed for registry errors", async () => 
   expect((await call("supervisor")).status).toBe(401);
   expect((await call("host")).status).toBe(403);
   const supervisor = await (await call("supervisor", token)).json();
-  expect(supervisor.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["cooperative_claim", "cooperative_report"]);
+  expect(supervisor.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["cooperative_claim", "cooperative_report", "cooperative_wait"]);
   const operator = await (await call("operator")).json();
   expect(operator.result.tools.map((tool: { name: string }) => tool.name)).toContain("command_submit");
   expect(operator.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["command_get", "command_list", "command_submit"]);

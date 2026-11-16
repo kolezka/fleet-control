@@ -24,7 +24,7 @@ Updated 2026-11-15.
 
 **Decisions to keep.**
 
-- Delivery is cooperative: the supervisor model calls MCP `cooperative_claim` and `cooperative_report` itself, because `fleet send` resolves the tmux pane by name repeatedly and cannot be bound to one runtime instance (see `vendor/agent-fleet/scripts/watchdog.sh`). There is no tmux paste fallback and no wakeup of an idle agent. The owner chose this.
+- Delivery is cooperative: the supervisor model calls MCP `cooperative_claim` and `cooperative_report` itself, because `fleet send` resolves the tmux pane by name repeatedly and cannot be bound to one runtime instance (see `vendor/agent-fleet/scripts/watchdog.sh`). There is no tmux paste fallback. The owner chose this. On 2026-11-16 the owner asked to solve the idle-agent gap: `cooperative_wait` lets a host process wait for queued work without claiming it, and `src/host-agent/waker.ts` then starts a fresh agent that claims for itself ([deploy/cooperative](../deploy/cooperative/README.md#waking-the-supervisor)). It never types into a running session.
 - Each supervisor process gets an incarnation credential. Activation revokes the previous incarnation for that host and session. Claims and reports lock slot, identity and incarnation in the same PostgreSQL transaction. Fencing cannot cancel external effects that already started.
 - A claim is a reservation, not acceptance or execution. The command row stays `claimed`; progress lives in `central_cooperative_lifecycle_events`. Unknown outcomes are never retried automatically.
 - In cooperative mode, legacy supervisor MCP reads and writes must stay off: they expose command text to stale processes and are not incarnation-fenced.
