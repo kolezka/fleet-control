@@ -68,6 +68,8 @@ Autostart, watchdog behavior and restart policy must be reviewed before enabling
 
 A copied database is not a verified backup. `bun scripts/host-backup.ts <state.db> <new file>` takes one consistent snapshot while the service runs, writes it to a new 0600 file (it never overwrites), runs `integrity_check` on the copy and compares every table row by row with the snapshot, then prints the SHA-256. The copy opens as a plain database without `-wal` or `-shm` files. It does not schedule backups or keep a second copy: copy the file to another machine and compare the checksum there. Backup location and schedule remain deployment decisions.
 
+On the second machine, `bun scripts/host-restore-check.ts <backup file> <sha256>` compares the checksum, copies the file to a temporary directory and opens the copy with the service's own stores. It reads sessions, every command with its events, runs, requests and request events, and fails if opening changed any row. It names any table the service would add to an older backup. The backup file is not written and nothing is restored over a live database; an actual restore is still a stopped-service file copy decided per host.
+
 ## Running the service
 
 Environment for `bun index.ts`:
