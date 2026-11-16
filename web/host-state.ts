@@ -407,6 +407,7 @@ export function finishPageRead(f: Fleet, a: PageHandle, result: Outcome<CommandP
 export function terminalClosedText(code: number, reason: string): string {
   if (code === 1000) return "Viewer ended";
   if (code === 1008 && reason === "token revoked") return "Access revoked · sign in again";
+  if (code === 1008 && reason === "gateway token revoked") return "Gateway's token for this host revoked · update the gateway credentials";
   if (code === 1013 && reason === "too many open terminal viewers") return "Host has too many open viewers · close another tab";
   return `Refused (${code})`;
 }

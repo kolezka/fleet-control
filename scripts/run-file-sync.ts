@@ -66,7 +66,9 @@ export function serviceUrl(raw: string | undefined, withToken: boolean): URL {
   if (base.protocol !== "https:" && base.protocol !== "http:") throw new Error("FLEET_CONTROL_URL must be http or https");
   const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(base.hostname);
   if (withToken && base.protocol !== "https:" && !loopback) throw new Error("a token is sent only over https, or over http to this machine");
-  return new URL("/mcp", base);
+  // Keep a path prefix (a proxy such as https://proxy/hostA/) instead of resolving to its root.
+  if (!base.pathname.endsWith("/")) base.pathname += "/";
+  return new URL("mcp", base);
 }
 
 export async function sync(runFile: string, runId: string, orchestrator: string, apply: boolean, call: Call): Promise<string> {

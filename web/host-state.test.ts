@@ -304,4 +304,5 @@ test("a terminal closed for a revoked token says so; other refusals keep their c
   expect(terminalClosedText(1000, "token revoked")).toBe("Viewer ended");
   expect(terminalClosedText(1013, "too many open terminal viewers")).toBe("Host has too many open viewers · close another tab");
   expect(terminalClosedText(1013, "client not ready")).toBe("Refused (1013)");
+  expect(terminalClosedText(1008, "gateway token revoked")).toBe("Gateway's token for this host revoked · update the gateway credentials");
 });

@@ -58,6 +58,7 @@ test("a tab hidden for a minute closes its terminal sockets and reopens them whe
   b.listeners.get("visibilitychange")!({});
   timers.find(t => t.ms === 60_000)!.fn();
   expect(b.sockets[0]!.closed).toBe(true);
+  expect(b.element("terminals").textContent).toBe("Terminals paused while the tab was hidden");
   b.document.hidden = false;
   b.listeners.get("visibilitychange")!({});
   await new Promise(resolve => setTimeout(resolve, 0));

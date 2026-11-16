@@ -15,7 +15,12 @@ export const normalizeStatus = (cell: string) => { const head = cell.split(",")[
 // "\|" inside a cell is a literal pipe, as in GitHub markdown.
 const cells = (line: string) => line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll("\\|", "|"));
 // Cuts by code point, so a surrogate pair is never split, and drops the space a cut can leave.
-const clip = (text: string, max: number) => Array.from(text).slice(0, max).join("").trimEnd();
+// The service limits are in UTF-16 units, so cut there, without splitting a surrogate pair.
+const clip = (text: string, max: number) => {
+  let out = "";
+  for (const ch of text) { if (out.length + ch.length > max) break; out += ch; }
+  return out.trimEnd();
+};
 export const TIP = /^[0-9a-f]{7,40}$/;
 
 export function parseRunFile(text: string): RunFile {
