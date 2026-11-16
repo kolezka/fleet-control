@@ -600,8 +600,17 @@ const visible = () => !document.hidden;
 setInterval(() => { if (visible()) void refreshAll("coord"); }, 3000);
 setInterval(() => { if (visible()) void refreshAll("sessions"); }, 15000);
 setInterval(() => { if (visible()) void loadHostList(); }, 60000);
+// Each open pane holds a terminal socket and a PTY on the host, which count against its viewer cap.
+// A tab hidden for a minute gives them back; the sessions refresh on showing rebuilds the panes.
+const HIDDEN_RELEASE_MS = 60_000;
+let releaseTimer: ReturnType<typeof setTimeout> | undefined;
 document.addEventListener("visibilitychange", () => {
-  if (!visible()) return;
+  if (!visible()) {
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => { stopPanes(); renderedPanes = ""; }, HIDDEN_RELEASE_MS);
+    return;
+  }
+  clearTimeout(releaseTimer);
   void refreshAll("coord");
   void refreshAll("sessions");
 });
