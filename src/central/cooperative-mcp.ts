@@ -13,7 +13,8 @@ export function buildCooperativeMcpServer(
   principal: Principal,
   credential: IncarnationCredential,
   // Other secrets the caller holds for this request, such as the supervisor's own bearer; input containing one is refused.
-  options: { refuse?: readonly string[] } = {},
+  // `signal` is the HTTP request's: a wait ends when the client goes away, not only on notifications/cancelled.
+  options: { refuse?: readonly string[]; signal?: AbortSignal } = {},
 ) {
   const valid = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
   if (!principal || principal.role !== "supervisor" || ![principal.principalId, principal.name, principal.hostId, principal.session].every(valid)
@@ -41,7 +42,10 @@ export function buildCooperativeMcpServer(
   server.registerTool("cooperative_wait", {
     description: `Wait up to waitSeconds (0 to ${MAX_WAIT_SECONDS}) until this supervisor has a queued command, without claiming it or reading its text. Returns pending true or false.`,
     inputSchema: { waitSeconds: z.number().int().min(0).max(MAX_WAIT_SECONDS) },
-  }, async ({ waitSeconds }, extra) => attempt(async () => supervisor.wait(waitSeconds, extra?.signal)));
+  }, async ({ waitSeconds }, extra) => attempt(async () => {
+    const signals = [extra?.signal, options.signal].filter((signal): signal is AbortSignal => signal !== undefined);
+    return supervisor.wait(waitSeconds, signals.length ? AbortSignal.any(signals) : undefined);
+  }));
   server.registerTool("cooperative_report", {
     description: "Report a lifecycle transition for a command claimed by this incarnation. Reuse requestId only for the same report. Reports do not change the frozen command row.",
     inputSchema: { commandId: z.string().min(1).max(256), requestId: z.string().min(1).max(256), status: z.enum(["accepted", "rejected", "running", "completed", "failed"]), detail: z.string().max(65536) },
