@@ -292,7 +292,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 ## Open decisions
 
-1. Network route: decided 2026-11-09, LAN bind with TLS and tokens; no listener on Tailscale. Done for `.4` on 2026-11-09: certificate from the MacBook's mkcert CA, service installed (see above). Open: certificate rotation.
+1. Network route: decided 2026-11-09, LAN bind with TLS and tokens; no listener on Tailscale. Done for `.4` on 2026-11-09: certificate from the MacBook's mkcert CA, service installed (see above). Open: certificate rotation is manual: `scripts/tls-check.ts` checks a new pair before a restart; there is no renewal and no hot reload (Bun 1.4.4 kept the old certificate after `reload`).
 2. `.4` runs a LaunchAgent, which runs only while `me` is logged in. Open: whether a real-fleet service should be a LaunchDaemon instead, and a systemd user unit if a host service is installed on `.15`.
 3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers.
 4. Supervisor wakeup when it is busy or a dialog is open; what a command does then.

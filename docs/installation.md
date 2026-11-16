@@ -110,7 +110,9 @@ LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` 
 
 Certificate: issued by the MacBook's existing mkcert CA (`mkcert me@MacBook-Pro-me.local`, already trusted in the MacBook System keychain), SAN `IP:192.168.50.4`, valid until 2029-02-09. The CA private key never left the MacBook; `.4` has only the public `ca.pem` so local clients there can verify the server.
 
-At start the service checks `FLEET_CONTROL_TLS_CERT` and `FLEET_CONTROL_TLS_KEY` (`tlsFromEnv` in `src/config.ts`): both or neither must be set, the key must match the certificate, and an expired or not yet valid certificate stops the start. Before, only one of the two set meant plain HTTP without a warning. Less than 30 days before expiry it logs a warning at each start; it does not renew anything. The installed `.4` service has not been restarted with this check.
+At start the service checks `FLEET_CONTROL_TLS_CERT` and `FLEET_CONTROL_TLS_KEY` (`tlsFromEnv` in `src/config.ts`): both or neither must be set, the key must match the certificate, and an expired or not yet valid certificate stops the start. Before, only one of the two set meant plain HTTP without a warning. Less than 30 days before expiry it logs a warning at each start; it does not renew anything.
+
+To rotate: make the new pair (same CA and names), run `bun scripts/tls-check.ts <new cert> <new key>` on the host (same checks, exit 0 or a reason), keep the old files under another name, move the new ones into place and restart (`launchctl kickstart -k`). The service reads the files only at start: a hot reload is not offered, because in Bun 1.4.4 `server.reload({ tls })` returned without error but kept serving the old certificate (checked with `openssl s_client`, 2026-11-16). A token change does not need a restart (SIGHUP, see install-guide.md). The installed `.4` service has not been restarted with this check.
 
 Principals: `macbook-session` (MCP from the MacBook), `web-mariusz` (browser), `mini-orchestrator` (test orchestrator on `.4`). Plain tokens are only in `~/.config/fleet-control/token-*` on the machine that uses them.
 
