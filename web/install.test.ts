@@ -47,6 +47,8 @@ test("payload carries only the fields of the chosen role", () => {
   const form = { role: "client" as const, config: " /p/c.json ", state: "/leftover/state", hostId: "leftover", port: "" };
   expect(view.payload(form)).toEqual({ role: "client", config: "/p/c.json" });
   expect(view.payload({ ...form, role: "central", port: "4881" })).toEqual({ role: "central", state: "/leftover/state", hostId: "leftover", port: 4881 });
+  expect(view.payload({ ...form, role: "waker", port: "4883" })).toEqual({ role: "waker", config: "/p/c.json" });
+  expect(view.roles.map(r => r.id)).toContain("waker");
   // A malformed port is passed on as text so the server refuses it; it is never guessed.
   expect(view.payload({ ...form, port: "48x" }).port).toBe("48x");
 });
@@ -106,7 +108,11 @@ test("apply stays disabled until the exact previewed options and a code are pres
   expect(p.element("apply").disabled).toBe(true);
   expect(p.element("fieldConfig").hidden).toBe(true);
   expect(p.element("fieldState").hidden).toBe(false);
+  await p.fire("role-waker:click");
+  expect(p.element("fieldPort").hidden).toBe(true);
+  expect(p.element("fieldConfig").hidden).toBe(false);
   await p.fire("role-client:click");
+  expect(p.element("fieldPort").hidden).toBe(false);
   await p.type("port", "");
   expect(p.element("apply").disabled).toBe(false);
 });

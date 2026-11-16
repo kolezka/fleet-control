@@ -55,6 +55,10 @@ test("plan is a pure preview and only accepts the local install fields", async (
   expect((await i.handle("POST", "/plan", new Uint8Array([0xff, 0xfe]))).status).toBe(400);
   expect((await i.handle("POST", "/exec", json({}))).status).toBe(404);
   expect((await i.handle("GET", "/plan", null)).status).toBe(404);
+  const waker = await i.post("/plan", { role: "waker", config: "/private/waker.json" });
+  expect(waker.status).toBe(200);
+  expect(waker.body.plan.unit.content).toContain("src/host-agent/waker.ts");
+  expect((await i.post("/plan", { role: "waker", config: "/private/waker.json", port: 4883 })).status).toBe(400);
   expect(i.ran).toHaveLength(0);
 });
 
