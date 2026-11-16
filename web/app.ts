@@ -168,6 +168,13 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
         status.textContent = terminalClosedText(e.code, e.reason);
         return;
       }
+      // 1013: the host is at its viewer cap. Retried slowly, since a slot frees when another viewer closes.
+      if (e.code === 1013) {
+        attempt = RETRY_MS.length - 1;
+        timer = setTimeout(connect, RETRY_MS[attempt]!);
+        status.textContent = `${terminalClosedText(e.code, e.reason)} · retry in ${Math.round(RETRY_MS[attempt]! / 1000)} s`;
+        return;
+      }
       const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]!;
       attempt++;
       status.textContent = `Disconnected (${e.code}) · state unknown · retry in ${Math.round(wait / 1000)} s`;

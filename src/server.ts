@@ -83,7 +83,7 @@ function originAllowed(req: Request): boolean {
   const origin = req.headers.get("origin");
   return origin === null || origin === new URL(req.url).origin;
 }
-type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: Principal };
+type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: Principal; busy?: boolean };
 
 // Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
 function sameOrigin(req: Request): boolean {
@@ -106,6 +106,7 @@ export type ServeOptions = {
 };
 
 export const MAX_VIEWERS = 16;
+export const BUSY_REASON = "too many open terminal viewers";
 
 export const MAX_REQUEST_BODY = 256 * 1024;
 
@@ -153,7 +154,12 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     if (!size || !/^[A-Za-z0-9._-]+$/.test(session)) {
       return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
     }
-    if (viewers >= maxViewers) return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
+    // A browser cannot read the status of a refused upgrade, so over the cap the socket opens and closes
+    // at once with 1013 and a reason the page can show. It never takes a slot.
+    if (viewers >= maxViewers) {
+      if (server.upgrade(req, { data: { session, ...size, busy: true } })) return undefined;
+      return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
+    }
     if (server.upgrade(req, { data: { session, ...size, principal: who ?? undefined } })) { viewers++; return undefined; }
     return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
@@ -315,6 +321,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     },
     websocket: {
       async open(ws) {
+        if (ws.data.busy) return ws.close(1013, BUSY_REASON);
         sockets.add(ws);
         try {
           const viewer = await openViewer({
@@ -335,6 +342,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         ws.close(1008, "read-only terminal: client messages are not accepted");
       },
       close(ws) {
+        if (ws.data.busy) return;
         if (!ws.data.closed) viewers--;
         sockets.delete(ws);
         ws.data.closed = true;
