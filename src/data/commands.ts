@@ -1,6 +1,7 @@
 // Durable command queue. Each state change is a row in command_events, so the history survives restarts.
 // Queued, delivered, accepted and completed are separate facts; none implies the next one.
 import type { Database } from "bun:sqlite";
+import { checkLimit as pageLimit, decodeCursor, encodeCursor } from "./page.ts";
 import { type CommandStatus, type Command, type CommandEvent, CommandError, commandTransitions, MAX_ACTOR, MAX_TEXT, sessionNamePattern } from "../domain/commands.ts";
 
 export class Commands {
@@ -112,6 +113,17 @@ export class Commands {
     return c;
   }
 
+  // One page in creation order. Not a snapshot: rows added or changed meanwhile can be missed.
+  listPage(page: { status?: CommandStatus; limit?: number; cursor?: string } = {}): { commands: Command[]; nextCursor: string | null } {
+    const status = page.status ?? null, limit = pageLimit(invalid, page.limit);
+    const [createdAt = null, id = null] = page.cursor === undefined ? [] : decodeCursor(invalid, page.cursor, 2, [status]);
+    const rows = this.db.query<Command, [string | null, string | null, string | null, number]>(
+      `${select} WHERE (?1 IS NULL OR status = ?1) AND (?2 IS NULL OR (created_at, id) > (?2, ?3)) ORDER BY created_at, id LIMIT ?4`,
+    ).all(status, createdAt, id, limit + 1);
+    const commands = rows.slice(0, limit), last = commands.at(-1);
+    return { commands, nextCursor: rows.length > limit && last ? encodeCursor([last.createdAt, last.id, status]) : null };
+  }
+
   list(status?: CommandStatus): Command[] {
     return status
       ? this.db.query<Command, [string]>(`${select} WHERE status = ? ORDER BY created_at, id`).all(status)
@@ -137,6 +149,8 @@ export class Commands {
 
 // Events that open or close a delivery attempt.
 const deliveryEvents = "'queued', 'delivering', 'delivered', 'delivery_unknown'";
+
+const invalid = (message: string) => new CommandError("invalid", message);
 
 const select = `SELECT id, idempotency_key AS idempotencyKey, target, actor, text, status,
   created_at AS createdAt, updated_at AS updatedAt FROM commands`;

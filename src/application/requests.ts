@@ -17,6 +17,15 @@ export function requestUseCases(requests: Requests, principal?: string) {
     // The page and the request_list tool both show the runs next to the requests.
     overview: (filter: Parameters<Requests["list"]>[0] = {}) => ({ runs: requests.runs(), requests: requests.list(filter) }),
 
+    // One page of requests with only the runs it refers to, plus the run asked for. runPage pages through every run.
+    page: (filter: Parameters<Requests["listPage"]>[0] = {}) => {
+      const page = requests.listPage(filter);
+      const ids = page.requests.map((r) => r.runId);
+      if (filter.runId) ids.push(filter.runId);
+      return { runs: requests.runsById(ids), requests: page.requests, nextCursor: page.nextCursor };
+    },
+    runPage: (page: Parameters<Requests["listRuns"]>[0] = {}) => requests.listRuns(page),
+
     gate: (runId: string, phase: string, revision: number) => requests.gate(runId, phase, revision),
     eventsAfter: (afterSeq: number, limit = EVENT_PAGE) => requests.events(afterSeq, limit),
   };

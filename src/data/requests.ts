@@ -2,6 +2,7 @@
 // The phase record has one writer: the orchestrator registered for the run. A new revision makes
 // every open request for the older revision stale, so an old approval can never apply to new work.
 import type { Database } from "bun:sqlite";
+import { checkLimit as pageLimit, decodeCursor, encodeCursor } from "./page.ts";
 import { type RequestKind, type RequestStatus, type Run, type SupervisorRequest, RequestError } from "../domain/requests.ts";
 
 type Row = Omit<SupervisorRequest, "evidence" | "allowedResponses" | "blocking"> & { evidence: string; allowedResponses: string; blocking: number };
@@ -247,6 +248,34 @@ export class Requests {
     return decode(r);
   }
 
+  // The named runs in ID order; unknown ids are skipped.
+  runsById(ids: string[]): Run[] {
+    const unique = [...new Set(ids)].filter((id) => id.isWellFormed());
+    if (unique.length === 0) return [];
+    return this.db.query<Run, string[]>(`${runSelect} WHERE id IN (${unique.map(() => "?").join(", ")}) ORDER BY id`).all(...unique);
+  }
+
+  // Runs a page at a time in ID order.
+  listRuns(page: { limit?: number; cursor?: string } = {}): { runs: Run[]; nextCursor: string | null } {
+    const limit = pageLimit(invalid, page.limit);
+    const [after = null] = page.cursor === undefined ? [] : decodeCursor(invalid, page.cursor, 1, []);
+    const rows = this.db.query<Run, [string | null, number]>(`${runSelect} WHERE (?1 IS NULL OR id > ?1) ORDER BY id LIMIT ?2`).all(after, limit + 1);
+    const runs = rows.slice(0, limit), last = runs.at(-1);
+    return { runs, nextCursor: rows.length > limit && last ? encodeCursor([last.id]) : null };
+  }
+
+  // Requests a page at a time in creation order, with the same filter as list().
+  listPage(filter: { runId?: string; status?: RequestStatus; limit?: number; cursor?: string } = {}): { requests: SupervisorRequest[]; nextCursor: string | null } {
+    const runId = filter.runId ?? null, status = filter.status ?? null, limit = pageLimit(invalid, filter.limit);
+    if (runId != null && !runId.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
+    const [createdAt = null, id = null] = filter.cursor === undefined ? [] : decodeCursor(invalid, filter.cursor, 2, [runId, status]);
+    const rows = this.db.query<Row, [string | null, string | null, string | null, string | null, number]>(
+      `${reqSelect} WHERE (?1 IS NULL OR run_id = ?1) AND (?2 IS NULL OR status = ?2) AND (?3 IS NULL OR (created_at, id) > (?3, ?4)) ORDER BY created_at, id LIMIT ?5`,
+    ).all(runId, status, createdAt, id, limit + 1);
+    const requests = rows.slice(0, limit).map(decode), last = requests.at(-1);
+    return { requests, nextCursor: rows.length > limit && last ? encodeCursor([last.createdAt, last.id, runId, status]) : null };
+  }
+
   list(filter: { runId?: string; status?: RequestStatus } = {}): SupervisorRequest[] {
     const runId = filter.runId;
     if (runId != null && !runId.isWellFormed()) throw new RequestError("invalid", "invalid runId encoding");
@@ -276,6 +305,8 @@ export class Requests {
       .run(requestId, runId, kind, actor, detail, at);
   }
 }
+
+const invalid = (message: string) => new RequestError("invalid", message);
 
 const runSelect = "SELECT id, orchestrator, phase, revision, phase_status AS phaseStatus, updated_at AS updatedAt FROM runs";
 const reqSelect = `SELECT id, run_id AS runId, phase, revision, kind, question, proposed_action AS proposedAction, scope, evidence,
