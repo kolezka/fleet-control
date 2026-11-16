@@ -122,16 +122,22 @@ export async function initService(env: Record<string, string | undefined>) {
 }
 
 export async function provisionService(env: Record<string, string | undefined>) {
-  rejectAmbientPostgresEnvironment(process.env);
-  const adminUrl = databaseUrl(await readPrivateText(absolute(env.COOPERATIVE_ADMIN_URL_FILE, "admin URL file")));
-  const runtimeUrlFile = absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file");
+  const { adminUrl, runtimeUrlFile, handle } = await refuseBeforeDatabase(async () => {
+    rejectAmbientPostgresEnvironment(process.env);
+    const adminUrl = databaseUrl(await readPrivateText(absolute(env.COOPERATIVE_ADMIN_URL_FILE, "admin URL file")));
+    const runtimeUrlFile = absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file");
+    // Reserve the file first and write it before COMMIT, so a committed role always has its password
+    // on disk. A crash after the write but before COMMIT leaves the file without a role: see README.
+    const handle = await open(runtimeUrlFile, "wx", 0o600).catch((error) => {
+      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new Error("runtime URL file already exists; provision runs once (see the recovery notes in deploy/cooperative/README.md)");
+      throw new Error("cannot create the runtime URL file");
+    });
+    return { adminUrl, runtimeUrlFile, handle };
+  }, ProvisionRefused);
   const password = randomBytes(32).toString("hex");
   const runtime = new URL(adminUrl);
   runtime.username = SERVICE_RUNTIME_ROLE;
   runtime.password = password;
-  // Reserve the file first and write it before COMMIT, so a committed role always has its password
-  // on disk. A crash after the write but before COMMIT leaves the file without a role: see README.
-  const handle = await open(runtimeUrlFile, "wx", 0o600);
   const admin = new SQL(adminUrl);
   try {
     await provisionCooperative(admin, { runtimePassword: password, beforeCommit: async () => {
@@ -150,6 +156,9 @@ export async function provisionService(env: Record<string, string | undefined>) 
 
 /** A refusal found before activate touched the database. Its message holds no secret and is safe to print. */
 export class ActivationRefused extends Error {}
+
+/** Like ActivationRefused, for provision: no role or schema was touched. */
+export class ProvisionRefused extends Error {}
 
 /** Like ActivationRefused, for serve: the listener never opened and the database was not reached. */
 export class ServeRefused extends Error {}
@@ -215,7 +224,7 @@ if (import.meta.main) {
   const command = process.argv[2];
   const fail = (message: string) => { console.error(message); process.exitCode = 1; };
   if (command === "init") initService(process.env).then(() => console.log(JSON.stringify({ initialized: true })), (error) => fail(`cooperative init failed: ${error instanceof Error ? error.message : "unknown"}`));
-  else if (command === "provision") provisionService(process.env).then(() => console.log(JSON.stringify({ provisioned: SERVICE_SCHEMA })), () => fail("cooperative provisioning failed"));
+  else if (command === "provision") provisionService(process.env).then(() => console.log(JSON.stringify({ provisioned: SERVICE_SCHEMA })), (error) => fail(error instanceof ProvisionRefused ? `cooperative provisioning refused: ${error.message}` : "cooperative provisioning failed"));
   else if (command === "activate") activateService(process.env).then((result) => console.log(JSON.stringify(result)), (error) => fail(error instanceof ActivationRefused ? `cooperative activation refused: ${error.message}` : "cooperative activation failed"));
   else if (command === "serve") startService(process.env).then((running) => {
     console.log(JSON.stringify({ port: running.server.port }));
