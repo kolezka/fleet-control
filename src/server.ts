@@ -352,7 +352,10 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     fetch: () => Response.json({ error: { kind: "not_found", message: "not found" } }, { status: 404 }),
   });
   // A stopped server must not stay subscribed to a shared Auth, or every later reload still reaches it.
-  const stop = server.stop.bind(server);
-  server.stop = (force?: boolean) => { unsubscribe?.(); return stop(force); };
+  // Some tests replace Bun.serve with a stub that has no stop.
+  if (unsubscribe && typeof server?.stop === "function") {
+    const stop = server.stop.bind(server);
+    server.stop = (force?: boolean) => { unsubscribe(); return stop(force); };
+  }
   return server;
 }
