@@ -255,10 +255,11 @@ export class Requests {
     ).all(runId ?? null, filter.status ?? null).map(decode);
   }
 
-  events(afterSeq = 0) {
-    return this.db.query<{ seq: number; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string }, [number]>(
-      "SELECT seq, request_id AS requestId, run_id AS runId, kind, actor, detail, at FROM request_events WHERE seq > ? ORDER BY seq",
-    ).all(afterSeq);
+  // limit -1 means no limit (SQLite).
+  events(afterSeq = 0, limit = -1) {
+    return this.db.query<{ seq: number; requestId: string | null; runId: string; kind: string; actor: string; detail: string; at: string }, [number, number]>(
+      "SELECT seq, request_id AS requestId, run_id AS runId, kind, actor, detail, at FROM request_events WHERE seq > ? ORDER BY seq LIMIT ?",
+    ).all(afterSeq, limit);
   }
 
   private findRun(id: string): Run | null {

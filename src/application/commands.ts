@@ -5,6 +5,10 @@ import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
 
+// Polling reads of all events return pages, like the command and request lists.
+export const EVENT_PAGE = 100;
+export const MAX_EVENT_PAGE = 1000;
+
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
 export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer }, principal?: string) {
   const { commands, deliverer } = deps;
@@ -27,8 +31,8 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
 
     list: (status?: CommandStatus): Command[] => commands.list(status),
 
-    // Events of every command after a cursor, for polling.
-    eventsAfter: (afterSeq: number): CommandEvent[] => commands.events(undefined, afterSeq),
+    // Events of every command after a cursor, for polling, at most limit per call.
+    eventsAfter: (afterSeq: number, limit = EVENT_PAGE): CommandEvent[] => commands.events(undefined, afterSeq, limit),
 
     // The recipient's answer. Without a reason the decision itself is recorded as the detail.
     respond: (id: string, decision: "accepted" | "rejected", actor: string, reason: string): Command =>

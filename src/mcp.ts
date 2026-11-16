@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { CommandError, MAX_TEXT } from "./domain/commands.ts";
-import { commandUseCases } from "./application/commands.ts";
+import { commandUseCases, EVENT_PAGE, MAX_EVENT_PAGE } from "./application/commands.ts";
 import { requestUseCases } from "./application/requests.ts";
 import { RequestError } from "./domain/requests.ts";
 
@@ -13,6 +13,13 @@ const failure = (e: unknown) => ({
   isError: true,
   content: [{ type: "text" as const, text: e instanceof CommandError || e instanceof RequestError ? `${e.kind}: ${e.message}` : `internal error: ${(e as Error).message}` }],
 });
+// A full page means more events may follow: poll again from the last seq.
+const eventPage = <E extends { seq: number }>(events: E[], limit: number) =>
+  ({ events, ...(events.length === limit ? { nextAfterSeq: events.at(-1)!.seq } : {}) });
+const eventInput = {
+  afterSeq: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(MAX_EVENT_PAGE).default(EVENT_PAGE),
+};
 const attempt = async (f: () => unknown) => { try { return json(await f()); } catch (e) { return failure(e); } };
 
 // What the tools and the web API act on. The stores and the deliverer are built by the entry point.
@@ -60,10 +67,10 @@ export function buildMcpServer(deps: ControlDeps, principal?: string) {
   }, async ({ status }) => json({ commands: queue.list(status) }));
 
   server.registerTool("command_events", {
-    description: "Read command status events after a cursor (seq). Use the last seq you saw to poll for changes.",
-    inputSchema: { afterSeq: z.number().int().min(0).default(0) },
+    description: "Read command status events after a cursor (seq), oldest first, at most limit (default 100, max 1000). nextAfterSeq is set when the page is full; poll again from it.",
+    inputSchema: eventInput,
     annotations: { readOnlyHint: true },
-  }, async ({ afterSeq }) => json({ events: queue.eventsAfter(afterSeq) }));
+  }, async ({ afterSeq, limit }) => json(eventPage(queue.eventsAfter(afterSeq, limit), limit)));
 
   server.registerTool("command_respond", {
     description:
@@ -148,10 +155,10 @@ function registerRequestTools(server: McpServer, requests: ReturnType<typeof req
   }, async ({ runId, phase, revision }) => attempt(() => requests.gate(runId, phase, revision)));
 
   server.registerTool("request_events", {
-    description: "Request and phase events after a cursor (seq).",
-    inputSchema: { afterSeq: z.number().int().min(0).default(0) },
+    description: "Request and phase events after a cursor (seq), oldest first, at most limit (default 100, max 1000). nextAfterSeq is set when the page is full; poll again from it.",
+    inputSchema: eventInput,
     annotations: { readOnlyHint: true },
-  }, async ({ afterSeq }) => json({ events: requests.eventsAfter(afterSeq) }));
+  }, async ({ afterSeq, limit }) => json(eventPage(requests.eventsAfter(afterSeq, limit), limit)));
 }
 
 export async function handleMcp(req: Request, deps: ControlDeps, allowedHosts: string[], principal?: string): Promise<Response> {

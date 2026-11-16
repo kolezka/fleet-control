@@ -118,11 +118,12 @@ export class Commands {
       : this.db.query<Command, []>(`${select} ORDER BY created_at, id`).all();
   }
 
-  events(id?: string, afterSeq = 0): CommandEvent[] {
+  // limit -1 means no limit (SQLite), kept for one command's own history and for tests.
+  events(id?: string, afterSeq = 0, limit = -1): CommandEvent[] {
     const cols = "seq, command_id AS commandId, status, actor, detail, at";
     return id !== undefined
-      ? this.db.query<CommandEvent, [string, number]>(`SELECT ${cols} FROM command_events WHERE command_id = ? AND seq > ? ORDER BY seq`).all(id, afterSeq)
-      : this.db.query<CommandEvent, [number]>(`SELECT ${cols} FROM command_events WHERE seq > ? ORDER BY seq`).all(afterSeq);
+      ? this.db.query<CommandEvent, [string, number, number]>(`SELECT ${cols} FROM command_events WHERE command_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(id, afterSeq, limit)
+      : this.db.query<CommandEvent, [number, number]>(`SELECT ${cols} FROM command_events WHERE seq > ? ORDER BY seq LIMIT ?`).all(afterSeq, limit);
   }
 
   private byKey(key: string): Command | null {
