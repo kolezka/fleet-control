@@ -14,7 +14,7 @@ function fixture(status: "resolved" | "acknowledged", resolutionNote: string | n
   const writes: string[] = [];
   const db = {
     run(sql: string) {
-      if (!sql.startsWith("CREATE TABLE IF NOT EXISTS")) throw new Error(`Unexpected setup SQL: ${sql}`);
+      if (!sql.startsWith("CREATE TABLE IF NOT EXISTS") && !sql.startsWith("CREATE INDEX IF NOT EXISTS")) throw new Error(`Unexpected setup SQL: ${sql}`);
     },
     transaction<T>(fn: () => T) { return fn; },
     query(sql: string) {

@@ -69,6 +69,9 @@ export class Requests {
       detail TEXT NOT NULL,
       at TEXT NOT NULL
     )`);
+    // The page polls the current requests (open ones and the newest); without these each poll scans every row.
+    db.run("CREATE INDEX IF NOT EXISTS requests_created ON requests (created_at, id)");
+    db.run("CREATE INDEX IF NOT EXISTS requests_status_created ON requests (status, created_at, id)");
   }
 
   // Registers a run once. The orchestrator named here is the only actor allowed to change its phase record.
