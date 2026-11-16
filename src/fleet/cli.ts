@@ -5,24 +5,55 @@ const sessionName = /^[A-Za-z0-9._-]+$/;
 
 type RunResult = { exitCode: number; stdout: string; stderr: string };
 
+// A hung CLI (for example ssh to a remote host that stopped answering) must not hold a request and
+// its process forever, and a runaway one must not fill memory.
+export const CLI_TIMEOUT_MS = 20_000;
+export const CLI_OUTPUT_LIMIT = 8 * 1024 * 1024;
+
+async function readLimited(stream: ReadableStream<Uint8Array>, limit: number, onOverflow: () => void): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for await (const chunk of stream) {
+    length += chunk.byteLength;
+    if (length > limit) { onOverflow(); break; }
+    chunks.push(chunk);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 export class FleetCli implements FleetReader {
   constructor(
-    readonly options: { fleetBin: string; confPath: string; env?: Record<string, string | undefined> },
+    readonly options: { fleetBin: string; confPath: string; env?: Record<string, string | undefined>; timeoutMs?: number; outputLimit?: number },
   ) {}
 
   private async run(args: string[]): Promise<RunResult> {
+    const timeoutMs = this.options.timeoutMs ?? CLI_TIMEOUT_MS;
+    const limit = this.options.outputLimit ?? CLI_OUTPUT_LIMIT;
     const proc = Bun.spawn([this.options.fleetBin, ...args], {
       env: { ...process.env, ...this.options.env, FLEET_CONF: this.options.confPath },
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
+      // Own process group, so a kill also reaches children (ssh, tmux) that hold the pipes open.
+      detached: true,
     });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { exitCode, stdout, stderr };
+    let stopped: "timed out" | "output too large" | null = null;
+    const stop = (why: "timed out" | "output too large") => {
+      stopped ??= why;
+      try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+    };
+    const timer = setTimeout(() => stop("timed out"), timeoutMs);
+    try {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        readLimited(proc.stdout, limit, () => stop("output too large")),
+        readLimited(proc.stderr, limit, () => stop("output too large")),
+        proc.exited,
+      ]);
+      if (stopped) throw new FleetError("cli_failed", `fleet ${args[0]} ${stopped}; process killed`, { exitCode });
+      return { exitCode, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private fail(result: RunResult, what: string): never {
