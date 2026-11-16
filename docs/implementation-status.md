@@ -250,7 +250,7 @@ The installed services run older code. A new release needs the owner's approval;
 
 - A service on `.4` for real fleets. The installed one serves only the test fleet `fctrl-test`. This project installed no host service on `.15`.
 - Using the viewer with real agent sessions: the agent-fleet `send-keys` bug ([bugs/agent-fleet-send-keys-read-only-viewer.md](bugs/agent-fleet-send-keys-read-only-viewer.md)) is fixed in the pinned `vendor/agent-fleet` (see the 2026-11-11 correction above), and a real Claude Code agent received the pasted Enter with the viewer open (2026-11-12, private fleet), and the installed `.4` service runs that CLI since the 2026-11-15 upgrade; real-session use still needs the owner's authorization.
-- phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them.
+- phased-delivery writing its phase record and requests through the MCP tools; a real orchestrator using them. `scripts/run-file-sync.ts` can mirror a `run.md` phase table into the run record (tested against a local service only); the skill does not call it.
 - Terminal input and exclusive input leases. The viewer is read-only by design.
 - Push event stream (the page polls every 3 s for requests and commands, 15 s for sessions, only while its tab is visible; showing the tab refreshes at once).
 - Model observers for harnesses other than Claude Code, and for remote (`REMOTE_SSH`) fleets, which each host's own service should observe.
@@ -297,7 +297,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 
 1. Network route: decided 2026-11-09, LAN bind with TLS and tokens; no listener on Tailscale. Done for `.4` on 2026-11-09: certificate from the MacBook's mkcert CA, service installed (see above). Open: certificate rotation is manual: `scripts/tls-check.ts` checks a new pair before a restart; there is no renewal and no hot reload (Bun 1.4.4 kept the old certificate after `reload`).
 2. `.4` runs a LaunchAgent, which runs only while `me` is logged in. Open: whether a real-fleet service should be a LaunchDaemon instead, and a systemd user unit if a host service is installed on `.15`.
-3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers.
+3. Machine-readable phase format in phased-delivery and how it syncs with `run.md` without two writers. Proposed 2026-11-16: no new format. `run.md` stays the only writer and `scripts/run-file-sync.ts` reads its phase table (phased-delivery 0.2.0 `references/run-file.md`) and mirrors the current phase into the run record as the orchestrator, dry run by default. A phase change starts a new revision and stales open requests; a new tip in the same phase does not. Open: whether the skill should call it at each checkpoint, which changes the skill.
 4. Supervisor wakeup when it is busy or a dialog is open; what a command does then.
 5. Mapping Agent subagents to reports rather than terminals.
 6. Input leases: who may type, for how long, and how that coexists with the watchdog.
