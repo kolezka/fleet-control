@@ -104,6 +104,8 @@ export type ServeOptions = {
   tls?: { cert: string; key: string }; // PEM text
 };
 
+export const MAX_REQUEST_BODY = 256 * 1024;
+
 function hostLabel(): string {
   return osHostname().replace(/\.local$/, "");
 }
@@ -145,6 +147,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const server: ReturnType<typeof Bun.serve<SocketData, Routes>> = Bun.serve<SocketData, Routes>({
     hostname,
     port,
+    // Bun's default is 128 MiB. The largest valid body (an MCP request_create at its field limits) is
+    // well under this, and Bun answers 413 before a handler reads anything.
+    maxRequestBodySize: MAX_REQUEST_BODY,
     ...(opts.tls ? { tls: opts.tls } : {}),
     routes: {
       "/": deck,
