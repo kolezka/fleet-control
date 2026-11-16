@@ -217,7 +217,7 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "terminal") return { kind: "ws", upstream: `/api/sessions/${b}/terminal`, query: { cols: NUM, rows: NUM } };
-  if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"], PAGE_QUERY);
+  if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"], { ...PAGE_QUERY, latest: NUM });
   if (seg.length === 3 && a === "commands" && ok(b) && c === "cooperative") return http(`/api/commands/${b}/cooperative`, ["GET"]);
   if (seg.length === 2 && a === "commands" && ok(b)) return http(`/api/commands/${b}`, ["GET"]);
   if (seg.length === 1 && a === "requests") return http("/api/requests", ["GET"], PAGE_QUERY);

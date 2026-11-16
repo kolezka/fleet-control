@@ -305,7 +305,9 @@ describe("routing and credential isolation", () => {
     expect((await get("/api/hosts/a/requests?limit=3")).status).toBe(200);
     expect((await get("/api/hosts/a/commands?cursor=not%20base64")).status).toBe(400);
     expect((await get("/api/hosts/a/requests?limit=12345")).status).toBe(400);
-    expect(a.seen.slice(hitsBefore + 1).map((s) => s.path)).toEqual(["/api/commands?limit=2&cursor=eyJ2IjpbXX0", "/api/requests?limit=3"]);
+    expect((await get("/api/hosts/a/commands?latest=6&status=x")).status).toBe(200);
+    expect((await get("/api/hosts/a/commands?latest=abc")).status).toBe(400);
+    expect(a.seen.slice(hitsBefore + 1).map((s) => s.path)).toEqual(["/api/commands?limit=2&cursor=eyJ2IjpbXX0", "/api/requests?limit=3", "/api/commands?latest=6"]);
     expect((await fetch(base() + "/api/hosts", { method: "POST", headers: { origin: page() } })).status).toBe(405);
     expect((await get("/other")).status).toBe(404);
   });

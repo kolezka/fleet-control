@@ -208,10 +208,17 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       // The web UI reads and queues commands here; MCP clients use /mcp. Both share one queue.
       "/api/commands": {
-        // Without limit or cursor the whole list, as the page reads it; with either, one keyset page.
+        // Without parameters the whole list; latest=N the newest N (what the page polls); limit or cursor one keyset page.
         GET: guard((req, _s, who) => {
           const queue = queueFor(who);
           if (!queue) return noControl();
+          const params = new URL(req.url).searchParams;
+          if (params.has("latest")) {
+            const latest = params.getAll("latest");
+            if (latest.length > 1 || [...params.keys()].some((k) => k !== "latest")) return Response.json({ error: { kind: "invalid", message: "latest takes no other query parameter" } }, { status: 400 });
+            if (!/^[1-9][0-9]{0,3}$/.test(latest[0]!) || Number(latest[0]) > 1000) return Response.json({ error: { kind: "invalid", message: "latest must be between 1 and 1000" } }, { status: 400 });
+            try { return Response.json({ commands: queue.latest(Number(latest[0])) }); } catch (e) { return commandError(e); }
+          }
           const page = pageQuery(req);
           if (page instanceof Response) return page;
           try { return Response.json(page ? queue.page(page) : { commands: queue.list() }); } catch (e) { return commandError(e); }
