@@ -613,6 +613,21 @@ describe("terminal relay", () => {
     burst.stop(true);
   });
 
+  test("a host at its viewer cap closes at once with 1013, and the page gets that code and reason", async () => {
+    const full = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: (req, srv) => (srv.upgrade(req) ? undefined : new Response("no", { status: 400 })),
+      websocket: { open(ws) { ws.close(1013, "too many open terminal viewers"); }, message() {} },
+    });
+    const g = startGateway({ hosts: [{ id: "f", name: "F", origin: `http://127.0.0.1:${full.port}` }], credentials: new Credentials(new Map([["f", "tok-f-tok-f-tok"]])) }, { port: 0 });
+    for (let i = 0; i < 3; i++) {
+      const ws = new WebSocket(`ws://127.0.0.1:${g.port}/api/hosts/f/sessions/main/terminal`, { headers: { origin: `http://127.0.0.1:${g.port}` } } as never);
+      expect(await new Promise((r) => { ws.onclose = (e) => r({ code: e.code, reason: e.reason }); })).toEqual({ code: 1013, reason: "too many open terminal viewers" });
+    }
+    g.stop(true);
+    full.stop(true);
+  });
+
   test("an oversized upstream frame closes both sides", async () => {
     const huge = Bun.serve({
       hostname: "127.0.0.1", port: 0,
