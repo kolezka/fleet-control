@@ -44,6 +44,10 @@ Starts an agent when cooperative work is waiting. Needs 1b first (the installed 
 1. New status `not_delivered` when `fleet send` provably refused before the paste? Recommended: yes.
 2. No automatic retry for it; the operator resubmits? Recommended: yes.
 
-## 8. Other open decisions without a proposal yet
+## 8. Frontend ([frontend-choice.md](frontend-choice.md))
 
-From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), subagent mapping (5), frontend framework (9), and which real fleet on `.4` the service should serve.
+1. Stay with plain TypeScript and add a test that every value written into `innerHTML` is escaped? Recommended: yes.
+
+## 9. Other open decisions without a proposal yet
+
+From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), subagent mapping (5), and which real fleet on `.4` the service should serve.
