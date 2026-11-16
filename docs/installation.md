@@ -66,7 +66,7 @@ Before live use:
 
 Autostart, watchdog behavior and restart policy must be reviewed before enabling them. Do not automatically resume ambiguous in-flight commands after a restart. Reconcile command and runtime identities first.
 
-A copied database is not a verified backup. Backup location, validation and restore testing remain deployment decisions.
+A copied database is not a verified backup. `bun scripts/host-backup.ts <state.db> <new file>` takes one consistent snapshot while the service runs, writes it to a new 0600 file (it never overwrites), runs `integrity_check` on the copy and compares every table row by row with the snapshot, then prints the SHA-256. The copy opens as a plain database without `-wal` or `-shm` files. It does not schedule backups or keep a second copy: copy the file to another machine and compare the checksum there. Backup location and schedule remain deployment decisions.
 
 ## Running the service
 
@@ -134,7 +134,7 @@ The test session is not started by launchd. After a reboot of `.4` the service c
 Update the service (run on `.4`, as done on 2026-11-15; evidence in [implementation status](implementation-status.md)):
 
 1. Build the new checkout beside the running one: `git archive <commit> | tar -x -C <new>`, then `git -C vendor/agent-fleet archive HEAD | tar -x -C <new>/vendor/agent-fleet` with the submodule at the pinned commit, then `bun install --frozen-lockfile` in `<new>`.
-2. Copy the state database while the service runs: `sqlite3 <state.db> ".backup <copy>"`. Keep the old plist and `watchdog.sh` too.
+2. Copy the state database while the service runs: `bun scripts/host-backup.ts <state.db> <copy>` (on 2026-11-15 this step used `sqlite3 <state.db> ".backup <copy>"`). Keep the old plist and `watchdog.sh` too.
 3. Start the new code on a loopback port against a scratch copy of that database and read `/api/commands` and `/api/requests`. Stop it again and check the port is free.
 4. `launchctl bootout gui/$(id -u)/pl.raqz.fleet-control`, rename the old checkout aside, move the new one into place.
 5. Run `fleet sync` with `FLEET_CONF` set, so `watchdog.sh` in the fleet directory matches the CLI.
