@@ -21,7 +21,7 @@ beforeAll(async () => {
   for (let i = 0; i < 7; i++) commands.submit({ idempotencyKey: `key-${i}`, target: "probe", actor: "tester", text: `text ${i}` });
   commands.transition(commands.list()[2]!.id, "accepted", "probe", "ok");
   for (let i = 0; i < 6; i++) requests.registerRun({ runId: `run-${i}`, orchestrator: "orchestrator", phase: "one" });
-  for (let i = 0; i < 6; i++) requests.create({ runId: `run-${i % 3}`, expectedRevision: 1, kind: "question", question: `q${i}`, origin: "orchestrator" });
+  for (let i = 0; i < 6; i++) requests.create({ runId: `run-${i % 3}`, expectedRevision: 1, kind: "clarification", question: `q${i}`, origin: "orchestrator" });
   const deliverer = new Deliverer(commands, async () => ({ exitCode: 1, stdout: "", stderr: "" }));
   server = serve({ fleet, store, control: { commands, deliverer, requests } }, 0);
   client = new Client({ name: "list-pages", version: "0" });
