@@ -260,6 +260,11 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         GET: guard((req, _s, who) => {
           const requests = requestsFor(who);
           if (!requests) return noControl();
+          const params = new URL(req.url).searchParams;
+          if (params.has("view")) {
+            if ([...params.keys()].length !== 1 || params.get("view") !== "current") return Response.json({ error: { kind: "invalid", message: "view must be current and takes no other query parameter" } }, { status: 400 });
+            try { return Response.json(requests.current()); } catch (e) { return commandError(e); }
+          }
           const page = pageQuery(req);
           if (page instanceof Response) return page;
           try { return Response.json(page ? requests.page(page) : requests.overview()); } catch (e) { return commandError(e); }
