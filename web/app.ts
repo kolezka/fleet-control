@@ -595,6 +595,13 @@ await init();
 setInspector(!overlayQuery.matches);
 render();
 await loadHostList();
-setInterval(() => void refreshAll("coord"), 3000);
-setInterval(() => void refreshAll("sessions"), 15000);
-setInterval(() => void loadHostList(), 60000);
+// A hidden tab skips polling; showing it again refreshes at once instead of waiting for the next tick.
+const visible = () => !document.hidden;
+setInterval(() => { if (visible()) void refreshAll("coord"); }, 3000);
+setInterval(() => { if (visible()) void refreshAll("sessions"); }, 15000);
+setInterval(() => { if (visible()) void loadHostList(); }, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!visible()) return;
+  void refreshAll("coord");
+  void refreshAll("sessions");
+});
