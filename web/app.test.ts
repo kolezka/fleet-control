@@ -2,11 +2,13 @@ import { expect, test } from "bun:test";
 import * as state from "./host-state.ts";
 
 // Execute the browser module against a small DOM/fetch fixture, without terminal or network access.
-async function browser(hosts: unknown[], respond: (path: string, init?: RequestInit) => unknown, intervals: (() => void)[] = []) {
+async function browser(hosts: unknown[], respond: (path: string, init?: RequestInit) => unknown, intervals: (() => void)[] = [], timers: { fn: () => void; ms: number }[] | null = null) {
+  const sockets: { url: string; closed: boolean }[] = [];
+  class FakeSocket { url: string; closed = false; onopen: any; onmessage: any; onclose: any; constructor(u: URL) { this.url = String(u); sockets.push(this); } close() { this.closed = true; } }
   const elements = new Map<string, any>();
   const listeners = new Map<string, (event: any) => unknown>();
   const element = (id: string): any => {
-    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, setAttribute() {}, contains: () => false, querySelector: () => element(id + ":child"), addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
+    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, setAttribute() {}, contains: () => false, querySelector: () => element(id + ":child"), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
     return elements.get(id);
   };
   const document = { hidden: false, getElementById: element, documentElement: element("root"), activeElement: null, addEventListener: (kind: string, fn: any) => listeners.set(kind, fn) };
@@ -23,15 +25,44 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
-  const run = new Function("state", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "return " + js);
-  const app = await run(state, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {} }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }));
+  const run = new Function("state", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
+  const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
+  const app = await run(state, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
     await new Promise(resolve => setTimeout(resolve, 0));
   };
-  return { app, element, calls, click, listeners, document };
+  return { app, element, calls, click, listeners, document, sockets };
 }
+
+test("a tab hidden for a minute closes its terminal sockets and reopens them when shown", async () => {
+  const timers: { fn: () => void; ms: number }[] = [];
+  const legacy = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [{ name: "probe", host: null, role: null, registered: true, running: true, model: { state: "not_applicable" } }] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] }, [], timers);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.sockets.map(s => [s.url, s.closed])).toEqual([["ws://127.0.0.1:4870/api/hosts/a/sessions/probe/terminal?cols=80&rows=24", false]]);
+
+  // Hidden briefly: nothing closes, and showing the tab again cancels the release.
+  b.document.hidden = true;
+  b.listeners.get("visibilitychange")!({});
+  expect(timers.filter(t => t.ms === 60_000)).toHaveLength(1);
+  b.document.hidden = false;
+  b.listeners.get("visibilitychange")!({});
+  expect(timers.filter(t => t.ms === 60_000)).toHaveLength(0);
+  expect(b.sockets).toHaveLength(1);
+
+  // Hidden for the full minute: the socket closes; shown again: one new socket.
+  b.document.hidden = true;
+  b.listeners.get("visibilitychange")!({});
+  timers.find(t => t.ms === 60_000)!.fn();
+  expect(b.sockets[0]!.closed).toBe(true);
+  b.document.hidden = false;
+  b.listeners.get("visibilitychange")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.sockets.map(s => s.closed)).toEqual([true, false]);
+});
 
 test("browser skips polling while the tab is hidden and refreshes when it is shown", async () => {
   const intervals: (() => void)[] = [];
