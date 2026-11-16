@@ -172,14 +172,14 @@ export class CentralCommands {
     });
   }
 
-  async eventsScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard, afterSeq = "0"): Promise<CentralCommandEvent[]> {
+  async eventsScoped(id: string, scope: SupervisorCommandScope, guard: SupervisorReadGuard, afterSeq = "0", limit?: number): Promise<CentralCommandEvent[]> {
     const { hostId, session } = scope;
     if (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")) || !validScopeValue(hostId) || !hostId.isWellFormed() || !validScopeValue(session) || !session.isWellFormed()) throw new Error("access denied");
     return this.begin(async (tx) => {
       if (!await guard(tx, { hostId, session })) throw new Error("access denied");
       const [command] = await tx`SELECT id FROM central_commands WHERE id = ${id} AND host_id = ${hostId} AND target = ${session}`;
       if (!command) throw new Error("access denied");
-      return this.eventsWithConnection(tx, id, afterSeq);
+      return this.eventsWithConnection(tx, id, afterSeq, limit);
     });
   }
 
@@ -267,13 +267,18 @@ export class CentralCommands {
     return this.runner ? this.runner(query) : query(this.db);
   }
 
-  async events(id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {
+  // limit is optional so existing callers keep reading everything; given, it caps one page at 1 to 1,000 events.
+  async events(id?: string, afterSeq = "0", limit?: number): Promise<CentralCommandEvent[]> {
     if (id !== undefined && (typeof id !== "string" || (!id.isWellFormed() || id.includes("\0")))) throw new CommandError("invalid", "invalid command ID");
-    return this.runner ? this.runner((tx) => this.eventsWithConnection(tx, id, afterSeq)) : this.eventsWithConnection(this.db, id, afterSeq);
+    return this.runner ? this.runner((tx) => this.eventsWithConnection(tx, id, afterSeq, limit)) : this.eventsWithConnection(this.db, id, afterSeq, limit);
   }
 
-  private async eventsWithConnection(db: SQL | TransactionSQL, id?: string, afterSeq = "0"): Promise<CentralCommandEvent[]> {
+  private async eventsWithConnection(db: SQL | TransactionSQL, id?: string, afterSeq = "0", limit?: number): Promise<CentralCommandEvent[]> {
     if (typeof afterSeq !== "string" || !/^(0|[1-9][0-9]*)$/.test(afterSeq) || afterSeq.length > 19 || (afterSeq.length === 19 && afterSeq > "9223372036854775807")) throw new CommandError("invalid", "invalid event cursor");
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) throw new CommandError("invalid", "limit must be an integer between 1 and 1000");
+    if (limit !== undefined) return id !== undefined
+      ? await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE command_id = ${id} AND seq > ${afterSeq}::bigint ORDER BY central_command_events.seq LIMIT ${limit}`
+      : await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE seq > ${afterSeq}::bigint ORDER BY central_command_events.seq LIMIT ${limit}`;
     return id !== undefined
       ? await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE command_id = ${id} AND seq > ${afterSeq}::bigint ORDER BY central_command_events.seq`
       : await db<CentralCommandEvent[]>`SELECT seq::text AS seq, command_id AS "commandId", status, actor, detail, at FROM central_command_events WHERE seq > ${afterSeq}::bigint ORDER BY central_command_events.seq`;

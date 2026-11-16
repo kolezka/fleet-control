@@ -268,8 +268,11 @@ export class CentralRequests {
     const nextCursor = rows.length > limit && last ? Buffer.from(JSON.stringify([last.createdAt, last.id, runId, status])).toString("base64url") : null;
     return { requests: page, nextCursor };
   }
-  async events(afterSeq = "0"): Promise<Event[]> {
+  // limit is optional so existing callers keep reading everything; given, it caps one page at 1 to 1,000 events.
+  async events(afterSeq = "0", limit?: number): Promise<Event[]> {
     if (typeof afterSeq !== "string" || !/^(0|[1-9][0-9]*)$/.test(afterSeq) || afterSeq.length > 19 || (afterSeq.length === 19 && afterSeq > "9223372036854775807")) throw new RequestError("invalid", "invalid event cursor");
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) throw new RequestError("invalid", "limit must be between 1 and 1000");
+    if (limit !== undefined) return this.db<Event[]>`SELECT seq::text AS seq, request_id AS "requestId", run_id AS "runId", kind, actor, detail, at FROM central_request_events WHERE seq > ${afterSeq}::bigint ORDER BY central_request_events.seq LIMIT ${limit}`;
     return this.db<Event[]>`SELECT seq::text AS seq, request_id AS "requestId", run_id AS "runId", kind, actor, detail, at FROM central_request_events WHERE seq > ${afterSeq}::bigint ORDER BY central_request_events.seq`;
   }
 }
