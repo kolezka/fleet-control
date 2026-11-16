@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import * as state from "./host-state.ts";
 
 // Execute the browser module against a small DOM/fetch fixture, without terminal or network access.
-async function browser(hosts: unknown[], respond: (path: string, init?: RequestInit) => unknown) {
+async function browser(hosts: unknown[], respond: (path: string, init?: RequestInit) => unknown, intervals: (() => void)[] = []) {
   const elements = new Map<string, any>();
   const listeners = new Map<string, (event: any) => unknown>();
   const element = (id: string): any => {
     if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, setAttribute() {}, contains: () => false, querySelector: () => element(id + ":child"), addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
     return elements.get(id);
   };
-  const document = { getElementById: element, documentElement: element("root"), activeElement: null, addEventListener: (kind: string, fn: any) => listeners.set(kind, fn) };
+  const document = { hidden: false, getElementById: element, documentElement: element("root"), activeElement: null, addEventListener: (kind: string, fn: any) => listeners.set(kind, fn) };
   const calls: { path: string; init?: RequestInit }[] = [];
   const fetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
@@ -24,14 +24,43 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
   const run = new Function("state", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "return " + js);
-  const app = await run(state, document, { matchMedia: () => ({ matches: false }) }, fetch, () => 0, { assign() {} }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }));
+  const app = await run(state, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {} }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }));
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
     await new Promise(resolve => setTimeout(resolve, 0));
   };
-  return { app, element, calls, click, listeners };
+  return { app, element, calls, click, listeners, document };
 }
+
+test("browser skips polling while the tab is hidden and refreshes when it is shown", async () => {
+  const intervals: (() => void)[] = [];
+  const legacy = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] }, intervals);
+  expect(intervals).toHaveLength(3);
+  const reads = () => b.calls.length;
+  b.document.hidden = true;
+  const before = reads();
+  for (const tick of intervals) tick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(reads()).toBe(before);
+  b.listeners.get("visibilitychange")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(reads()).toBe(before);
+  b.document.hidden = false;
+  for (const tick of intervals) tick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const ticked = b.calls.slice(before).map(c => c.path);
+  expect(ticked.some(p => p.endsWith("/sessions"))).toBe(true);
+  expect(ticked.some(p => p.includes("/commands"))).toBe(true);
+  expect(ticked).toContain("./api/hosts");
+  const shown = reads();
+  b.listeners.get("visibilitychange")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const refreshed = b.calls.slice(shown).map(c => c.path);
+  expect(refreshed.some(p => p.endsWith("/sessions"))).toBe(true);
+  expect(refreshed.some(p => p.includes("/commands"))).toBe(true);
+});
 for (const mismatch of ["text", "idempotencyKey"] as const) {
   test("browser rejects same-destination acknowledgement with mismatched " + mismatch, async () => {
     const b = await browser([host], (path, init) => {
