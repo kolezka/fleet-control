@@ -2,15 +2,11 @@ Pending owner decisions, collected 2026-11-16 (main at e9872be). Each item links
 
 ## 1. Release
 
-The installed services run older code: the host service on `.4` runs `59965a3`, the cooperative central on `.15` and both adapters run `86585c0`. Candidates are rehearsed on loopback only (see "Not yet released" in [implementation-status.md](implementation-status.md)).
-
-- **1a (recommended):** host service only on `.4`, candidate `05b18aa`.
-- **1b:** 1a plus cooperative central on `.15` and the adapter on `.4`, candidate `dbb0e3c`.
-- **1c:** not yet.
+Answered 2026-11-16: 1a. The host service on `.4` runs `05b18aa` since then (see [implementation-status.md](implementation-status.md)). Still open: the cooperative central on `.15` and both adapters run `86585c0`; the candidate is `dbb0e3c`, rehearsed on loopback only. Updating them is option 1b and needs its own answer.
 
 ## 2. Waker
 
-Starts an agent when cooperative work is waiting. Needs 1b first (the installed central has no `cooperative_wait`). Question: install it on which host, and does it start Claude Code or DSH?
+Starts an agent when cooperative work is waiting. Needs the cooperative release (1b) first (the installed central has no `cooperative_wait`). Question: install it on which host, and does it start Claude Code or DSH?
 
 ## 3. Input lease ([input-lease-design.md](input-lease-design.md))
 
