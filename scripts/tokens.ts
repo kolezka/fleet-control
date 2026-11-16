@@ -34,6 +34,25 @@ export function change(action: Change["action"], name: string, text: string, tok
   return { action, name, ...(action === "revoke" ? {} : { token }), text: out };
 }
 
+// Two changes at once would each read the old file and the later rename would drop the other's
+// principal, whose printed token then never works. A lock file next to the tokens file serialises them.
+export const LOCK_WAIT_MS = 5000;
+export function withLock<T>(file: string, run: () => T, waitMs = LOCK_WAIT_MS): T {
+  const lock = `${file}.lock`;
+  const until = Date.now() + waitMs;
+  let fd: number;
+  for (;;) {
+    try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600); break; }
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (Date.now() >= until) throw new AuthConfigError(`another change holds ${lock}; if none is running, remove that file and retry`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  try { return run(); }
+  finally { closeSync(fd); rmSync(lock, { force: true }); }
+}
+
 export function writeAtomic(file: string, text: string) {
   const tmp = `${file}.tmp-${process.pid}`;
   const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
@@ -62,10 +81,12 @@ if (import.meta.main) {
       for (const name of parseTokens(readFileSync(a!, "utf8")).keys()) console.log(name);
     } else if (action === "add" || action === "rotate" || action === "revoke") {
       if (!a || !b || extra.length) usage();
-      const text = existsSync(b!) ? readFileSync(b!, "utf8") : "";
       if (action !== "add" && !existsSync(b!)) throw new AuthConfigError(`no tokens file ${b}`);
-      const result = change(action, a!, text);
-      writeAtomic(b!, result.text);
+      const result = withLock(b!, () => {
+        const next = change(action, a!, existsSync(b!) ? readFileSync(b!, "utf8") : "");
+        writeAtomic(b!, next.text);
+        return next;
+      });
       if (result.token) {
         console.error("Token (shown once, give it to the client, do not store it on the host):");
         console.log(result.token);

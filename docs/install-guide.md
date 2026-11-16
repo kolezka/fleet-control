@@ -118,6 +118,8 @@ The token name is recorded as the author of everything that client does. To chan
 ~/.bun/bin/bun scripts/tokens.ts revoke macbook-session ~/.config/fleet-control/tokens
 ```
 
+Changes run one at a time through a `tokens.lock` file beside the tokens file; a second change waits up to 5 s. If a change was killed and left the lock behind, the next one refuses and names the file to remove.
+
 Then reload, without dropping connections:
 
 ```bash
