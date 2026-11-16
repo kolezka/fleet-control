@@ -1,7 +1,7 @@
 import { isAbsolute, join, normalize } from "node:path";
 
 export class InstallError extends Error {}
-export type Role = "central" | "adapter" | "client";
+export type Role = "central" | "adapter" | "client" | "waker";
 export type Options = { command: "doctor" | "install"; role?: Role; apply: boolean; code: string; bun: string; config?: string; state?: string; hostId?: string; port?: number; ssh?: string; sshPort?: number };
 export type Context = { code: string; bun: string; home: string; platform: string; uid: number };
 export type Command = { argv: string[]; inspect?: "containers" | "services" };
@@ -14,10 +14,10 @@ export function absolute(value: string): string {
 }
 export function parse(args: string[], context: Context): Options {
   const command = args[0];
-  if (command !== "doctor" && command !== "install") fail("usage: doctor | install central|adapter|client --plan|--apply [options]");
+  if (command !== "doctor" && command !== "install") fail("usage: doctor | install central|adapter|client|waker --plan|--apply [options]");
   let index = 1;
   const role = command === "install" ? args[index++] as Role : undefined;
-  if (command === "install" && !["central", "adapter", "client"].includes(role!)) fail("invalid install role");
+  if (command === "install" && !["central", "adapter", "client", "waker"].includes(role!)) fail("invalid install role");
   const values = new Map<string, string>();
   const flags = new Set<string>();
   for (; index < args.length; index++) {
@@ -46,9 +46,11 @@ export function parse(args: string[], context: Context): Options {
   if (command === "install") {
     if (role === "central") {
       if (!state || !/^[A-Za-z0-9/_.-]+$/.test(state) || !hostId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(hostId) || config) fail("central requires safe --state and explicit --host-id; --config is not accepted");
-    } else if (!config || state || hostId) fail("adapter/client require --config and do not accept --state or --host-id");
+    } else if (!config || state || hostId) fail("adapter/client/waker require --config and do not accept --state or --host-id");
+    // The waker has no listener.
+    if (role === "waker" && portText !== undefined) fail("waker does not accept --port");
   }
-  return { command: command as Options["command"], role, apply: flags.has("--apply"), code, bun, config, state, hostId, ssh, ...(sshPortText ? { sshPort: Number(sshPortText) } : {}), ...(role ? { port: Number(portText ?? (role === "central" ? 4881 : role === "adapter" ? 4882 : 4870)) } : {}) };
+  return { command: command as Options["command"], role, apply: flags.has("--apply"), code, bun, config, state, hostId, ssh, ...(sshPortText ? { sshPort: Number(sshPortText) } : {}), ...(role && role !== "waker" ? { port: Number(portText ?? (role === "central" ? 4881 : role === "adapter" ? 4882 : 4870)) } : {}) };
 }
 export const shellQuote = (text: string) => "'" + text.replaceAll("'", "'\"'\"'") + "'";
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
@@ -58,7 +60,7 @@ export function plan(options: Options, context: Context): Plan {
   const commands: Command[] = [];
   const result: Plan = { options, context, notes, commands };
   if (options.ssh) {
-    const args = [options.bun, "--no-env-file", join(options.code, "fleet-control.ts"), "install", options.role!, options.apply ? "--apply" : "--plan", "--code", options.code, "--bun", options.bun, "--port", String(options.port)];
+    const args = [options.bun, "--no-env-file", join(options.code, "fleet-control.ts"), "install", options.role!, options.apply ? "--apply" : "--plan", "--code", options.code, "--bun", options.bun, ...(options.port ? ["--port", String(options.port)] : [])];
     if (options.config) args.push("--config", options.config);
     if (options.state) args.push("--state", options.state, "--host-id", options.hostId!);
     commands.push({ argv: ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", ...(options.sshPort ? ["-p", String(options.sshPort)] : []), "--", options.ssh, args.map(shellQuote).join(" ")] });
@@ -83,8 +85,12 @@ export function plan(options: Options, context: Context): Plan {
     commands.push({ argv: ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"] }, { argv: ["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=fleet-cooperative", "--filter", "label=com.docker.compose.service=adapter"], inspect: "containers" });
   }
   const label = "pl.raqz.fleet-control-" + options.role;
-  const environment = options.role === "adapter" ? { COOPERATIVE_ADAPTER_CONFIG_FILE: options.config!, COOPERATIVE_ADAPTER_PORT: String(options.port) } : { FLEET_CONTROL_CLIENT_CONFIG: options.config!, PORT: String(options.port) };
-  const argv = [options.bun, "--no-env-file", join(options.code, options.role === "adapter" ? "src/host-agent/cooperative-main.ts" : "client.ts")];
+  const environment = options.role === "adapter" ? { COOPERATIVE_ADAPTER_CONFIG_FILE: options.config!, COOPERATIVE_ADAPTER_PORT: String(options.port) }
+    : options.role === "waker" ? { COOPERATIVE_WAKER_CONFIG_FILE: options.config! }
+    : { FLEET_CONTROL_CLIENT_CONFIG: options.config!, PORT: String(options.port) };
+  const entry = { adapter: "src/host-agent/cooperative-main.ts", waker: "src/host-agent/waker.ts", client: "client.ts" }[options.role as "adapter" | "waker" | "client"];
+  const argv = [options.bun, "--no-env-file", join(options.code, entry)];
+  if (options.role === "waker") notes.push("The waker starts the configured agent command whenever central has queued work for this host. Applying it means real agent runs; it needs the adapter running and the agent's own MCP configuration.");
   if (context.platform === "darwin") {
     const path = join(context.home, "Library/LaunchAgents", label + ".plist");
     const content = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>' + label + '</string><key>ProgramArguments</key><array>' + argv.map(v => '<string>' + xml(v) + '</string>').join("") + '</array><key>WorkingDirectory</key><string>' + xml(options.code) + '</string><key>EnvironmentVariables</key><dict>' + Object.entries(environment).map(([k,v]) => '<key>' + k + '</key><string>' + xml(v) + '</string>').join("") + '</dict><key>RunAtLoad</key><true/><key>KeepAlive</key><false/><key>Umask</key><integer>63</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n';

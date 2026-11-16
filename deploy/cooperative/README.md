@@ -169,7 +169,8 @@ Config, a private 0600 file named by `COOPERATIVE_WAKER_CONFIG_FILE`:
 pointing at the same adapter, with the same local token, as `scripts/real-agent-smoke.ts` does for
 Claude Code (`--mcp-config`) and DSH (`dshPatch`). Tell it to claim until the queue is empty and
 then exit. Run the waker as its own user service next to the adapter (launchd on macOS, a systemd
-user unit on Linux). It is not installed on `.4` or `.15`; doing so starts real agents and needs
+user unit on Linux); `bun fleet-control.ts install waker --plan --config <file>` writes that unit
+(see [install-cli](../../docs/install-cli.md)). It is not installed on `.4` or `.15`; doing so starts real agents and needs
 the owner's approval.
 
 ### Limits

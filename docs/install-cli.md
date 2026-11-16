@@ -28,7 +28,12 @@ bun fleet-control.ts install adapter --plan \
 
 bun fleet-control.ts install client --plan \
   --code /absolute/fleet-control --config /absolute/private/client.json
+
+bun fleet-control.ts install waker --plan \
+  --code /absolute/fleet-control --config /absolute/private/waker.json
 ```
+
+The waker role installs `src/host-agent/waker.ts` as its own user service. It has no listener and takes no `--port`. Apply checks that the config is private and valid and that the agent program is an executable absolute path; it does not check the agent's own MCP configuration. Once loaded, the waker starts that agent whenever central has queued work for the host, so applying it means real agent runs. Install the adapter first. The page does not offer this role yet.
 
 Central delegates to the existing [Compose setup](../deploy/cooperative/README.md). Its Docker build may fetch base images and build dependencies; the CLI does not bootstrap host dependencies. Fresh setup initializes PostgreSQL, credentials and the first local supervisor incarnation, then starts the loopback central service. This is an explicit first-install action, never an implicit reactivation of an existing installation. Adapter and client installation creates a new user-service definition referencing the existing runtime and config. Automatic crash restart is disabled; runtime stdout and stderr go to the null device to avoid leaking credentials. This gives up service logs and automatic recovery. All listeners remain loopback-only. Installing an adapter does not run an agent.
 

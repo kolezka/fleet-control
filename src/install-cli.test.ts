@@ -156,3 +156,33 @@ test("entry help and plan execute no external tools with unavailable PATH", asyn
     if (args[0] === "install") expect(JSON.parse(output).options.apply).toBe(false); else expect(output).toContain("No dependency bootstrap");
   }
 });
+
+test("waker installs as its own user service with only its config file and refuses a port", async () => {
+  for (const platform of ["linux", "darwin"]) {
+    const p = build(["install", "waker", "--plan", "--config", "/private/waker.json"], { ...base, platform });
+    expect(p.options.port).toBeUndefined();
+    expect(p.unit!.path).toContain("pl.raqz.fleet-control-waker");
+    expect(p.unit!.content).toContain("/prepared/code/src/host-agent/waker.ts");
+    expect(p.unit!.content).toContain("COOPERATIVE_WAKER_CONFIG_FILE");
+    expect(p.unit!.content).not.toContain("PORT");
+    expect(p.notes.join(" ")).toContain("real agent runs");
+  }
+  expect(() => build(["install", "waker", "--plan", "--config", "/c", "--port", "4883"])).toThrow("waker does not accept --port");
+  expect(() => build(["install", "waker", "--plan"])).toThrow("require --config");
+  const remote = build(["install", "waker", "--plan", "--ssh", "me@host", "--code", "/r/code", "--bun", "/r/bun", "--config", "/r/w.json"]);
+  expect(remote.commands[0]!.argv.at(-1)).not.toContain("--port");
+});
+test("waker config validation requires a private valid config and an executable absolute agent program", async () => {
+  const f = await fixture(); const config = join(f.root, "waker.json");
+  const good = { adapterUrl: "http://127.0.0.1:4882/mcp", localToken: "l".repeat(43), command: [f.context.bun, "-p", "work"] };
+  await writeFile(config, JSON.stringify(good), { mode: 0o600 });
+  await validateConfig("waker", config);
+  await writeFile(config, JSON.stringify({ ...good, command: [join(f.root, "missing")] })); await expect(validateConfig("waker", config)).rejects.toThrow();
+  await writeFile(config, JSON.stringify({ ...good, adapterUrl: "https://central.example/mcp" })); await expect(validateConfig("waker", config)).rejects.toThrow("invalid configuration");
+  await writeFile(config, JSON.stringify(good)); await chmod(config, 0o644); await expect(validateConfig("waker", config)).rejects.toThrow("private");
+  await chmod(config, 0o600);
+  const p = build(["install", "waker", "--apply", "--config", config], f.context);
+  await execute(p, f.io, {});
+  expect(await readFile(p.unit!.path, "utf8")).toBe(p.unit!.content);
+  expect(p.unit!.content).not.toContain("l".repeat(43));
+});
