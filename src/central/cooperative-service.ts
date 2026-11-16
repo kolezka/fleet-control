@@ -151,13 +151,16 @@ export async function provisionService(env: Record<string, string | undefined>) 
 /** A refusal found before activate touched the database. Its message holds no secret and is safe to print. */
 export class ActivationRefused extends Error {}
 
-async function refuseBeforeDatabase<T>(check: () => Promise<T>): Promise<T> {
+/** Like ActivationRefused, for serve: the listener never opened and the database was not reached. */
+export class ServeRefused extends Error {}
+
+async function refuseBeforeDatabase<T>(check: () => Promise<T>, Refused: typeof ActivationRefused = ActivationRefused): Promise<T> {
   try { return await check(); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new ActivationRefused("incarnation file already exists; activate runs once per file (see the recovery notes in deploy/cooperative/README.md)", { cause: error });
+    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new Refused("incarnation file already exists; activate runs once per file (see the recovery notes in deploy/cooperative/README.md)", { cause: error });
     // A JSON parse message can quote file content, so it never reaches the operator.
-    if (error instanceof SyntaxError) throw new ActivationRefused("credentials file is not valid JSON", { cause: error });
-    throw new ActivationRefused(error instanceof Error ? error.message : "invalid activation input", { cause: error });
+    if (error instanceof SyntaxError) throw new Refused("credentials file is not valid JSON", { cause: error });
+    throw new Refused(error instanceof Error ? error.message : "invalid input", { cause: error });
   }
 }
 
@@ -195,13 +198,16 @@ export async function activateService(env: Record<string, string | undefined>) {
 }
 
 export async function startService(env: Record<string, string | undefined>, options: { shutdownGraceMs?: number } = {}) {
-  const config = serviceConfig(env);
-  const shutdownGraceMs = options.shutdownGraceMs ?? CENTRAL_SHUTDOWN_GRACE_MS;
-  if (!Number.isSafeInteger(shutdownGraceMs) || shutdownGraceMs < 1 || shutdownGraceMs > 2_147_483_647) throw new Error("invalid shutdown grace");
-  rejectAmbientPostgresEnvironment(process.env);
-  const runtimeUrl = databaseUrl(await readPrivateText(config.runtimeUrlFile), SERVICE_RUNTIME_ROLE);
-  const credentials = parseCredentials(await readPrivateText(config.credentialsFile), { allowMultipleSupervisors: true });
-  const tls = config.tls ? await loadTlsFiles(config.tls, "cooperative") : undefined;
+  const { config, shutdownGraceMs, runtimeUrl, credentials, tls } = await refuseBeforeDatabase(async () => {
+    const config = serviceConfig(env);
+    const shutdownGraceMs = options.shutdownGraceMs ?? CENTRAL_SHUTDOWN_GRACE_MS;
+    if (!Number.isSafeInteger(shutdownGraceMs) || shutdownGraceMs < 1 || shutdownGraceMs > 2_147_483_647) throw new Error("invalid shutdown grace");
+    rejectAmbientPostgresEnvironment(process.env);
+    const runtimeUrl = databaseUrl(await readPrivateText(config.runtimeUrlFile), SERVICE_RUNTIME_ROLE);
+    const credentials = parseCredentials(await readPrivateText(config.credentialsFile), { allowMultipleSupervisors: true });
+    const tls = config.tls ? await loadTlsFiles(config.tls, "cooperative") : undefined;
+    return { config, shutdownGraceMs, runtimeUrl, credentials, tls };
+  }, ServeRefused);
   return serveCooperative({ runtimeDatabaseUrl: runtimeUrl, schema: SERVICE_SCHEMA, credentials, tls, hostname: config.host, port: config.port, shutdownGraceMs, allowedHosts: config.externalHost ? [config.externalHost] : undefined });
 }
 
@@ -220,6 +226,6 @@ if (import.meta.main) {
     };
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
-  }, () => fail("cooperative service startup failed"));
+  }, (error) => fail(error instanceof ServeRefused ? `cooperative service startup refused: ${error.message}` : "cooperative service startup failed"));
   else fail("usage: cooperative-service.ts init|provision|activate|serve");
 }
