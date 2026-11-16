@@ -110,7 +110,15 @@ mkdir -p ~/.config/fleet-control && chmod 700 ~/.config/fleet-control
 pbpaste > ~/.config/fleet-control/token-web-mariusz && chmod 600 ~/.config/fleet-control/token-web-mariusz
 ```
 
-The token name is recorded as the author of everything that client does. To revoke a client, delete its line from `~/.config/fleet-control/tokens` on the host and restart the service.
+The token name is recorded as the author of everything that client does. To change tokens without editing the file by hand, use `scripts/tokens.ts` on the host, then restart the service, which reads the file only at start:
+
+```bash
+~/.bun/bin/bun scripts/tokens.ts list ~/.config/fleet-control/tokens
+~/.bun/bin/bun scripts/tokens.ts rotate web-mariusz ~/.config/fleet-control/tokens   # prints the new token once
+~/.bun/bin/bun scripts/tokens.ts revoke macbook-session ~/.config/fleet-control/tokens
+```
+
+`rotate` replaces one hash and keeps the other lines and comments; the old token stops working at the restart. `revoke` refuses to remove the last principal, because the service would not start without one. Each change is checked the way the service checks the file and written atomically with mode 0600; a refused change leaves the file as it was. Token files are local to each host: rotating on one host does not touch another.
 
 ## 6. Try it in the foreground
 
