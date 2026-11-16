@@ -32,6 +32,10 @@ export const COOKIE = "fc_session";
 
 export class Auth {
   private readonly hashes: Map<string, Buffer>;
+  private readonly listeners = new Set<() => void>();
+  // The token hash behind each principal this instance returned, so a socket opened with a token
+  // can be closed when that token goes away. Kept out of the principal value itself.
+  private readonly keys = new WeakMap<Principal, string>();
 
   constructor(hashes: Map<string, Buffer>) {
     const seen = new Set<string>();
@@ -53,6 +57,19 @@ export class Auth {
   replace(next: Auth): void {
     this.hashes.clear();
     for (const [name, hash] of next.hashes) this.hashes.set(name, hash);
+    for (const listener of this.listeners) listener();
+  }
+
+  // Called after every replace, so holders of long-lived connections can drop revoked ones.
+  onReplace(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  // Whether the token behind `principal` still belongs to it (false after a revoke or rotate).
+  current(principal: Principal): boolean {
+    const key = this.keys.get(principal);
+    return key !== undefined && this.hashes.get(principal.name)?.toString("hex") === key;
   }
 
   names(): string[] {
@@ -65,7 +82,10 @@ export class Auth {
     let found: string | null = null;
     // compare against every entry so timing does not reveal which principal matched
     for (const [name, want] of this.hashes) if (timingSafeEqual(h, want)) found = name;
-    return found ? { name: found } : null;
+    if (!found) return null;
+    const principal = { name: found };
+    this.keys.set(principal, h.toString("hex"));
+    return principal;
   }
 
   // Authorization: Bearer for MCP and scripts, the session cookie for the browser page.

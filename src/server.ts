@@ -83,7 +83,7 @@ function originAllowed(req: Request): boolean {
   const origin = req.headers.get("origin");
   return origin === null || origin === new URL(req.url).origin;
 }
-type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: string };
+type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: Principal };
 
 // Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
 function sameOrigin(req: Request): boolean {
@@ -140,6 +140,11 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const maxViewers = opts.maxViewers ?? MAX_VIEWERS;
   if (!Number.isSafeInteger(maxViewers) || maxViewers < 1) throw new Error("maxViewers must be a positive integer");
   let viewers = 0;
+  // Open terminal sockets, so a token reload can close the ones whose token was revoked or rotated.
+  const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void }>();
+  auth?.onReplace(() => {
+    for (const ws of sockets) if (ws.data.principal && !auth.current(ws.data.principal)) ws.close(1008, "token revoked");
+  });
   const openTerminal = (req: Request, server: any, who: Principal | null, session: string) => {
     if (!terminal) return Response.json({ error: { kind: "unavailable", message: "terminal viewer not configured" } }, { status: 503 });
     if (!sameOrigin(req)) return Response.json({ error: { kind: "forbidden", message: "cross-origin terminal request" } }, { status: 403 });
@@ -149,7 +154,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       return Response.json({ error: { kind: "invalid_name", message: "bad session name or size" } }, { status: 400 });
     }
     if (viewers >= maxViewers) return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
-    if (server.upgrade(req, { data: { session, ...size, principal: who?.name } })) { viewers++; return undefined; }
+    if (server.upgrade(req, { data: { session, ...size, principal: who ?? undefined } })) { viewers++; return undefined; }
     return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
 
@@ -310,6 +315,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     },
     websocket: {
       async open(ws) {
+        sockets.add(ws);
         try {
           const viewer = await openViewer({
             ...terminal!,
@@ -330,6 +336,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       close(ws) {
         if (!ws.data.closed) viewers--;
+        sockets.delete(ws);
         ws.data.closed = true;
         ws.data.viewer?.close();
       },

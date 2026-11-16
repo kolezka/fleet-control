@@ -48,7 +48,7 @@ export async function serveOptionsFromEnv(env = process.env): Promise<ServeOptio
 }
 
 // SIGHUP rereads FLEET_CONTROL_TOKENS. Requests check the token each time, so a revoked token stops
-// working at once; an open terminal viewer keeps running until it closes.
+// working at once; the server also closes terminal sockets opened with a revoked or rotated token.
 export async function reloadTokens(auth: Auth, path: string, log: (line: string) => void = console.log): Promise<boolean> {
   try {
     auth.replace(await Auth.fromFile(path));
