@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Commands } from "./commands.ts";
 import { Requests } from "./requests.ts";
+import { Store } from "./store.ts";
 
 // The page polls these every 3 s. Each must use an index, not scan the table, however long the history gets.
 const plan = (db: Database, sql: string, ...args: (string | number)[]) =>
@@ -17,6 +18,8 @@ test("polled list queries use an index", () => {
     plan(db, "SELECT id FROM requests WHERE status = 'open' ORDER BY created_at DESC, id DESC LIMIT ?", 1000),
     plan(db, "SELECT id FROM requests WHERE 1 = 1 ORDER BY created_at DESC, id DESC LIMIT ?", 1000),
   ];
+  const store = new Store(":memory:");
+  cases.push(plan(store.db, "SELECT model FROM model_observations WHERE session = ? ORDER BY id DESC LIMIT 1", "s"));
   for (const p of cases) {
     expect(p).toContain("USING");
     expect(p).not.toContain("TEMP B-TREE");
