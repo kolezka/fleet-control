@@ -148,20 +148,35 @@ export async function provisionService(env: Record<string, string | undefined>) 
   }
 }
 
+/** A refusal found before activate touched the database. Its message holds no secret and is safe to print. */
+export class ActivationRefused extends Error {}
+
+async function refuseBeforeDatabase<T>(check: () => Promise<T>): Promise<T> {
+  try { return await check(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new ActivationRefused("incarnation file already exists; activate runs once per file (see the recovery notes in deploy/cooperative/README.md)", { cause: error });
+    // A JSON parse message can quote file content, so it never reaches the operator.
+    if (error instanceof SyntaxError) throw new ActivationRefused("credentials file is not valid JSON", { cause: error });
+    throw new ActivationRefused(error instanceof Error ? error.message : "invalid activation input", { cause: error });
+  }
+}
+
 export async function activateService(env: Record<string, string | undefined>) {
-  rejectAmbientPostgresEnvironment(process.env);
-  const runtimeUrl = databaseUrl(await readPrivateText(absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file")), SERVICE_RUNTIME_ROLE);
-  const credentials = parseCredentials(await readPrivateText(absolute(env.COOPERATIVE_CREDENTIALS_FILE, "credentials file")), { allowMultipleSupervisors: true });
-  const incarnationFile = absolute(env.COOPERATIVE_INCARNATION_FILE, "incarnation file");
-  const supervisors = credentials.map((c) => c.principal).filter((p) => p.role === "supervisor");
-  const host = env.COOPERATIVE_SUPERVISOR_HOST, session = env.COOPERATIVE_SUPERVISOR_SESSION;
-  const selected = host === undefined && session === undefined && supervisors.length === 1
-    ? supervisors
-    : supervisors.filter((p) => p.hostId === host && p.session === session);
-  if (selected.length !== 1) throw new Error("supervisor selection requires an explicit matching COOPERATIVE_SUPERVISOR_HOST and COOPERATIVE_SUPERVISOR_SESSION");
-  const supervisor = selected[0]!;
-  // Reserve the file before fencing, so a write failure cannot leave only an unknown secret.
-  const handle = await open(incarnationFile, "wx", 0o600);
+  const { runtimeUrl, supervisor, handle } = await refuseBeforeDatabase(async () => {
+    rejectAmbientPostgresEnvironment(process.env);
+    const runtimeUrl = databaseUrl(await readPrivateText(absolute(env.COOPERATIVE_RUNTIME_URL_FILE, "runtime URL file")), SERVICE_RUNTIME_ROLE);
+    const credentials = parseCredentials(await readPrivateText(absolute(env.COOPERATIVE_CREDENTIALS_FILE, "credentials file")), { allowMultipleSupervisors: true });
+    const incarnationFile = absolute(env.COOPERATIVE_INCARNATION_FILE, "incarnation file");
+    const supervisors = credentials.map((c) => c.principal).filter((p) => p.role === "supervisor");
+    const host = env.COOPERATIVE_SUPERVISOR_HOST, session = env.COOPERATIVE_SUPERVISOR_SESSION;
+    const selected = host === undefined && session === undefined && supervisors.length === 1
+      ? supervisors
+      : supervisors.filter((p) => p.hostId === host && p.session === session);
+    if (selected.length !== 1) throw new Error("supervisor selection requires an explicit matching COOPERATIVE_SUPERVISOR_HOST and COOPERATIVE_SUPERVISOR_SESSION");
+    // Reserve the file before fencing, so a write failure cannot leave only an unknown secret.
+    return { runtimeUrl, supervisor: selected[0]!, handle: Object.assign(await open(incarnationFile, "wx", 0o600), { path: incarnationFile }) };
+  });
+  const incarnationFile = handle.path;
   const db = new SQL(runtimeUrl);
   try {
     const runner = <T>(operation: (tx: import("bun").TransactionSQL) => Promise<T>) => withCooperativeSchema(db, SERVICE_SCHEMA, operation);
@@ -195,7 +210,7 @@ if (import.meta.main) {
   const fail = (message: string) => { console.error(message); process.exitCode = 1; };
   if (command === "init") initService(process.env).then(() => console.log(JSON.stringify({ initialized: true })), (error) => fail(`cooperative init failed: ${error instanceof Error ? error.message : "unknown"}`));
   else if (command === "provision") provisionService(process.env).then(() => console.log(JSON.stringify({ provisioned: SERVICE_SCHEMA })), () => fail("cooperative provisioning failed"));
-  else if (command === "activate") activateService(process.env).then((result) => console.log(JSON.stringify(result)), () => fail("cooperative activation failed"));
+  else if (command === "activate") activateService(process.env).then((result) => console.log(JSON.stringify(result)), (error) => fail(error instanceof ActivationRefused ? `cooperative activation refused: ${error.message}` : "cooperative activation failed"));
   else if (command === "serve") startService(process.env).then((running) => {
     console.log(JSON.stringify({ port: running.server.port }));
     const onSignal = () => {
