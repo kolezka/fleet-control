@@ -63,6 +63,18 @@ function commandError(e: unknown): Response {
   if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
 }
+// Optional ?limit=&cursor= on the list routes. null means neither was given.
+function pageQuery(req: Request): { limit?: number; cursor?: string } | null | Response {
+  const params = new URL(req.url).searchParams;
+  const bad = (message: string) => Response.json({ error: { kind: "invalid", message } }, { status: 400 });
+  for (const key of params.keys()) if (key !== "limit" && key !== "cursor") return bad(`unknown query parameter ${key}`);
+  if (params.getAll("limit").length > 1 || params.getAll("cursor").length > 1) return bad("duplicate query parameter");
+  const limit = params.get("limit"), cursor = params.get("cursor");
+  if (limit === null && cursor === null) return null;
+  if (limit !== null && !/^[1-9][0-9]{0,3}$/.test(limit)) return bad("limit must be between 1 and 1000");
+  if (cursor !== null && (cursor.length === 0 || cursor.length > 4096)) return bad("invalid cursor or cursor filter mismatch");
+  return { ...(limit !== null ? { limit: Number(limit) } : {}), ...(cursor !== null ? { cursor } : {}) };
+}
 const forbidden = () => Response.json({ error: { kind: "forbidden", message: "cross-origin request" } }, { status: 403 });
 const noControl = () => Response.json({ error: { kind: "unavailable", message: "command queue not configured" } }, { status: 503 });
 
@@ -182,9 +194,13 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       // The web UI reads and queues commands here; MCP clients use /mcp. Both share one queue.
       "/api/commands": {
-        GET: guard((_req, _s, who) => {
+        // Without limit or cursor the whole list, as the page reads it; with either, one keyset page.
+        GET: guard((req, _s, who) => {
           const queue = queueFor(who);
-          return queue ? Response.json({ commands: queue.list() }) : noControl();
+          if (!queue) return noControl();
+          const page = pageQuery(req);
+          if (page instanceof Response) return page;
+          try { return Response.json(page ? queue.page(page) : { commands: queue.list() }); } catch (e) { return commandError(e); }
         }),
         POST: guard(async (req, _s, who) => {
           const queue = queueFor(who);
@@ -220,9 +236,12 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         }),
       },
       "/api/requests": {
-        GET: guard((_req, _s, who) => {
+        GET: guard((req, _s, who) => {
           const requests = requestsFor(who);
-          return requests ? Response.json(requests.overview()) : noControl();
+          if (!requests) return noControl();
+          const page = pageQuery(req);
+          if (page instanceof Response) return page;
+          try { return Response.json(page ? requests.page(page) : requests.overview()); } catch (e) { return commandError(e); }
         }),
       },
       // A human answer from the page. Bound to the request id and the revision the page showed.
