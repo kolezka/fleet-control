@@ -32,6 +32,14 @@ test("a finished run shows its last phase, and the decisions table is not read a
   expect(currentPhase(parsed)).toEqual({ phase: "phase 2: Retry", phaseStatus: "done at def5678; 2 of 2 done" });
 });
 
+test("reads the spellings real run files use: a note after a comma, 'in progress' and an open last row like 8+", () => {
+  const parsed = parseRunFile(run("| 1 | Tokens | done, pushed | 48734cb | yes | |\n| 2 | Graph | in progress | | | |\n| 3+ | API items | todo | | | |"));
+  expect(parsed.phases.map((p) => [p.number, p.status, p.written])).toEqual([[1, "done", "done, pushed"], [2, "running", "in progress"], [3, "todo", "todo"]]);
+  expect(currentPhase(parsed)).toEqual({ phase: "phase 2: Graph", phaseStatus: "in progress; 1 of 3 done" });
+  expect(() => parseRunFile(run("| 1+ | Tokens | done | | | |\n| 2 | Graph | todo | | | |"))).toThrow('phase row 1 has number "1+"');
+  expect(() => parseRunFile(run("| 1 | Tokens | almost done | | | |"))).toThrow('unknown status "almost done"');
+});
+
 test("refuses a run file it cannot read exactly instead of guessing", () => {
   expect(() => parseRunFile("# Something else\n")).toThrow("no '# Phased run:' title");
   expect(() => parseRunFile(run("| 1 | Parser | finished | | | |"))).toThrow('unknown status "finished"');
