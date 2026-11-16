@@ -307,7 +307,7 @@ The HIG passages cited in [interface design](ui-design.md) were read through Doc
 5. Mapping Agent subagents to reports rather than terminals.
 6. Input leases: who may type, for how long, and how that coexists with the watchdog.
 7. Retention, backups and restore tests for the SQLite file. Proposal with four owner questions: [host-retention-design.md](host-retention-design.md).
-8. Budgets, stop time, pause/cancel semantics and standing permissions.
+8. Budgets, stop time, pause/cancel semantics and standing permissions. Proposal with four owner questions: [command-stop-design.md](command-stop-design.md).
 9. Frontend: stay with plain TypeScript and the deck CSS, or adopt a framework when the page grows.
 
 ## Suggested next order
