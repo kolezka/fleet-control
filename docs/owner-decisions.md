@@ -55,4 +55,4 @@ Starts an agent when cooperative work is waiting. Needs 1b first (the installed 
 
 ## 10. Other open decisions without a proposal yet
 
-From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), and which real fleet on `.4` the service should serve.
+From "Open decisions" in [implementation-status.md](implementation-status.md): whether phased-delivery calls `scripts/run-file-sync.ts` at each checkpoint (3), and which real fleet on `.4` the service should serve. Checked 2026-11-16: `.4` has no real fleet yet. The only `fleet.conf` files within five levels of the home directory are the service's test fleet (`~/.local/share/fleet-control/test-fleet/fleet.conf`) and two agent-fleet templates, and no default tmux server runs. So the question is which project gets a fleet first; starting its agents is a real-agent run that needs its own approval.
