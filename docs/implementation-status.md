@@ -32,6 +32,8 @@ An optional loopback page (`bun fleet-control.ts ui`, or `FLEET_CONTROL_INSTALLE
 
 The legacy host service authenticates principal names but does not assign operator or supervisor roles. Its MCP request tools and same-origin HTTP answer endpoint do not enforce that a human operator, rather than the originating supervisor, resolves an approval. The host gate reports matching stored responses; it is not proof of human authority. Command response and report tools also lack a recipient-identity check. Treat these as unresolved authorization gaps, not as guarantees of the central cooperative prototype. Do not use these legacy paths as a security boundary for autonomous execution.
 
+Request bodies are capped at 256 KiB (`MAX_REQUEST_BODY` in `src/server.ts`; Bun answers 413 before a handler reads, also for chunked bodies). Bun's default was 128 MiB. The largest valid body, an MCP `request_create` at its field limits, is well under the cap. Tested in `src/request-body-limit-offline.test.ts`; not yet on the installed `.4` service.
+
 The legacy deliverer marks a command `delivering` before preparing its temporary message file. A reported directory creation or file writing failure now records `delivery_unknown` without invoking the sender or requeueing; offline injected-I/O tests cover this path. A failed status transition or interrupted process can still leave `delivering`. A cleanup failure leaves the primary result or error intact and attempts a generic warning; the message file may remain. A crash or a failed directory creation may also leave files behind. Offline injected-I/O tests do not prove default filesystem failure handling or recovery after a crash.
 
 ## Correction: send-keys blocker vs the pinned fix (2026-11-11)
