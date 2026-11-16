@@ -126,28 +126,51 @@ export function fleetSocket(conf: string): string | null {
   return m ? `fleet-${m[1]}` : null;
 }
 
+// Session lists wait for every observation, so a stuck tmux or ps must not hold them. On a timeout
+// or oversized output the process group is killed and the observation fails as "observer failed".
+export const PROBE_TIMEOUT_MS = 5_000;
+export const PROBE_OUTPUT_LIMIT = 4 * 1024 * 1024;
+
+export async function runProbe(
+  argv: string[],
+  options: { env?: Record<string, string | undefined>; timeoutMs?: number; outputLimit?: number } = {},
+): Promise<{ code: number; out: string }> {
+  const limit = options.outputLimit ?? PROBE_OUTPUT_LIMIT;
+  const p = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: options.env, detached: true });
+  let stopped: string | null = null;
+  const stop = (why: string) => {
+    stopped ??= why;
+    try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); }
+  };
+  const timer = setTimeout(() => stop("timed out"), options.timeoutMs ?? PROBE_TIMEOUT_MS);
+  try {
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for await (const chunk of p.stdout) {
+      length += chunk.byteLength;
+      if (length > limit) { stop("output too large"); break; }
+      chunks.push(chunk);
+    }
+    const code = await p.exited;
+    if (stopped) throw new Error(`${argv[0]} ${stopped}; process killed`);
+    return { code, out: new TextDecoder().decode(Buffer.concat(chunks)) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Pane pids on the fleet's private tmux socket. Only reads; agent-fleet owns the sessions.
-export function tmuxPanePids(socket: string) {
+export function tmuxPanePids(socket: string, probe = runProbe) {
   return async (session: string): Promise<number[] | null> => {
-    const p = Bun.spawn(["tmux", "-L", socket, "list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_pid}"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const out = await new Response(p.stdout).text();
-    if ((await p.exited) !== 0) return null;
+    const { code, out } = await probe(["tmux", "-L", socket, "list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_pid}"]);
+    if (code !== 0) return null;
     return out.split("\n").map(Number).filter((n) => Number.isInteger(n) && n > 0);
   };
 }
 
 // `ps` in the C locale and UTC prints lstart the way Claude Code writes procStart.
-export async function psProcesses(): Promise<ProcessInfo[]> {
-  const p = Bun.spawn(["ps", "-A", "-o", "pid=,ppid=,lstart=,args="], {
-    stdout: "pipe",
-    stderr: "ignore",
-    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-  });
-  const out = await new Response(p.stdout).text();
-  await p.exited;
+export async function psProcesses(probe = runProbe): Promise<ProcessInfo[]> {
+  const { out } = await probe(["ps", "-A", "-o", "pid=,ppid=,lstart=,args="], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
   const procs: ProcessInfo[] = [];
   for (const line of out.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/);
@@ -165,5 +188,5 @@ export async function observerForConf(confPath: string, home = process.env.HOME 
   const socket = fleetSocket(conf);
   if (!socket) return { disabled: "fleet.conf has no FLEET name" };
   const configDir = value("CLAUDE_CONFIG_DIR").replace(/^~(?=\/|$)/, home) || process.env.CLAUDE_CONFIG_DIR || `${home}/.claude`;
-  return new ClaudeObserver({ configDir, panePids: tmuxPanePids(socket), processes: psProcesses });
+  return new ClaudeObserver({ configDir, panePids: tmuxPanePids(socket), processes: () => psProcesses() });
 }
