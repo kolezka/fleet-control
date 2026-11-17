@@ -170,6 +170,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     // Bun's default is 128 MiB. The largest valid body (an MCP request_create at its field limits) is
     // well under this, and Bun answers 413 before a handler reads anything.
     maxRequestBodySize: MAX_REQUEST_BODY,
+    // Bun serves HTML imports in development mode by default: source maps, original source and hot
+    // reload, all readable without a token. Always serve the production build.
+    development: false,
     ...(opts.tls ? { tls: opts.tls } : {}),
     routes: {
       "/": deck,

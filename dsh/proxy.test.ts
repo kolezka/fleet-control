@@ -27,11 +27,14 @@ afterAll(() => { dsh.close(); service.stop(true); });
 test("page and API answer below the prefix with the panel principal, assets point back below it", async () => {
   expect((await fetch(base + PANEL_PREFIX, { redirect: "manual" })).headers.get("location")).toBe(PANEL_PREFIX + "/");
   const page = await (await fetch(base + PANEL_PREFIX + "/")).text();
-  expect(page).toContain(PANEL_PREFIX + "/_bun/");
-  expect(page).not.toMatch(/"\/_bun\//);
-  const css = page.match(/href="(\/fleet-control\/_bun\/asset\/[^"]+)"/)?.[1];
-  expect(css).toBeDefined();
-  expect((await fetch(base + css)).status).toBe(200);
+  // Every absolute src or href points below the prefix and loads through the proxy.
+  const refs = [...page.matchAll(/(?:src|href)="(\/[^"]*)"/g)].map((m) => m[1]!);
+  expect(refs.some((r) => r.endsWith(".css"))).toBe(true);
+  expect(refs.some((r) => r.endsWith(".js"))).toBe(true);
+  for (const ref of refs) {
+    expect(ref.startsWith(PANEL_PREFIX + "/")).toBe(true);
+    expect((await fetch(base + ref)).status).toBe(200);
+  }
   const who = await (await fetch(base + PANEL_PREFIX + "/api/whoami", { headers: { cookie: "fc_session=other; dsh=secret" } })).json();
   expect(who).toEqual({ principal: "dsh-panel", auth: true });
 });
@@ -93,4 +96,5 @@ test("plugin config wins over the environment", async () => {
 
 test("rewrite touches only Bun bundle paths", () => {
   expect(rewrite('<script src="/_bun/client/a.js"></script><a href="./install">')).toBe('<script src="/fleet-control/_bun/client/a.js"></script><a href="./install">');
+  expect(rewrite(`<link href="/chunk-a1.css"><script src='/chunk-b2.js'></script><a href="/api/x">`)).toBe(`<link href="/fleet-control/chunk-a1.css"><script src='/fleet-control/chunk-b2.js'></script><a href="/api/x">`);
 });
