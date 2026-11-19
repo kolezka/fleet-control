@@ -31,7 +31,7 @@ const attempt = async (f: () => unknown) => { try { return json(await f()); } ca
 export type ControlDeps = Parameters<typeof commandUseCases>[0] & { requests?: Parameters<typeof requestUseCases>[0] };
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
-export function buildMcpServer(deps: ControlDeps, principal?: Caller | string) {
+export function buildMcpServer(deps: ControlDeps, principal?: Caller) {
   const queue = commandUseCases(deps, principal);
   const server = new McpServer({ name: "fleet-control", version: "0.1.0" });
 
@@ -172,7 +172,7 @@ function registerRequestTools(server: McpServer, requests: ReturnType<typeof req
   }, async ({ afterSeq, limit }) => json(eventPage(requests.eventsAfter(afterSeq, limit), limit)));
 }
 
-export async function handleMcp(req: Request, deps: ControlDeps, allowedHosts: string[], principal?: Caller | string): Promise<Response> {
+export async function handleMcp(req: Request, deps: ControlDeps, allowedHosts: string[], principal?: Caller): Promise<Response> {
   const server = buildMcpServer(deps, principal);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

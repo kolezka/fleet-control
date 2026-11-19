@@ -36,7 +36,3 @@ export class RoleError extends Error {
 export function requirePermission(caller: Caller | undefined, permission: Permission): void {
   if (caller && !may(caller.role, permission)) throw new RoleError(caller.role, permission);
 }
-
-// A bare name is a caller from before roles, which counts as an agent.
-export const asCaller = (who: Caller | string | undefined): Caller | undefined =>
-  typeof who === "string" ? { name: who, role: LEGACY_ROLE } : who;

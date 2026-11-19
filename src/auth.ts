@@ -47,7 +47,7 @@ export class Auth {
     this.hashes = new Map();
     for (const [name, entry] of entries) {
       const { hash, role } = Buffer.isBuffer(entry) || !entry || typeof entry !== "object" ? { hash: entry as Buffer, role: LEGACY_ROLE } : entry;
-      if (!isRole(role)) throw new AuthConfigError("invalid role");
+      if (!isRole(role)) throw new AuthConfigError(`invalid role for principal ${name}`);
       if (!Buffer.isBuffer(hash) || hash.length !== 32) throw new AuthConfigError("invalid token hash");
       const key = hash.toString("hex");
       if (seen.has(key)) throw new AuthConfigError("duplicate token hash");

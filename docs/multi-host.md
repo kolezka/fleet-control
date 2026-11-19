@@ -8,7 +8,7 @@ Closing the gateway detaches terminal viewers. It does not cancel delivered work
 
 Follow [the host installation guide](install-guide.md) for TLS, a persistent SQLite path and a separate client principal. Start with isolated shell-only fleets. Do not point the page at production agents until the agent-fleet read-only viewer/send compatibility gate passes.
 
-Use a unique token for the MacBook on each host. Store the plaintext tokens on the MacBook in separate files outside the repository, with directory mode 700 and file mode 600. The host keeps only token hashes. Never copy a CA private key onto a host.
+Use a unique token for the MacBook on each host, with the `operator` role (`bun scripts/tokens.ts add <principal> <tokens-file> operator`): the gateway relays answers to requests, and the host refuses an answer from any other role with 403. Store the plaintext tokens on the MacBook in separate files outside the repository, with directory mode 700 and file mode 600. The host keeps only token hashes. Never copy a CA private key onto a host.
 
 Remote services must use HTTPS with a certificate the gateway runtime trusts. For a private mkcert CA, start Bun with `NODE_EXTRA_CA_CERTS` pointing to the public root certificate. This is additive trust, not disabled certificate checking. Do not set `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 

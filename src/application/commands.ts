@@ -2,7 +2,7 @@
 import type { Commands } from "../data/commands.ts";
 import { MAX_PAGE, PAGE } from "../data/page.ts";
 import { CommandError, MAX_TEXT, type Command, type CommandEvent, type CommandStatus } from "../domain/commands.ts";
-import { asCaller, requirePermission, type Caller } from "../domain/roles.ts";
+import { requirePermission, type Caller } from "../domain/roles.ts";
 import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
@@ -12,12 +12,11 @@ export { MAX_PAGE, PAGE } from "../data/page.ts";
 export const EVENT_PAGE = PAGE;
 export const MAX_EVENT_PAGE = MAX_PAGE;
 
-// With auth, `who` is the authenticated caller: its name replaces any self-declared actor and its
+// With auth, `caller` is the authenticated caller: its name replaces any self-declared actor and its
 // role decides whether it may change anything. A viewer only reads.
 // `carriesSecret` says whether a text holds a live access token; such a text is neither stored nor delivered.
-export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, who?: Caller | string) {
+export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, caller?: Caller) {
   const { commands, deliverer } = deps;
-  const caller = asCaller(who);
   const principal = caller?.name;
   const write = () => requirePermission(caller, "write");
   // Delivered text stays in the pane's scrollback, readable by every terminal viewer.

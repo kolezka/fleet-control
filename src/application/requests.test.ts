@@ -48,8 +48,8 @@ test("an authenticated caller replaces the orchestrator, actor and origin of eve
 
 test("a caller with another token cannot write the phase record of a run it did not register", () => {
   const requests = store();
-  requestUseCases(requests, "orchestrator").registerRun({ runId: "run", orchestrator: "ignored", phase: "plan" });
-  const worker = requestUseCases(requests, "worker");
+  requestUseCases(requests, { name: "orchestrator", role: "agent" }).registerRun({ runId: "run", orchestrator: "ignored", phase: "plan" });
+  const worker = requestUseCases(requests, { name: "worker", role: "agent" });
   expect(() => worker.updatePhase({ runId: "run", actor: "orchestrator", expectedRevision: 1, phaseStatus: "done", newRevision: false })).toThrow("worker is not the orchestrator of run");
   expect(requests.run("run").orchestrator).toBe("orchestrator");
 });

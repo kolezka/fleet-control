@@ -1,13 +1,12 @@
 // What the web API and the MCP tools do with runs and supervisor requests on the host.
 import type { Requests } from "../data/requests.ts";
-import { asCaller, requirePermission, type Caller, type Permission } from "../domain/roles.ts";
+import { requirePermission, type Caller, type Permission } from "../domain/roles.ts";
 import { EVENT_PAGE } from "./commands.ts";
 
 // Without auth, names are self-declared and the orchestrator check only stops mistakes.
-// With auth, `who` is the authenticated caller and replaces them, so a worker token cannot write the phase record.
+// With auth, `caller` is the authenticated caller and replaces them, so a worker token cannot write the phase record.
 // Its role decides what it may do: only an operator answers a request, a viewer changes nothing.
-export function requestUseCases(requests: Requests, who?: Caller | string) {
-  const caller = asCaller(who);
+export function requestUseCases(requests: Requests, caller?: Caller) {
   const as = <T extends object>(input: T, key: keyof T, permission: Permission = "write"): T => {
     requirePermission(caller, permission);
     return caller ? { ...input, [key]: caller.name } : input;

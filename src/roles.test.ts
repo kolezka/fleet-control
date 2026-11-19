@@ -132,21 +132,39 @@ describe("service with roles", () => {
     const id = await openRequest("roles-run-view");
     expect((await resolveRest(tokens.view, id, "approve")).status).toBe(403);
 
+    // A queued command the viewer could otherwise deliver, answer or report on.
+    const queued = commands.submit({ idempotencyKey: "roles-view-queued", target: "sup", actor: "orch", text: "waiting" }).command;
+    const eventsBefore = commands.events(queued.id).length;
+    const reqEvents = requests.events(0, 1000).length;
     const client = await mcp(tokens.view);
-    for (const [name, args] of [
+    // Every MCP tool that writes. Each must be refused with forbidden, whatever state it would act on.
+    const writes = [
       ["command_submit", { target: "sup", text: "x", idempotencyKey: "roles-view-0002", actor: "v" }],
+      ["command_deliver", { id: queued.id }],
+      ["command_respond", { id: queued.id, decision: "accepted", actor: "v", reason: "" }],
+      ["command_report", { id: queued.id, status: "running", actor: "v", evidence: "e" }],
       ["run_register", { runId: "roles-view-run", orchestrator: "x", phase: "p1" }],
+      ["phase_update", { runId: "roles-run-view", actor: "x", expectedRevision: 1, phaseStatus: "done", newRevision: false }],
+      ["request_create", { runId: "roles-run-view", origin: "x", expectedRevision: 1, kind: "approval", question: "again?" }],
       ["request_resolve", { requestId: id, response: "approve", actor: "h", expectedRevision: 1 }],
+      ["request_acknowledge", { requestId: id, actor: "h" }],
       ["request_withdraw", { requestId: id, actor: "h", reason: "no" }],
-    ] as const) {
+    ] as const;
+    const listed = (await client.listTools()).tools.map((t) => t.name);
+    for (const [name] of writes) expect(listed).toContain(name);
+    for (const [name, args] of writes) {
       const r = await client.callTool({ name, arguments: args });
-      expect({ name, isError: r.isError, forbidden: text(r).startsWith("forbidden") }).toEqual({ name, isError: true, forbidden: true });
+      // The role refusal itself, not the store's orchestrator check, which would also say forbidden.
+      expect({ name, isError: r.isError, text: text(r) }).toEqual({ name, isError: true, text: `forbidden: role viewer may not ${name === "request_resolve" ? "answer requests" : "change anything"}` });
     }
+    expect(commands.get(queued.id).status).toBe("queued");
+    expect(commands.events(queued.id).length).toBe(eventsBefore);
+    expect(requests.events(0, 1000).length).toBe(reqEvents);
     // Reads still work over MCP.
     expect(Array.isArray(body(await client.callTool({ name: "command_list", arguments: {} })).commands)).toBe(true);
     await client.close();
 
-    expect(commands.list().length).toBe(before);
+    expect(commands.list().length).toBe(before + 1); // only the queued row made directly in the store
     expect(sent.length).toBe(sentBefore);
     expect(requests.runs().length).toBe(runsBefore + 1); // only the agent's run
     expect(requests.get(id).status).toBe("open");

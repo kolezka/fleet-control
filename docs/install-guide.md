@@ -244,7 +244,9 @@ claude mcp remove --scope user fleet-control-mini
 | Symptom | Cause and fix |
 | --- | --- |
 | `refusing to bind 192.168.50.4 without auth; set FLEET_CONTROL_TOKENS` in the log | The tokens file is missing or the variable is not set. |
-| `tokens file line N: expected "<name> <sha256 hex>"` | That line is not `<name> <64 hex chars>`. Recreate it with `new-token.ts`. |
+| `tokens file line N: expected "<name> <sha256 hex> [role]"` | That line is not `<name> <64 hex chars>` with an optional role. Recreate it with `new-token.ts`. |
+| `tokens file line N: role must be one of operator, agent, viewer` | The third column is not a known role. Fix it with `tokens.ts role`. |
+| Approve in the page returns 403 `forbidden` | The token the page signed in with is not an `operator`. Run `tokens.ts role <principal> operator <tokens-file>` and send the service SIGHUP. |
 | `curl` says the certificate is not trusted | `mkcert -install` was not run on this MacBook, or the certificate was made for another address. |
 | Every request returns 401 | Wrong or revoked token. In the browser, open `/logout` and sign in again. |
 | `SQLiteError: unable to open database file` | The folder for `FLEET_CONTROL_DB` does not exist. `mkdir -p` it. |

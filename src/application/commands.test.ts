@@ -70,7 +70,7 @@ test("with an authenticated caller its name replaces every declared actor", asyn
   const sent: string[] = [];
   const send: Sender = async (session) => { sent.push(session); return { exitCode: 0, stdout: `${session}: delivered`, stderr: "" }; };
   const commands = new Commands(new Store(":memory:").db);
-  const use = commandUseCases({ commands, deliverer: new Deliverer(commands, send) }, "token-holder");
+  const use = commandUseCases({ commands, deliverer: new Deliverer(commands, send) }, { name: "token-holder", role: "agent" });
   const { command } = await use.submit({ ...input, actor: "someone-else" });
   expect(command.actor).toBe("token-holder");
   use.respond(command.id, "accepted", "someone-else", "mine");
