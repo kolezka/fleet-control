@@ -446,7 +446,8 @@ function agentView(hostId: string): AgentView {
 function renderAgents(h: HostState | undefined) {
   const box = $("agentsBox");
   const form = $("agentForm") as HTMLFormElement;
-  if (!h) { box.hidden = true; return; }
+  // Cooperative hosts are reached through the central supervisor, which has no agent routes.
+  if (!h || h.info.supervisor) { box.hidden = true; return; }
   const v = agentView(h.info.id);
   box.hidden = false;
   const list = v.list;

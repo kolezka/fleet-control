@@ -136,13 +136,15 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
+  // Without tokens anyone who can reach the port could start an unattended agent, even on loopback.
+  if (deps.agents && !auth) throw new Error("managed agents need tokens; set FLEET_CONTROL_TOKENS");
   const app = createApp(deps);
   const terminal = deps.terminal;
   // A command carrying one of this service's tokens is refused on REST and MCP alike.
   const control = deps.control && auth ? { ...deps.control, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.control;
   // With auth the caller's name replaces any actor the body declares; the use cases apply that rule.
   const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who ?? undefined) : null);
-  const agentDeps = deps.agents && auth ? { ...deps.agents, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.agents;
+  const agentDeps = deps.agents && auth ? { ...deps.agents, carriesSecret: (text: string) => auth.appearsIn(text) } : undefined;
   const agentsFor = (who: Principal | null) => (agentDeps ? agentUseCases(agentDeps, who ?? undefined) : null);
   const noAgents = () => Response.json({ error: { kind: "unavailable", message: "managed agents not configured on this host" } }, { status: 503 });
   const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who ?? undefined) : null);

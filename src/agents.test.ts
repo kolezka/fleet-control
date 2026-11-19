@@ -8,6 +8,7 @@ import { Auth, parseTokens, tokenLine } from "./auth.ts";
 import { serve } from "./server.ts";
 import { Store } from "./data/store.ts";
 import { Agents } from "./data/agents.ts";
+import { agentUseCases } from "./application/agents.ts";
 import { AgentError, type AgentLauncher, type AgentSpec, type FleetRow } from "./domain/agents.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "agents-rest-"));
@@ -21,6 +22,8 @@ await symlink(join(dir, "elsewhere"), join(root, "escape"));
 class FakeLauncher implements AgentLauncher {
   started: { agent: AgentSpec; all: FleetRow[] }[] = [];
   stopped: { name: string; remaining: FleetRow[] }[] = [];
+  rewrites: FleetRow[][] = [];
+  stopError: Error | null = null;
   open = new Set<string>();
   finish: ((e?: Error) => void) | null = null;
   async resolveDir(path: string) {
@@ -35,7 +38,8 @@ class FakeLauncher implements AgentLauncher {
     this.started.push({ agent, all });
     return new Promise<void>((resolve, reject) => { this.finish = (e) => { if (e) reject(e); else { this.open.add(agent.name); resolve(); } }; });
   }
-  async stop(name: string, remaining: FleetRow[]) { this.stopped.push({ name, remaining }); this.open.delete(name); }
+  async stop(name: string, remaining: FleetRow[]) { this.stopped.push({ name, remaining }); if (this.stopError) throw this.stopError; this.open.delete(name); }
+  async rewrite(rows: FleetRow[]) { this.rewrites.push(rows); }
   async running() { return new Set(this.open); }
 }
 
@@ -146,4 +150,81 @@ test("a browser start from another origin is refused", async () => {
     expect(res.status).toBe(403);
     expect(launcher.started).toEqual([]);
   } finally { server.stop(true); }
+});
+
+const opCaller = { name: "op", role: "operator" as const };
+const row = (name: string, state: "starting" | "running" | "failed" | "stopping" | "stopped") => ({
+  name, cwd: join(root, "sandbox"), model: "haiku", promptSha256: "0".repeat(64), promptBytes: 1,
+  createdBy: "op", createdAt: "2026-11-19T00:00:00.000Z", state, error: null, updatedAt: "2026-11-19T00:00:00.000Z",
+});
+
+test("after a restart, starting and stopping rows are settled by whether their session is open, and fleet rows are rewritten", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  for (const [name, state] of [["fc-a", "starting"], ["fc-b", "starting"], ["fc-c", "stopping"], ["fc-d", "stopping"], ["fc-e", "running"], ["fc-f", "failed"]] as const) {
+    agents.claim({ ...row(name, "starting"), state } as never);
+  }
+  launcher.open = new Set(["fc-a", "fc-c", "fc-e"]);
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"] });
+  expect((await uc.recover()).sort()).toEqual(["fc-a", "fc-b", "fc-c", "fc-d"]);
+  const by = Object.fromEntries(agents.list().map((a) => [a.name, a]));
+  expect(by["fc-a"]).toMatchObject({ state: "running", error: null });
+  expect(by["fc-b"]).toMatchObject({ state: "failed", error: "start interrupted by a service restart" });
+  expect(by["fc-c"]).toMatchObject({ state: "failed", error: "stop interrupted by a service restart; stop it again" });
+  expect(by["fc-d"]).toMatchObject({ state: "stopped" });
+  expect(by["fc-e"]?.state).toBe("running");
+  expect(by["fc-f"]?.state).toBe("failed");
+  // Only live rows keep a fleet entry, so the watchdog does not recreate failed agents.
+  expect(launcher.rewrites.at(-1)!.map((r) => r.name)).toEqual(["fc-a", "fc-e"]);
+});
+
+test("a row left stopping can be stopped again", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  agents.claim({ ...row("fc-s", "starting"), state: "stopping" } as never);
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  expect((await uc.stop("fc-s")).state).toBe("stopped");
+  expect(launcher.stopped.map((s) => s.name)).toEqual(["fc-s"]);
+});
+
+test("a failed start or stop takes the agent out of the fleet rows", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  agents.claim({ ...row("fc-keep", "starting"), state: "running" } as never);
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const { launched } = await uc.start(spec({ name: "fc-bad", confirm: "fc-bad" }));
+  expect(launcher.started[0]!.all.map((r) => r.name)).toEqual(["fc-keep", "fc-bad"]);
+  launcher.finish!(new Error("fleet start exited 1"));
+  await launched;
+  expect(agents.get("fc-bad")!.state).toBe("failed");
+  expect(launcher.rewrites.at(-1)!.map((r) => r.name)).toEqual(["fc-keep"]);
+  launcher.stopError = new Error("tmux kill-session exited 1");
+  await expect(uc.stop("fc-keep")).rejects.toThrow("tmux kill-session exited 1");
+  expect(agents.get("fc-keep")!.state).toBe("failed");
+  expect(launcher.rewrites.at(-1)!.map((r) => r.name)).toEqual([]);
+});
+
+test("an agent stopped while it was still starting is stopped again once its launch ends", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const { launched } = await uc.start(spec());
+  expect((await uc.stop("fc-one")).state).toBe("stopped");
+  // The launch completes after the stop: its session must not be left running.
+  launcher.finish!();
+  await launched;
+  expect(agents.get("fc-one")!.state).toBe("stopped");
+  expect(launcher.stopped.map((s) => s.name)).toEqual(["fc-one", "fc-one"]);
+  expect(launcher.open.has("fc-one")).toBe(false);
+});
+
+test("serve refuses managed agents without tokens", () => {
+  const store = new Store(":memory:");
+  const fleet = { screen: async () => "", status: async () => ({ sessions: [], raw: "" }) } as never;
+  expect(() => serve({ fleet, store, agents: { agents: new Agents(store.db), launcher: new FakeLauncher(), models: ["haiku"] } }, 0, {}))
+    .toThrow("managed agents need tokens");
 });

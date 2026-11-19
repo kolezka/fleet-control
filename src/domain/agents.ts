@@ -47,7 +47,18 @@ export function checkSpec(spec: { name?: unknown; cwd?: unknown; model?: unknown
 
 // A row may be started again only once nothing of it runs.
 export const restartable = (state: AgentState) => state === "failed" || state === "stopped";
-export const stoppable = (state: AgentState) => state === "running" || state === "failed" || state === "starting";
+// A stopping row may be stopped again: its earlier stop may have been cut off by a restart.
+export const stoppable = (state: AgentState) => state !== "stopped";
+// Only these keep a fleet row. A failed agent has none, so the watchdog does not recreate it.
+export const keepsFleetRow = (state: AgentState) => state === "starting" || state === "running" || state === "stopping";
+
+// After a service restart nothing is waiting on a starting or stopping row any more.
+// alive: the agent's tmux session exists now.
+export function recovered(state: AgentState, alive: boolean): { state: AgentState; error: string | null } | null {
+  if (state === "starting") return alive ? { state: "running", error: null } : { state: "failed", error: "start interrupted by a service restart" };
+  if (state === "stopping") return alive ? { state: "failed", error: "stop interrupted by a service restart; stop it again" } : { state: "stopped", error: null };
+  return null;
+}
 
 export type FleetRow = Pick<Agent, "name" | "cwd" | "model">;
 
@@ -60,8 +71,10 @@ export interface AgentLauncher {
   // Writes the prompt and the fleet rows for every managed agent, then starts this one.
   // `all` is every managed agent that keeps a fleet row, this one included.
   start(agent: AgentSpec, all: FleetRow[]): Promise<void>;
-  // Ends the tmux session and rewrites the rows without this agent.
+  // Ends the tmux session and rewrites the rows without this agent. Does not wait for a start in progress.
   stop(name: string, remaining: FleetRow[]): Promise<void>;
+  // Rewrites the managed fleet rows to exactly these.
+  rewrite(rows: FleetRow[]): Promise<void>;
   // Names of managed sessions that have a tmux session now.
   running(): Promise<Set<string>>;
 }

@@ -1,16 +1,17 @@
 // Starts and stops managed Claude Code agents through agent-fleet on this machine.
 // The fleet's own fleet.conf gets one marked line that sources a file this service owns. That file adds a row
-// per managed agent and, only while FC_AGENT names that agent, sets its folder and Claude Code arguments.
-// agent-fleet reads FC_AGENT from the environment of `fleet start`, which reaches the host only when the
-// fleet is local (no REMOTE_SSH), so remote fleets are refused.
-import { chmod, mkdir, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
+// per managed agent and an agent_overrides function that agent-fleet's watchdog calls with the session name
+// on every start and replacement, so each agent keeps its folder and Claude Code arguments.
+// The service writes files on this machine, so fleets that run over ssh are refused.
+import { chmod, mkdir, readdir, realpath, rename, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { AgentError, type AgentLauncher, type AgentSpec, type FleetRow } from "../domain/agents.ts";
 
 export const MANAGED_FILE = "fleet-control-agents.conf";
 const INCLUDE_MARK = "# fleet-control managed agents";
-const INCLUDE = `${INCLUDE_MARK}\n[ -f "$FLEET_DIR/${MANAGED_FILE}" ] && . "$FLEET_DIR/${MANAGED_FILE}"\n`;
+const INCLUDE_LINE = `[ -f "$FLEET_DIR/${MANAGED_FILE}" ] && . "$FLEET_DIR/${MANAGED_FILE}"`;
+const INCLUDE = `${INCLUDE_MARK}\n${INCLUDE_LINE}\n`;
 // Paths go into bash unquoted-safe only if they are this plain.
 const PLAIN_PATH = /^\/[A-Za-z0-9._\/-]+$/;
 export const START_TIMEOUT_MS = 150_000;
@@ -42,7 +43,7 @@ export class FleetAgentLauncher implements AgentLauncher {
     for (const r of opts.roots) if (!PLAIN_PATH.test(r)) throw new Error(`agent root must be an absolute plain path: ${r}`);
   }
 
-  // One change to the fleet files at a time.
+  // One change to the fleet files at a time. `fleet start` itself runs outside, so a stop never waits for it.
   private serial<T>(f: () => Promise<T>): Promise<T> {
     const next = this.queue.then(f, f);
     this.queue = next.catch(() => undefined);
@@ -96,7 +97,11 @@ export class FleetAgentLauncher implements AgentLauncher {
     const out: string[] = [];
     for (const root of this.opts.roots) {
       const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
-      for (const e of entries) if (e.isDirectory() && !e.name.startsWith(".")) out.push(join(root, e.name));
+      for (const e of entries) {
+        const path = join(root, e.name);
+        // Only folders resolveDir would accept.
+        if (e.isDirectory() && !e.name.startsWith(".") && PLAIN_PATH.test(path)) out.push(path);
+      }
     }
     return out.sort();
   }
@@ -111,38 +116,68 @@ export class FleetAgentLauncher implements AgentLauncher {
   private async writeRows(dir: string, rows: FleetRow[]) {
     const lines = [`# Written by Fleet Control for its managed agents. Changes here are overwritten.`];
     for (const r of rows) lines.push(`AGENTS+=("${r.name}|Fleet: ${r.name}|${r.name}.txt")`);
-    lines.push('case "${FC_AGENT:-}" in');
+    lines.push('agent_overrides() { case "$1" in');
     for (const r of rows) lines.push(`  ${r.name}) AGENT_CWD=${r.cwd}; CLAUDE_ARGS="--dangerously-skip-permissions --model ${r.model}" ;;`);
-    lines.push("esac", "");
+    lines.push("esac; }", "");
     await atomicWrite(join(dir, MANAGED_FILE), lines.join("\n"));
     const conf = await Bun.file(this.opts.confPath).text();
-    if (!conf.includes(INCLUDE_MARK)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
+    if (!conf.split("\n").includes(INCLUDE_LINE)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
   }
 
+  // Marks cwd trusted in Claude Code's state file. Claude Code writes that file too, so the read and
+  // write happen under a lock directory and are skipped when the folder is already trusted.
   private async trust(cwd: string) {
-    const file = this.opts.claudeState ?? join(homedir(), ".claude.json");
-    const data = await Bun.file(file).json().catch(() => null) as { projects?: Record<string, Record<string, unknown>> } | null;
-    if (!data || typeof data !== "object") throw new AgentError("unavailable", `${file} could not be read`);
-    if (data.projects?.[cwd]?.hasTrustDialogAccepted === true) return;
-    data.projects ??= {};
-    data.projects[cwd] = { ...data.projects[cwd], hasTrustDialogAccepted: true };
-    await atomicWrite(file, JSON.stringify(data, null, 2));
+    const named = this.opts.claudeState ?? join(homedir(), ".claude.json");
+    const file = await realpath(named).catch(() => named);
+    const read = async () => {
+      const data = await Bun.file(file).json().catch(() => null) as { projects?: Record<string, Record<string, unknown>> } | null;
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new AgentError("unavailable", `${named} could not be read`);
+      return data;
+    };
+    if ((await read()).projects?.[cwd]?.hasTrustDialogAccepted === true) return;
+    const lock = `${file}.fleet-control.lock`;
+    for (let i = 0; ; i++) {
+      try { await mkdir(lock); break; } catch {
+        if (i >= 50) throw new AgentError("unavailable", `${lock} is held; remove it if no Fleet Control start is running`);
+        await Bun.sleep(100);
+      }
+    }
+    try {
+      const data = await read();
+      if (data.projects?.[cwd]?.hasTrustDialogAccepted === true) return;
+      data.projects ??= {};
+      data.projects[cwd] = { ...data.projects[cwd], hasTrustDialogAccepted: true };
+      await atomicWrite(file, JSON.stringify(data, null, 2));
+    } finally {
+      await rmdir(lock).catch(() => undefined);
+    }
   }
 
-  start(agent: AgentSpec, all: FleetRow[]): Promise<void> {
-    return this.serial(async () => {
+  async start(agent: AgentSpec, all: FleetRow[]): Promise<void> {
+    await this.serial(async () => {
       const { dir, remote } = await this.conf();
       if (remote) throw new AgentError("unavailable", "managed agents need a local fleet (REMOTE_SSH is set)");
+      // Trust first: if Claude Code's state cannot be read, nothing else is written.
+      await this.trust(agent.cwd);
       await writeFile(join(dir, `${agent.name}.txt`), agent.prompt.endsWith("\n") ? agent.prompt : agent.prompt + "\n", { mode: 0o600 });
+      await chmod(join(dir, `${agent.name}.txt`), 0o600);
       if (!(await Bun.file(join(dir, "autonomy.txt")).exists())) await writeFile(join(dir, "autonomy.txt"), AUTONOMY, { mode: 0o644 });
       await this.writeRows(dir, all);
-      await this.trust(agent.cwd);
-      const r = await this.run([this.opts.fleetBin, "start", agent.name], this.opts.timeoutMs ?? START_TIMEOUT_MS, { FC_AGENT: agent.name });
+    });
+    {
+      const r = await this.run([this.opts.fleetBin, "start", agent.name], this.opts.timeoutMs ?? START_TIMEOUT_MS);
       if (r.exitCode !== 0) {
         const why = (r.stderr.trim().split("\n").pop() ?? "").slice(0, 300);
         throw new AgentError("unavailable", `fleet start exited ${r.exitCode}${why ? `: ${why}` : ""}`);
       }
       if (/already running/.test(r.stdout)) throw new AgentError("conflict", `${agent.name} was already running`);
+    }
+  }
+
+  rewrite(rows: FleetRow[]): Promise<void> {
+    return this.serial(async () => {
+      const { dir } = await this.conf();
+      await this.writeRows(dir, rows);
     });
   }
 

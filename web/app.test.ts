@@ -133,6 +133,9 @@ test("browser mapped panel reads commands without approvals, escapes content, an
   expect(b.element("exchangeRows").innerHTML).toContain("&lt;img");
   expect(b.element("exchangeRows").innerHTML).not.toContain('<img src');
   expect(b.element("eventText").textContent).toContain("not complete history");
+  // No agent routes through the central supervisor: the box is hidden and never read.
+  expect(b.element("agentsBox").hidden).toBe(true);
+  expect(b.calls.some(c => c.path.endsWith("/agents"))).toBe(false);
   await b.click({ page: "commands", host: "a" });
   expect(b.calls.some(c => c.path.endsWith("/commands?cursor=next"))).toBe(true);
   expect(b.calls.some(c => c.path.includes("/cooperative"))).toBe(false);

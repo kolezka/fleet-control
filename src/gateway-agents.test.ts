@@ -13,6 +13,7 @@ const launcher: AgentLauncher = {
   folders: async () => ["/r/sandbox"],
   start: async (a: AgentSpec, all: FleetRow[]) => { calls.push(`start ${a.name} ${a.cwd} ${a.model} ${all.length}`); },
   stop: async (name: string) => { calls.push(`stop ${name}`); },
+  rewrite: async () => undefined,
   running: async () => new Set(calls.filter((c) => c.startsWith("start")).length > calls.filter((c) => c.startsWith("stop")).length ? ["fc-gw"] : []),
 };
 const store = new Store(":memory:");
