@@ -84,6 +84,7 @@ Environment for `bun index.ts`:
 | `FLEET_CONTROL_TOKENS` | Tokens file: `<principal> <sha256 hex> [operator\|agent\|viewer]` per line; no role means `agent`. Only hashes live on the host. Principal names and token hashes must both be unique; a duplicate prevents startup. Auth copies configured hashes at construction; changing an in-memory map later does not rotate or revoke credentials. |
 | `FLEET_CONTROL_ALLOWED_HOSTS` | Extra `host:port` values accepted on `/mcp` (DNS rebinding protection), e.g. a Tailscale name. The bind address is added automatically. |
 | `FLEET_CONTROL_TLS_CERT`, `FLEET_CONTROL_TLS_KEY` | Optional PEM files. Without them traffic is plain HTTP, so tokens cross the network in clear text. Use Tailscale (encrypted) or add TLS before using LAN. |
+| `FLEET_CONTROL_TAILNET_HOST`, `FLEET_CONTROL_TAILNET_NAME`, `FLEET_CONTROL_TAILNET_TLS_CERT`, `FLEET_CONTROL_TAILNET_TLS_KEY` | Optional second listener, on the host's Tailscale IP, same port, same state and tokens. All four or none. It needs auth and its own certificate for its MagicDNS name (`tailscale cert <name>`); the certificate must name `FLEET_CONTROL_TAILNET_NAME`, the key must match, and the host must differ from `FLEET_CONTROL_HOST`. The name is added to the `/mcp` allowed hosts. Clients reach it as `https://<name>:<port>/`. Tailscale certificates last 90 days; renew with `tailscale cert` and restart. |
 
 Clear `NO_COLOR` in the service environment: agent-fleet misreads Claude Code's input line when it is set (docs/bugs/agent-fleet-no-color-user-typing.md).
 
@@ -178,6 +179,6 @@ A LaunchAgent for user `me` keeps the service running while `me` is logged in; a
 </dict></plist>
 ```
 
-Owner decisions (2026-11-09): no listener on Tailscale; the route is the LAN with TLS and tokens. For the real install set `FLEET_CONTROL_HOST` to `192.168.50.4` and add `FLEET_CONTROL_TLS_CERT` / `FLEET_CONTROL_TLS_KEY`. Not installed. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
+Owner decisions (2026-11-09): no listener on Tailscale (superseded 2026-11-19: the MacBook panel reaches each host on its Tailscale IP through the optional second listener, `FLEET_CONTROL_TAILNET_*` above); the route is the LAN with TLS and tokens. For the real install set `FLEET_CONTROL_HOST` to `192.168.50.4` and add `FLEET_CONTROL_TLS_CERT` / `FLEET_CONTROL_TLS_KEY`. Not installed. Homebrew tmux and bash are in `/opt/homebrew/bin`, which launchd does not put on PATH by default.
 
 Install steps (need the owner's approval): copy a checkout to the working directory, `bun install --frozen-lockfile`, create the tokens file (`chmod 600`), `launchctl bootstrap gui/$(id -u) <plist>`, then `curl -s -o /dev/null -w '%{http_code}' http://<bind address>:4871/api/sessions` must print 401 (or 200 on loopback without tokens).
