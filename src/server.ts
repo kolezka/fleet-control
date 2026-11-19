@@ -13,6 +13,8 @@ import { sessionReader } from "./application/sessions.ts";
 import { handleMcp, type ControlDeps } from "./mcp.ts";
 import { RequestError } from "./domain/requests.ts";
 import { RoleError } from "./domain/roles.ts";
+import { AgentError } from "./domain/agents.ts";
+import { agentUseCases, type AgentDeps } from "./application/agents.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -59,7 +61,9 @@ type TerminalDeps = { fleetBin: string; confPath: string };
 
 const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
 const requestStatus: Record<RequestError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400, forbidden: 403 };
+const agentStatus: Record<AgentError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, unavailable: 503 };
 function commandError(e: unknown): Response {
+  if (e instanceof AgentError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: agentStatus[e.kind] });
   if (e instanceof RoleError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: 403 });
   if (e instanceof RequestError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: requestStatus[e.kind] });
   if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
@@ -93,7 +97,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -128,7 +132,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -138,6 +142,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const control = deps.control && auth ? { ...deps.control, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.control;
   // With auth the caller's name replaces any actor the body declares; the use cases apply that rule.
   const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who ?? undefined) : null);
+  const agentDeps = deps.agents && auth ? { ...deps.agents, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.agents;
+  const agentsFor = (who: Principal | null) => (agentDeps ? agentUseCases(agentDeps, who ?? undefined) : null);
+  const noAgents = () => Response.json({ error: { kind: "unavailable", message: "managed agents not configured on this host" } }, { status: 503 });
   const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who ?? undefined) : null);
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
@@ -223,6 +230,33 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       "/api/whoami": { GET: guard((_req, _s, who) => Response.json({ principal: who?.name ?? null, role: who?.role ?? null, auth: Boolean(auth) })) },
       "/api/sessions": { GET: guard(() => app.sessions()) },
+      // Managed Claude Code agents: list for anyone signed in, start and stop for an operator.
+      "/api/agents": {
+        GET: guard(async (_req, _s, who) => {
+          const agents = agentsFor(who);
+          if (!agents) return noAgents();
+          try { return Response.json({ agents: await agents.list(), models: agents.models, folders: await agents.folders() }); } catch (e) { return commandError(e); }
+        }),
+        POST: guard(async (req, _s, who) => {
+          const agents = agentsFor(who);
+          if (!agents) return noAgents();
+          if (!originAllowed(req)) return forbidden();
+          try {
+            const body: unknown = await req.json().catch(() => null);
+            if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            const { agent } = await agents.start(body as Record<string, unknown>);
+            return Response.json({ agent }, { status: 202 });
+          } catch (e) { return commandError(e); }
+        }),
+      },
+      "/api/agents/:name/stop": {
+        POST: guard(async (req, _s, who) => {
+          const agents = agentsFor(who);
+          if (!agents) return noAgents();
+          if (!originAllowed(req)) return forbidden();
+          try { return Response.json({ agent: await agents.stop(req.params.name) }); } catch (e) { return commandError(e); }
+        }),
+      },
       "/api/sessions/:name/screen": {
         GET: guard((req) => {
           const raw = new URL(req.url).searchParams.get("lines");

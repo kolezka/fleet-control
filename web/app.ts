@@ -10,6 +10,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
+import { type AgentForm, type AgentList, agentStateText, canStop, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -432,8 +433,110 @@ function renderChrome(h: HostState | undefined) {
   $("status").textContent = !h ? "Read-only terminals" : (h.info.supervisor ? h.commandsRead.status : h.coordRead.status) === "ready" ? `${h.info.name} · read-only terminals · ${h.info.supervisor ? "cooperative commands, explicit refresh" : "supervisor panel live"}` : `${h.info.name} · state unknown or loading`;
 }
 
+// --- managed agents --------------------------------------------------------------------------------
+// Per host: the last agent list, whether it is current, the form draft and the last notice.
+type AgentView = { list: AgentList | null; status: "loading" | "ready" | "unknown" | "absent"; error: string; busy: boolean; notice: string; form: AgentForm };
+const agentViews = new Map<string, AgentView>();
+function agentView(hostId: string): AgentView {
+  let v = agentViews.get(hostId);
+  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", cwd: "", model: "", prompt: "", confirm: "" } }; agentViews.set(hostId, v); }
+  return v;
+}
+
+function renderAgents(h: HostState | undefined) {
+  const box = $("agentsBox");
+  const form = $("agentForm") as HTMLFormElement;
+  if (!h) { box.hidden = true; return; }
+  const v = agentView(h.info.id);
+  box.hidden = false;
+  const list = v.list;
+  form.hidden = v.status === "absent";
+  const rows = (list?.agents ?? []).map(a => '<li><div class="exchangemeta"><strong>' + esc(a.name) + '</strong><time>' + esc(time(a.updatedAt)) + '</time></div><p>' + esc(agentStateText(a) + ' · ' + a.model + ' · ' + a.cwd) + '</p>'
+    + (canStop(a) ? '<button type="button" class="destructive" data-fk="stop-' + esc(a.name) + '" data-stop="' + esc(a.name) + '" data-host="' + esc(h.info.id) + '"' + (v.busy ? ' disabled' : '') + '>Stop ' + esc(a.name) + '</button>' : '') + '</li>').join('');
+  setHtml($("agentRows"), rows);
+  $("agentListStatus").textContent = v.status === "absent" ? `Managed agents are not configured on ${h.info.name}.`
+    : v.status === "unknown" ? `Agent list unknown: ${v.error}. Agents may still be running.`
+    : v.status === "loading" && !list ? "Reading agents."
+    : list && list.agents.length === 0 ? `No managed agents on ${h.info.name}.` : "";
+  const folder = $("agentFolder") as HTMLSelectElement;
+  const model = $("agentModel") as HTMLSelectElement;
+  const folders = list?.folders ?? [];
+  const models = list?.models ?? [];
+  if (!v.form.cwd && folders[0]) v.form.cwd = folders[0];
+  if (!v.form.model && models[0]) v.form.model = models[0];
+  setHtml(folder, folders.map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('') || '<option value="">No folders</option>');
+  setHtml(model, models.map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join(''));
+  folder.value = v.form.cwd;
+  model.value = v.form.model;
+  for (const [id, key] of [["agentName", "name"], ["agentPrompt", "prompt"], ["agentConfirm", "confirm"]] as const) {
+    const el = $(id) as HTMLInputElement;
+    if (el.value !== v.form[key]) el.value = v.form[key];
+  }
+  const gate = startGate(v.form, list, v.busy);
+  $("agentGate").textContent = gate.ok ? `Start on ${h.info.name}` : gate.reason;
+  ($("agentStart") as HTMLButtonElement).disabled = !gate.ok;
+  $("agentStatus").textContent = v.notice;
+}
+
+async function refreshAgents(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  if (!host || host.supervisor) return;
+  const v = agentView(hostId);
+  const { status, outcome } = await hostCall(host, "/agents");
+  if (outcome.ok) {
+    const list = parseAgents(outcome.data);
+    if (list) { v.list = list; v.status = "ready"; v.error = ""; }
+    else { v.status = "unknown"; v.error = "malformed answer"; }
+  } else if (status === 503 || status === 404) {
+    v.list = null; v.status = "absent";
+  } else { v.status = "unknown"; v.error = outcome.message; }
+  if (selectedHostState(fleet)?.info.id === hostId) renderAgents(selectedHostState(fleet));
+}
+
+async function startAgent(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = agentView(hostId);
+  if (!host || !startGate(v.form, v.list, v.busy).ok) return;
+  const f = { ...v.form };
+  v.busy = true;
+  v.notice = `Starting ${f.name} on ${host.name}`;
+  renderAgents(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/agents", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(f),
+  }, WRITE_TIMEOUT_MS);
+  v.busy = false;
+  if (status === 202) {
+    v.notice = `${host.name}: ${f.name} accepted, starting. Its terminal appears once the session is open.`;
+    v.form = { ...v.form, name: "", prompt: "", confirm: "" };
+  } else if (outcome.ok || status === null || status >= 500) {
+    v.notice = `${host.name} did not answer clearly. Unknown whether ${f.name} was started; check the list before starting again.`;
+  } else v.notice = `${host.name}: ${f.name} not started: ${outcome.message}`;
+  renderAgents(selectedHostState(fleet));
+  await refreshAgents(hostId);
+  void refresh(hostId, "sessions");
+}
+
+async function stopAgent(hostId: string, name: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = agentView(hostId);
+  if (!host || v.busy) return;
+  v.busy = true;
+  v.notice = `Stopping ${name} on ${host.name}`;
+  renderAgents(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, `/agents/${encodeURIComponent(name)}/stop`, { method: "POST" }, WRITE_TIMEOUT_MS);
+  v.busy = false;
+  const state = outcome.ok ? (outcome.data as { agent?: { state?: string } }).agent?.state : undefined;
+  v.notice = outcome.ok ? `${host.name}: ${name} ${state === "stopped" ? "stopped, session closed" : `is ${state ?? "in an unknown state"}`}.`
+    : status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether ${name} stopped.`
+    : `${host.name}: ${name} not stopped: ${outcome.message}`;
+  renderAgents(selectedHostState(fleet));
+  await refreshAgents(hostId);
+  void refresh(hostId, "sessions");
+}
+
 function render() {
   const h = selectedHostState(fleet);
+  renderAgents(h);
   renderChrome(h);
   renderNav();
   renderPanes(h);
@@ -507,6 +610,7 @@ async function loadHostList() {
     // Hosts are read concurrently; a failing host does not delay the others.
     void refreshAll("sessions");
     void refreshAll("coord");
+    for (const id of fleet.order) void refreshAgents(id);
   } catch {
     hostListError = "Cannot reach the host list. Host state is unknown.";
     render();
@@ -526,6 +630,7 @@ document.addEventListener("click", (e) => {
     else void readCooperativePage(hostId, b.dataset.page === "inspect" || b.dataset.page === "events" ? "inspection" : "commands", b.dataset.page === "events" || b.dataset.page === "commands");
     return;
   }
+  if (b.dataset.stop) { void stopAgent(b.dataset.host!, b.dataset.stop); return; }
   if (b.dataset.answer) { void answer(b.dataset.host!, b.dataset.request!, b.dataset.answer, Number(b.dataset.revision)); return; }
   if (b.id === "inspectorToggle") { setInspector(!inspectorOpen); return; }
   if (b.dataset.host && b.dataset.session) {
@@ -537,7 +642,23 @@ document.addEventListener("click", (e) => {
     // The host may have been off screen for a while; read it again now.
     void refresh(b.dataset.host, "sessions");
     void refresh(b.dataset.host, "coord");
+    void refreshAgents(b.dataset.host);
   }
+});
+
+// The form draft belongs to the selected host, like the instruction draft.
+for (const [id, key] of [["agentName", "name"], ["agentFolder", "cwd"], ["agentModel", "model"], ["agentPrompt", "prompt"], ["agentConfirm", "confirm"]] as const) {
+  $(id).addEventListener("input", () => {
+    const h = selectedHostState(fleet);
+    if (!h) return;
+    agentView(h.info.id).form[key] = ($(id) as HTMLInputElement).value;
+    renderAgents(h);
+  });
+}
+$("agentForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const h = selectedHostState(fleet);
+  if (h) void startAgent(h.info.id);
 });
 
 // The answer is bound to the host, request id and revision the clicked button was drawn from.
@@ -608,6 +729,14 @@ await loadHostList();
 const visible = () => !document.hidden;
 setInterval(() => { if (visible()) void refreshAll("coord"); }, 3000);
 setInterval(() => { if (visible()) void refreshAll("sessions"); }, 15000);
+// Agents are read every 15 s, or every 3 s on the selected host while one is starting or stopping.
+let agentTick = 0;
+setInterval(() => {
+  if (!visible()) return;
+  agentTick++;
+  const h = selectedHostState(fleet);
+  for (const id of fleet.order) if (agentTick % 5 === 0 || (h?.info.id === id && settling(agentView(id).list))) void refreshAgents(id);
+}, 3000);
 setInterval(() => { if (visible()) void loadHostList(); }, 60000);
 // Each open pane holds a terminal socket and a PTY on the host, which count against its viewer cap.
 // A tab hidden for a minute gives them back; the sessions refresh on showing rebuilds the panes.

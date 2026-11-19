@@ -1,6 +1,8 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
-import { portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
+import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
+import { Agents } from "./src/data/agents.ts";
+import { FleetAgentLauncher } from "./src/fleet/agents.ts";
 import { Commands } from "./src/data/commands.ts";
 import { Deliverer } from "./src/application/delivery.ts";
 import { fleetSender } from "./src/fleet/sender.ts";
@@ -30,6 +32,12 @@ const port = portFromEnv(process.env.PORT);
 // Checked before anything binds, so a bad tailnet setting does not leave a half-started service.
 const tailnet = await tailnetOptionsFromEnv(process.env, options, port);
 reloadTokensOnHangup(options.auth);
+const agentSettings = agentSettingsFromEnv(process.env);
+// Without tokens anyone on the machine could start an unattended agent, so managed agents need them even on loopback.
+if (agentSettings && !options.auth) {
+  console.error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
+  process.exit(1);
+}
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
 const deps = {
   fleet: new FleetCli({ fleetBin, confPath }),
@@ -37,7 +45,11 @@ const deps = {
   observer,
   terminal: { fleetBin, confPath },
   control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
+  agents: agentSettings
+    ? { agents: new Agents(store.db), launcher: new FleetAgentLauncher({ fleetBin, confPath, roots: agentSettings.roots }), models: agentSettings.models }
+    : undefined,
 };
+if (agentSettings) console.log(`managed agents in ${agentSettings.roots.join(", ")} (models ${agentSettings.models.join(", ")})`);
 // One cap on terminal PTYs for the whole process, whichever listener the socket came in on.
 const viewerSlots = new ViewerSlots();
 const server = serve(deps, port, { ...options, viewerSlots });

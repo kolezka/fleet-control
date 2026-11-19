@@ -48,3 +48,13 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Same for the supervisor panel: an unbroken host name wraps instead of pushing Send past the edge. */
 .coordination{grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}
 .coordinationhead h2,.composerfooter button{flex-shrink:0}
+/* Managed agents: list with Stop, then the start form. Same tokens as the instruction form. */
+.coordinationbody>.exchange.agents{margin-top:0}
+.agentform{display:grid;gap:6px;margin-top:12px}
+.agentform label{font-size:11px;font-weight:500;margin-top:4px}
+.agentform input,.agentform select,.agentform textarea{width:100%;padding:6px 9px;background:var(--terminal);color:var(--ink);border:1px solid var(--line);border-radius:4px;font:12px/1.5 var(--sans)}
+.agentform textarea{resize:vertical;min-height:56px;max-height:160px}
+.agentform input:focus-visible,.agentform select:focus-visible,.agentform textarea:focus-visible,.agents button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.agentform #agentStatus{font-size:10px;color:var(--muted);line-height:1.5}
+.agents li button{font-size:11px;padding:4px 11px;margin-top:4px;border-color:var(--line)}
+.agents button.destructive{color:var(--bad)}

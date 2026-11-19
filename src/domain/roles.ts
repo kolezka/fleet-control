@@ -15,10 +15,11 @@ export type Caller = { name: string; role: Role };
 
 // write: queue, deliver, answer or report commands and write runs, phases and requests.
 // answer: resolve a supervisor request, which is the human decision itself.
-export type Permission = "write" | "answer";
+// operate: start and stop agents on the host, which runs code and spends money.
+export type Permission = "write" | "answer" | "operate";
 
 const allowed: Record<Role, Permission[]> = {
-  operator: ["write", "answer"],
+  operator: ["write", "answer", "operate"],
   agent: ["write"],
   viewer: [],
 };
@@ -28,7 +29,7 @@ export const may = (role: Role, permission: Permission): boolean => allowed[role
 export class RoleError extends Error {
   readonly kind = "forbidden" as const;
   constructor(readonly role: Role, permission: Permission) {
-    super(`role ${role} may not ${permission === "answer" ? "answer requests" : "change anything"}`);
+    super(`role ${role} may not ${permission === "answer" ? "answer requests" : permission === "operate" ? "start or stop agents" : "change anything"}`);
   }
 }
 

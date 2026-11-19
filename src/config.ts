@@ -137,3 +137,16 @@ export async function tlsFromEnv(
   if (days < CERT_WARN_DAYS) warn(`TLS certificate expires in ${days} days (${to.toISOString()}); make a new one`);
   return { cert, key };
 }
+
+// FLEET_CONTROL_AGENT_ROOTS="/Users/me/fleet-agents:/other" turns on managed agents; unset means off.
+// FLEET_CONTROL_AGENT_MODELS="sonnet,opus,haiku" narrows the model list (default those three).
+export function agentSettingsFromEnv(env: Record<string, string | undefined>): { roots: string[]; models: string[] } | undefined {
+  const raw = env.FLEET_CONTROL_AGENT_ROOTS?.trim();
+  if (!raw) return undefined;
+  const roots = raw.split(":").map((r) => r.trim()).filter(Boolean);
+  for (const r of roots) if (!/^\/[A-Za-z0-9._\/-]+$/.test(r) || r === "/") throw new Error(`FLEET_CONTROL_AGENT_ROOTS: ${r} is not a plain absolute folder`);
+  const models = (env.FLEET_CONTROL_AGENT_MODELS ?? "sonnet,opus,haiku").split(",").map((m) => m.trim()).filter(Boolean);
+  for (const m of models) if (!/^[a-z0-9][a-z0-9.-]{0,63}$/.test(m)) throw new Error(`FLEET_CONTROL_AGENT_MODELS: ${m} is not a model alias`);
+  if (models.length === 0) throw new Error("FLEET_CONTROL_AGENT_MODELS is empty");
+  return { roots, models };
+}
