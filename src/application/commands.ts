@@ -1,7 +1,7 @@
 // What the web API and the MCP tools do with the host command queue. Both call these, so they cannot drift.
 import type { Commands } from "../data/commands.ts";
 import { MAX_PAGE, PAGE } from "../data/page.ts";
-import type { Command, CommandEvent, CommandStatus } from "../domain/commands.ts";
+import { CommandError, MAX_TEXT, type Command, type CommandEvent, type CommandStatus } from "../domain/commands.ts";
 import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
@@ -12,17 +12,30 @@ export const EVENT_PAGE = PAGE;
 export const MAX_EVENT_PAGE = MAX_PAGE;
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
-export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer }, principal?: string) {
+// `carriesSecret` says whether a text holds a live access token; such a text is neither stored nor delivered.
+export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, principal?: string) {
   const { commands, deliverer } = deps;
+  // Delivered text stays in the pane's scrollback, readable by every terminal viewer.
+  // Text over MAX_TEXT is left to the store's own length error, so a huge body costs no scan.
+  // The length is measured after trim, as the store does, so padding cannot skip the scan.
+  const refuseSecret = (text: string, what: string) => {
+    const trimmed = text.trim();
+    if (trimmed.length <= MAX_TEXT && deps.carriesSecret?.(trimmed)) throw new CommandError("invalid", `text contains an access token; it was ${what}`);
+  };
   return {
     // Queues the instruction and tries to deliver it once. A repeated key returns the original command and delivers nothing.
     async submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): Promise<CommandView & { created: boolean }> {
+      refuseSecret(input.text, "not stored or delivered");
       const { command, created } = commands.submit(principal ? { ...input, actor: principal } : input);
       const after = created ? await deliverer.deliver(command.id) : command;
       return { command: after, created, events: commands.events(command.id) };
     },
 
+    // A row queued before the guard existed, or by an instance without auth, is checked again here.
     async deliver(id: string): Promise<CommandView> {
+      // Only a queued row is sent; other statuses come back unchanged, as before.
+      const stored = commands.get(id);
+      if (stored.status === "queued") refuseSecret(stored.text, "not delivered");
       const command = await deliverer.deliver(id);
       return { command, events: commands.events(id) };
     },

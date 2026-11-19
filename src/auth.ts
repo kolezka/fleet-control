@@ -88,6 +88,23 @@ export class Auth {
     return principal;
   }
 
+  // Whether any word of `text` is a current token. Delivered text stays in the pane's scrollback,
+  // where every terminal viewer can read it. Candidates are whitespace-separated words, runs of
+  // token characters inside them, and runs of base64url characters (what newToken makes), so
+  // quotes, "Bearer ", "token=" or "?t=" around a token do not hide it. Every window of
+  // TOKEN_LENGTH characters is checked too, so a newToken token glued to other text is caught.
+  appearsIn(text: string): boolean {
+    const words = new Set<string>();
+    for (const word of text.split(/\s+/)) {
+      if (word) words.add(word);
+      for (const run of word.match(/[A-Za-z0-9._~+\/=-]+/g) ?? []) words.add(run);
+      for (const run of word.match(/[A-Za-z0-9_-]+/g) ?? []) words.add(run);
+    }
+    for (let i = 0; i + TOKEN_LENGTH <= text.length; i++) words.add(text.slice(i, i + TOKEN_LENGTH));
+    for (const word of words) if (this.check(word)) return true;
+    return false;
+  }
+
   // Authorization: Bearer for MCP and scripts, the session cookie for the browser page.
   principal(req: Request): Principal | null {
     const header = req.headers.get("authorization");
@@ -100,6 +117,9 @@ export class Auth {
     return this.check(token);
   }
 }
+
+// Length of every newToken result: 32 random bytes in base64url without padding.
+export const TOKEN_LENGTH = 43;
 
 export function newToken(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");

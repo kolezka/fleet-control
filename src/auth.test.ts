@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Auth, AuthConfigError, parseTokens, tokenLine } from "./auth.ts";
+import { Auth, AuthConfigError, newToken, parseTokens, TOKEN_LENGTH, tokenLine } from "./auth.ts";
 import { Commands } from "./data/commands.ts";
 import { Deliverer } from "./application/delivery.ts";
 import type { Sender } from "./domain/delivery.ts";
@@ -18,6 +18,19 @@ describe("tokens file", () => {
     expect(auth.check("secret-b")).toEqual({ name: "web" });
     expect(auth.check("secret-c")).toBeNull();
     expect(auth.check("")).toBeNull();
+  });
+
+  test("a generated token is found in text even when glued to other characters", () => {
+    const live = newToken(), other = newToken();
+    expect(live.length).toBe(TOKEN_LENGTH);
+    const auth = new Auth(parseTokens(tokenLine("web", live)));
+    for (const text of [`echo pre${live}`, `echo ${live}suffix`, `pre_${live}_post`, `pre-${live}-post`, `x${live}y`]) {
+      expect({ text, found: auth.appearsIn(text) }).toEqual({ text, found: true });
+    }
+    // Controls: another token, and the live one with a character changed, are not reported.
+    expect(auth.appearsIn(`echo pre${other}`)).toBe(false);
+    const changed = (live[0] === "A" ? "B" : "A") + live.slice(1);
+    expect(auth.appearsIn(`echo pre${changed}x`)).toBe(false);
   });
 
   test("bad, duplicate or empty files are rejected at start, not ignored", () => {
@@ -42,10 +55,11 @@ describe("service with auth", () => {
   const tokens = { orch: "tok-orchestrator", worker: "tok-worker", web: "tok-web" };
   let server: ReturnType<typeof serve>;
   let requests: Requests;
+  let commands: Commands;
 
   beforeAll(() => {
     const store = new Store();
-    const commands = new Commands(store.db);
+    commands = new Commands(store.db);
     requests = new Requests(store.db);
     const auth = new Auth(parseTokens(Object.entries(tokens).map(([n, t]) => tokenLine(n, t)).join("\n")));
     server = serve({ fleet, store, control: { commands, deliverer: new Deliverer(commands, fakeSend), requests } }, 0, { auth });
@@ -116,5 +130,84 @@ describe("service with auth", () => {
     expect(cookie).toContain("SameSite=Strict");
     const who = await fetch(url("/api/whoami"), { headers: { cookie: cookie.split(";")[0]! } });
     expect(await who.json()).toEqual({ principal: "web", auth: true });
+  });
+
+  // A delivered command lands in the pane's scrollback, where every terminal viewer can read it.
+  test("a command whose text carries a live token is refused on REST and MCP and never delivered", async () => {
+    const before = sent.length;
+    for (const text of [
+      `login with ${tokens.orch} please`,
+      `curl -H "Authorization: Bearer ${tokens.web}"`,
+      tokens.worker,
+      `export token=${tokens.orch}`,
+      `open https://host:4871/?t=${tokens.web}`,
+    ]) {
+      const res = await fetch(url("/api/commands"), {
+        method: "POST",
+        headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: `leak-${text.length}-rest`, target: "sup", text }),
+      });
+      expect({ text, status: res.status }).toEqual({ text, status: 400 });
+      expect((await res.json()).error.message).toContain("token");
+    }
+    const client = await mcp(tokens.worker);
+    const denied = await client.callTool({ name: "command_submit", arguments: { target: "sup", text: `here: ${tokens.orch}`, idempotencyKey: "leak-mcp-0001", actor: "x" } });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toContain("token");
+    await client.close();
+    expect(sent.length).toBe(before);
+    // Text over the length cap gets the store's length error without a token scan.
+    const long = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-long-0001", target: "sup", text: `${tokens.orch} ${"x ".repeat(2100)}` }),
+    });
+    expect(long.status).toBe(400);
+    expect((await long.json()).error.message).toContain("longer than");
+    // Padding that the store trims away does not skip the scan.
+    const padded = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-padded-0001", target: "sup", text: `${tokens.web}${" ".repeat(4200)}` }),
+    });
+    expect(padded.status).toBe(400);
+    expect((await padded.json()).error.message).toContain("token");
+    expect(sent.length).toBe(before);
+    // Refused texts are not stored either, so command_list cannot show them.
+    const stored = commands.list().map((c) => c.text).join("\n");
+    for (const token of Object.values(tokens)) expect(stored).not.toContain(token);
+    // Control: the same shape of text without a token still goes through.
+    const ok = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-control-0001", target: "sup", text: "login with tok-nothing please" }),
+    });
+    expect(ok.status).toBe(201);
+    expect(sent.length).toBe(before + 1);
+  });
+
+  // A row queued before the guard existed, or by an instance without auth, must not reach the pane either.
+  test("command_deliver refuses a queued command whose text carries a live token", async () => {
+    const { command } = commands.submit({ idempotencyKey: "seeded-leak-0001", target: "sup", actor: "old", text: `please use ${tokens.web} now` });
+    const { command: clean } = commands.submit({ idempotencyKey: "seeded-clean-0001", target: "sup", actor: "old", text: "please use nothing now" });
+    const before = sent.length;
+    const client = await mcp(tokens.worker);
+    const denied = await client.callTool({ name: "command_deliver", arguments: { id: command.id } });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toContain("token");
+    expect(sent.length).toBe(before);
+    // Control: a clean queued row is still delivered through the same tool.
+    const ok = await client.callTool({ name: "command_deliver", arguments: { id: clean.id } });
+    expect(ok.isError).toBeFalsy();
+    expect(sent.length).toBe(before + 1);
+    // A row already delivered before the guard comes back unchanged, as the tool describes.
+    const { command: old } = commands.submit({ idempotencyKey: "seeded-done-0001", target: "sup", actor: "old", text: `done with ${tokens.web}` });
+    expect((await new Deliverer(commands, fakeSend).deliver(old.id)).status).toBe("delivered");
+    const sentBefore = sent.length;
+    const again = await client.callTool({ name: "command_deliver", arguments: { id: old.id } });
+    expect(again.isError).toBeFalsy();
+    expect(JSON.stringify(again.content)).toContain("delivered");
+    expect(sent.length).toBe(sentBefore);
+    await client.close();
   });
 });

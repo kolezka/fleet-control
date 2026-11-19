@@ -123,7 +123,8 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const auth = opts.auth;
   const app = createApp(deps);
   const terminal = deps.terminal;
-  const control = deps.control;
+  // A command carrying one of this service's tokens is refused on REST and MCP alike.
+  const control = deps.control && auth ? { ...deps.control, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.control;
   // With auth the caller's name replaces any actor the body declares; the use cases apply that rule.
   const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who?.name) : null);
   const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who?.name) : null);
