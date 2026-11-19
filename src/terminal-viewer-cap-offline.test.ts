@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serve } from "./server.ts";
+import { serve, ViewerSlots } from "./server.ts";
 import { Store } from "./data/store.ts";
 
 // Each terminal socket starts a PTY process. The service caps how many are open at once.
@@ -60,6 +60,32 @@ test("a third viewer is refused while two are open, and a closed one frees its s
   await Promise.all(again.map((v) => v.closed));
 });
 
+test("two listeners given the same slots share one cap", async () => {
+  const slots = new ViewerSlots(2);
+  const deps = { fleet, store: new Store(":memory:"), terminal: { fleetBin: join(dir, "fleet"), confPath: join(dir, "fleet.conf") } };
+  const a = serve(deps, 0, { viewerSlots: slots });
+  const b = serve(deps, 0, { viewerSlots: slots });
+  const at = (s: ReturnType<typeof serve>) => {
+    const ws = new WebSocket(`ws://${new URL(s.url).host}/api/sessions/probe/terminal?cols=80&rows=24`, { headers: { origin: s.url.origin } } as never);
+    const result = new Promise<"open" | "refused">((resolve) => { ws.onmessage = () => resolve("open"); ws.onclose = () => resolve("refused"); });
+    const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
+    return { ws, result, closed };
+  };
+  try {
+    const one = at(a), two = at(b);
+    expect([await one.result, await two.result]).toEqual(["open", "open"]);
+    // Two are open across both listeners, so a third on either is refused.
+    expect(await at(a).result).toBe("refused");
+    expect(await at(b).result).toBe("refused");
+    one.ws.close(); two.ws.close();
+    await Promise.all([one.closed, two.closed]);
+    expect(slots.open).toBe(0);
+  } finally {
+    a.stop(true); b.stop(true);
+  }
+});
+
 test("maxViewers must be a positive integer", () => {
+  expect(() => new ViewerSlots(0)).toThrow("maxViewers");
   expect(() => serve({ fleet, store: new Store(":memory:") }, 0, { maxViewers: 0 })).toThrow("maxViewers");
 });

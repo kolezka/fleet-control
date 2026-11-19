@@ -1,7 +1,17 @@
 // Service options from the environment, shared by index.ts and the dev script.
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { Auth, AuthConfigError } from "./auth.ts";
+import { isIP } from "node:net";
+import { Auth, AuthConfigError, isLoopback } from "./auth.ts";
 import type { Peer, ServeOptions } from "./server.ts";
+
+// Tailscale hands out 100.64.0.0/10 (CGNAT) and fd7a:115c:a1e0::/48. Loopback is allowed for tests.
+export function isTailnetAddress(host: string): boolean {
+  if (isIP(host) === 4) {
+    const [a, b] = host.split(".").map(Number) as [number, number];
+    return a === 100 && b >= 64 && b <= 127;
+  }
+  return isIP(host) === 6 && /^fd7a:115c:a1e0:/i.test(host);
+}
 
 // FLEET_CONTROL_PEERS="me-desktop=http://100.64.0.5:4871,other=https://host:4871"
 // A peer is a service origin; a path is dropped, as before. Credentials in the URL and a repeated
@@ -72,7 +82,9 @@ export async function tailnetOptionsFromEnv(
   const tls = await tlsFromEnv({ FLEET_CONTROL_TLS_CERT: certPath, FLEET_CONTROL_TLS_KEY: keyPath }, file, now, warn);
   const x509 = new X509Certificate(tls!.cert);
   if (!x509.checkHost(name!)) throw new Error(`FLEET_CONTROL_TAILNET_TLS_CERT does not name ${name}`);
-  if (host === base.hostname && port !== 0) throw new Error("FLEET_CONTROL_TAILNET_HOST must differ from FLEET_CONTROL_HOST");
+  if (host === base.hostname) throw new Error("FLEET_CONTROL_TAILNET_HOST must differ from FLEET_CONTROL_HOST");
+  if (!isTailnetAddress(host) && !isLoopback(host)) throw new Error("FLEET_CONTROL_TAILNET_HOST must be a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48)");
+  if (!Number.isSafeInteger(port) || port < 1) throw new Error("the tailnet listener needs a fixed PORT");
   return { ...base, hostname: host, tls, allowedHosts: [...(base.allowedHosts ?? []), `${name}:${port}`] };
 }
 

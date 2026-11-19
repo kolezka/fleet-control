@@ -8,7 +8,7 @@ import { FleetCli } from "./src/fleet/cli.ts";
 import { resolveFleetBin } from "./src/fleet/path.ts";
 import { Requests } from "./src/data/requests.ts";
 import { observerForConf } from "./src/observe/claude.ts";
-import { serve } from "./src/server.ts";
+import { serve, ViewerSlots } from "./src/server.ts";
 import { Store } from "./src/data/store.ts";
 
 const confPath = process.env.FLEET_CONF;
@@ -38,9 +38,18 @@ const deps = {
   terminal: { fleetBin, confPath },
   control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
 };
-const server = serve(deps, port, options);
-console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);
+// One cap on terminal PTYs for the whole process, whichever listener the socket came in on.
+const viewerSlots = new ViewerSlots();
+const server = serve(deps, port, { ...options, viewerSlots });
 if (tailnet) {
-  const second = serve(deps, server.port, tailnet);
-  console.log(`Fleet Control tailnet listener on ${second.url} as https://${process.env.FLEET_CONTROL_TAILNET_NAME}:${second.port}/`);
+  try {
+    const second = serve(deps, server.port, { ...tailnet, viewerSlots });
+    console.log(`Fleet Control tailnet listener on ${second.url} as https://${process.env.FLEET_CONTROL_TAILNET_NAME}:${second.port}/`);
+  } catch (e) {
+    // Half a service looks up to a supervisor; stop the LAN listener and fail the start instead.
+    server.stop(true);
+    console.error(`tailnet listener failed: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
 }
+console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);

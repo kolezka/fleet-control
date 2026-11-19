@@ -47,4 +47,15 @@ test("a partial, unauthenticated or mismatched setting is refused before anythin
   await expect(run(env({ FLEET_CONTROL_TAILNET_TLS_CERT: other.cert, FLEET_CONTROL_TAILNET_TLS_KEY: other.key }))).rejects.toThrow("does not name box.tail.ts.net");
   await expect(run(env({ FLEET_CONTROL_TAILNET_TLS_KEY: other.key }))).rejects.toThrow("does not match");
   await expect(run(env({ FLEET_CONTROL_TAILNET_HOST: "192.168.50.4" }))).rejects.toThrow("must differ");
+  // Not a Tailscale address: a wildcard or LAN bind would expose more than the tailnet.
+  for (const host of ["0.0.0.0", "::", "192.168.50.15", "100.128.0.1", "fd7a:115c:a1e1::1"]) {
+    await expect(run(env({ FLEET_CONTROL_TAILNET_HOST: host }))).rejects.toThrow("must be a Tailscale address");
+  }
+  await expect(tailnetOptionsFromEnv(env(), base, 0, undefined, new Date(), quiet)).rejects.toThrow("fixed PORT");
+});
+
+test("Tailscale v4 and v6 addresses are accepted", async () => {
+  for (const host of ["100.64.0.5", "100.127.255.254", "fd7a:115c:a1e0::f832:1040"]) {
+    expect((await tailnetOptionsFromEnv(env({ FLEET_CONTROL_TAILNET_HOST: host }), base, 4871, undefined, new Date(), quiet))!.hostname).toBe(host);
+  }
 });

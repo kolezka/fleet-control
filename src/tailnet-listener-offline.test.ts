@@ -18,7 +18,7 @@ const freePort = () => new Promise<number>((done) => {
 test("one command posted on the LAN listener is read on the tailnet listener, which needs TLS for its name", async () => {
   const cert = join(dir, "cert.pem"), key = join(dir, "key.pem");
   const ssl = Bun.spawn(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=localhost",
-    "-addext", "subjectAltName=DNS:localhost", "-days", "30", "-keyout", key, "-out", cert], { stdout: "ignore", stderr: "ignore" });
+    "-addext", "subjectAltName=DNS:localhost,DNS:box.tail.ts.net", "-days", "30", "-keyout", key, "-out", cert], { stdout: "ignore", stderr: "ignore" });
   expect(await ssl.exited).toBe(0);
   const token = "tailnet-test-token";
   await writeFile(join(dir, "tokens"), `${tokenLine("gw", token)}\n`, { mode: 0o600 });
@@ -29,7 +29,7 @@ test("one command posted on the LAN listener is read on the tailnet listener, wh
     env: {
       ...process.env, PORT: String(port), FLEET_CONF: join(dir, "fleet.conf"), FLEET_CONTROL_DB: join(dir, "state.db"),
       FLEET_CONTROL_HOST: "127.0.0.1", FLEET_CONTROL_TOKENS: join(dir, "tokens"),
-      FLEET_CONTROL_TAILNET_HOST: "::1", FLEET_CONTROL_TAILNET_NAME: "localhost",
+      FLEET_CONTROL_TAILNET_HOST: "::1", FLEET_CONTROL_TAILNET_NAME: "box.tail.ts.net",
       FLEET_CONTROL_TAILNET_TLS_CERT: cert, FLEET_CONTROL_TAILNET_TLS_KEY: key,
     },
     stdout: "pipe", stderr: "pipe",
@@ -59,6 +59,15 @@ test("one command posted on the LAN listener is read on the tailnet listener, wh
   // Without a token the tailnet listener answers 401, and it does not speak plain HTTP.
   expect((await fetch(`${tailnet}/api/commands`, { tls } as RequestInit)).status).toBe(401);
   await expect(fetch(`http://[::1]:${port}/api/whoami`, { headers: auth })).rejects.toThrow();
+  // MCP checks the Host header: the tailnet name is accepted, a foreign name is not. The certificate names
+  // localhost too, so the client dials localhost while the Host header carries the MagicDNS name.
+  const mcp = (host: string) => fetch(`${tailnet}/mcp`, {
+    method: "POST", tls,
+    headers: { ...auth, host, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } } }),
+  } as RequestInit);
+  expect((await mcp(`box.tail.ts.net:${port}`)).status).toBe(200);
+  expect((await mcp(`evil.example:${port}`)).status).toBe(403);
   // The certificate names localhost, not the IP, so dialing the IP fails verification.
   await expect(fetch(`https://[::1]:${port}/api/whoami`, { headers: auth, tls } as RequestInit)).rejects.toThrow();
 }, 30_000);
