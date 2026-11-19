@@ -88,6 +88,19 @@ export class Auth {
     return principal;
   }
 
+  // Whether any word of `text` is a current token. Delivered text stays in the pane's scrollback,
+  // where every terminal viewer can read it. Words are whitespace-separated, and runs of token
+  // characters inside them, so quotes or a "Bearer " prefix do not hide a token.
+  appearsIn(text: string): boolean {
+    const words = new Set<string>();
+    for (const word of text.split(/\s+/)) {
+      if (word) words.add(word);
+      for (const run of word.match(/[A-Za-z0-9._~+\/=-]+/g) ?? []) words.add(run);
+    }
+    for (const word of words) if (this.check(word)) return true;
+    return false;
+  }
+
   // Authorization: Bearer for MCP and scripts, the session cookie for the browser page.
   principal(req: Request): Principal | null {
     const header = req.headers.get("authorization");

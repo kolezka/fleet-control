@@ -1,7 +1,7 @@
 // What the web API and the MCP tools do with the host command queue. Both call these, so they cannot drift.
 import type { Commands } from "../data/commands.ts";
 import { MAX_PAGE, PAGE } from "../data/page.ts";
-import type { Command, CommandEvent, CommandStatus } from "../domain/commands.ts";
+import { CommandError, type Command, type CommandEvent, type CommandStatus } from "../domain/commands.ts";
 import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
@@ -12,11 +12,14 @@ export const EVENT_PAGE = PAGE;
 export const MAX_EVENT_PAGE = MAX_PAGE;
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
-export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer }, principal?: string) {
+// `carriesSecret` says whether a text holds a live access token; such a text is refused before it is stored.
+export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, principal?: string) {
   const { commands, deliverer } = deps;
   return {
     // Queues the instruction and tries to deliver it once. A repeated key returns the original command and delivers nothing.
     async submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): Promise<CommandView & { created: boolean }> {
+      // Delivered text stays in the pane's scrollback, readable by every terminal viewer.
+      if (deps.carriesSecret?.(input.text)) throw new CommandError("invalid", "text contains an access token; it was not stored or delivered");
       const { command, created } = commands.submit(principal ? { ...input, actor: principal } : input);
       const after = created ? await deliverer.deliver(command.id) : command;
       return { command: after, created, events: commands.events(command.id) };

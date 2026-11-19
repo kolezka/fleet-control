@@ -117,4 +117,31 @@ describe("service with auth", () => {
     const who = await fetch(url("/api/whoami"), { headers: { cookie: cookie.split(";")[0]! } });
     expect(await who.json()).toEqual({ principal: "web", auth: true });
   });
+
+  // A delivered command lands in the pane's scrollback, where every terminal viewer can read it.
+  test("a command whose text carries a live token is refused on REST and MCP and never delivered", async () => {
+    const before = sent.length;
+    for (const text of [`login with ${tokens.orch} please`, `curl -H "Authorization: Bearer ${tokens.web}"`, tokens.worker]) {
+      const res = await fetch(url("/api/commands"), {
+        method: "POST",
+        headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: `leak-${text.length}-rest`, target: "sup", text }),
+      });
+      expect({ text, status: res.status }).toEqual({ text, status: 400 });
+      expect((await res.json()).error.message).toContain("token");
+    }
+    const client = await mcp(tokens.worker);
+    const denied = await client.callTool({ name: "command_submit", arguments: { target: "sup", text: `here: ${tokens.orch}`, idempotencyKey: "leak-mcp-0001", actor: "x" } });
+    expect(denied.isError).toBe(true);
+    await client.close();
+    expect(sent.length).toBe(before);
+    // Control: the same shape of text without a token still goes through.
+    const ok = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-control-0001", target: "sup", text: "login with tok-nothing please" }),
+    });
+    expect(ok.status).toBe(201);
+    expect(sent.length).toBe(before + 1);
+  });
 });
