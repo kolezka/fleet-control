@@ -47,6 +47,35 @@ export async function serveOptionsFromEnv(env = process.env): Promise<ServeOptio
   };
 }
 
+// A second listener for the tailnet, next to the main one (the LAN address the DSH panel uses).
+// FLEET_CONTROL_TAILNET_HOST is this machine's Tailscale IP; FLEET_CONTROL_TAILNET_NAME its MagicDNS
+// name, which clients use and the certificate names. Both listeners share one store, queue and
+// token set. It needs auth and its own certificate (from `tailscale cert`), so a token never
+// crosses it in clear text and the name the client dials is the name the certificate holds.
+export async function tailnetOptionsFromEnv(
+  env: Record<string, string | undefined>,
+  base: ServeOptions,
+  port: number,
+  file: (path: string) => Promise<string> = (p) => Bun.file(p).text(),
+  now = new Date(),
+  warn: (message: string) => void = (m) => console.warn(m),
+): Promise<ServeOptions | undefined> {
+  const host = env.FLEET_CONTROL_TAILNET_HOST;
+  const name = env.FLEET_CONTROL_TAILNET_NAME;
+  const certPath = env.FLEET_CONTROL_TAILNET_TLS_CERT;
+  const keyPath = env.FLEET_CONTROL_TAILNET_TLS_KEY;
+  if (!host && !name && !certPath && !keyPath) return undefined;
+  if (!host) throw new Error("FLEET_CONTROL_TAILNET_HOST is required for the tailnet listener");
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(name ?? "")) throw new Error("FLEET_CONTROL_TAILNET_NAME must be the MagicDNS name, e.g. host.tailnet.ts.net");
+  if (!base.auth) throw new Error("the tailnet listener needs FLEET_CONTROL_TOKENS");
+  if (!certPath || !keyPath) throw new Error("the tailnet listener needs FLEET_CONTROL_TAILNET_TLS_CERT and FLEET_CONTROL_TAILNET_TLS_KEY");
+  const tls = await tlsFromEnv({ FLEET_CONTROL_TLS_CERT: certPath, FLEET_CONTROL_TLS_KEY: keyPath }, file, now, warn);
+  const x509 = new X509Certificate(tls!.cert);
+  if (!x509.checkHost(name!)) throw new Error(`FLEET_CONTROL_TAILNET_TLS_CERT does not name ${name}`);
+  if (host === base.hostname && port !== 0) throw new Error("FLEET_CONTROL_TAILNET_HOST must differ from FLEET_CONTROL_HOST");
+  return { ...base, hostname: host, tls, allowedHosts: [...(base.allowedHosts ?? []), `${name}:${port}`] };
+}
+
 // SIGHUP rereads FLEET_CONTROL_TOKENS. Requests check the token each time, so a revoked token stops
 // working at once; the server also closes terminal sockets opened with a revoked or rotated token.
 export async function reloadTokens(auth: Auth, path: string, log: (line: string) => void = console.log): Promise<boolean> {

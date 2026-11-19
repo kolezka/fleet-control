@@ -1,6 +1,6 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
-import { portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv } from "./src/config.ts";
+import { portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
 import { Commands } from "./src/data/commands.ts";
 import { Deliverer } from "./src/application/delivery.ts";
 import { fleetSender } from "./src/fleet/sender.ts";
@@ -26,16 +26,21 @@ const unknown = commands.reconcileAfterRestart();
 if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
 const options = await serveOptionsFromEnv();
+const port = portFromEnv(process.env.PORT);
+// Checked before anything binds, so a bad tailnet setting does not leave a half-started service.
+const tailnet = await tailnetOptionsFromEnv(process.env, options, port);
 reloadTokensOnHangup(options.auth);
-const server = serve(
-  {
-    fleet: new FleetCli({ fleetBin, confPath }),
-    store,
-    observer,
-    terminal: { fleetBin, confPath },
-    control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
-  },
-  portFromEnv(process.env.PORT),
-  options,
-);
+// One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
+const deps = {
+  fleet: new FleetCli({ fleetBin, confPath }),
+  store,
+  observer,
+  terminal: { fleetBin, confPath },
+  control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
+};
+const server = serve(deps, port, options);
 console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);
+if (tailnet) {
+  const second = serve(deps, server.port, tailnet);
+  console.log(`Fleet Control tailnet listener on ${second.url} as https://${process.env.FLEET_CONTROL_TAILNET_NAME}:${second.port}/`);
+}
