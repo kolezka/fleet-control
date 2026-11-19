@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Auth, AuthConfigError, parseTokens, tokenLine } from "./auth.ts";
+import { Auth, AuthConfigError, newToken, parseTokens, TOKEN_LENGTH, tokenLine } from "./auth.ts";
 import { Commands } from "./data/commands.ts";
 import { Deliverer } from "./application/delivery.ts";
 import type { Sender } from "./domain/delivery.ts";
@@ -18,6 +18,19 @@ describe("tokens file", () => {
     expect(auth.check("secret-b")).toEqual({ name: "web" });
     expect(auth.check("secret-c")).toBeNull();
     expect(auth.check("")).toBeNull();
+  });
+
+  test("a generated token is found in text even when glued to other characters", () => {
+    const live = newToken(), other = newToken();
+    expect(live.length).toBe(TOKEN_LENGTH);
+    const auth = new Auth(parseTokens(tokenLine("web", live)));
+    for (const text of [`echo pre${live}`, `echo ${live}suffix`, `pre_${live}_post`, `pre-${live}-post`, `x${live}y`]) {
+      expect({ text, found: auth.appearsIn(text) }).toEqual({ text, found: true });
+    }
+    // Controls: another token, and the live one with a character changed, are not reported.
+    expect(auth.appearsIn(`echo pre${other}`)).toBe(false);
+    const changed = (live[0] === "A" ? "B" : "A") + live.slice(1);
+    expect(auth.appearsIn(`echo pre${changed}x`)).toBe(false);
   });
 
   test("bad, duplicate or empty files are rejected at start, not ignored", () => {
