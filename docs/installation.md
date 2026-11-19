@@ -98,11 +98,11 @@ Clients:
 
 ## Installed on 192.168.50.4 (2026-11-09, approved by the owner)
 
-LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` with TLS and tokens. Since 2026-11-19 (release `d48acd7`) it also listens on `100.64.0.6:4871` as `https://mac-mini-mariusz.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate in `~/.config/fleet-control/tailnet-tls/` (valid to 2027-02-15, not renewed automatically). The earlier owner decision "nothing on Tailscale" was changed by the owner on 2026-11-19 for the MacBook gateway. It serves a **test fleet only**: socket `fleet-fctrl-test`, one session `probe-shell` running `cat`, no agent. No production session is attached.
+LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` with TLS and tokens. Since 2026-11-19 (release `d48acd7`) it also listens on `100.64.0.6:4871` as `https://mac-mini-mariusz.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate in `~/.config/fleet-control/tailnet-tls/` (valid to 2027-02-15, not renewed automatically). The earlier owner decision "nothing on Tailscale" was changed by the owner on 2026-11-19 for the MacBook gateway. It serves a **test fleet only**: socket `fleet-fctrl-test`, one session `probe-shell` running `cat`. Since release `65f608c` an operator may start managed Claude Code agents (`fc-*`) in folders under `~/fleet-agents` (`FLEET_CONTROL_AGENT_ROOTS`); none runs now. No production session is attached. The test fleet's tmux server must be started from an existing folder (it was restarted from `~/.local/share/fleet-control/test-fleet` on 2026-11-19): a server whose folder was deleted opens new panes there and Claude Code will not start.
 
 | Item | Path on `.4` |
 | --- | --- |
-| Service checkout (since 2026-11-19: `git archive` of `main` at `d48acd7`; before that `ad23ff2` and `6836a15`; on 2026-11-16 `05b18aa` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`; `59965a3` earlier on 2026-11-16, `735c1f8` from 2026-11-15 before that) | `~/Development/fleet-control-service` |
+| Service checkout (since 2026-11-19 20:23: `git archive` of `main` at `65f608c` plus `vendor/agent-fleet` `5c57a62`; earlier that day `d48acd7`; before that `ad23ff2` and `6836a15`; on 2026-11-16 `05b18aa` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`; `59965a3` earlier on 2026-11-16, `735c1f8` from 2026-11-15 before that) | `~/Development/fleet-control-service` |
 | Plist | `~/Library/LaunchAgents/pl.raqz.fleet-control.plist` |
 | fleet.conf (must sit in `FLEET_DIR`: agent-fleet's `watchdog.sh` reads `$FLEET_DIR/fleet.conf`) | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
 | State database | `~/Library/Application Support/fleet-control/state.db` |
@@ -154,7 +154,7 @@ Starting an agent with `fleet start` at the pinned CLI needs a Claude Code foote
 
 ## Installed on 192.168.50.15 (2026-11-19, approved by the owner)
 
-systemd user unit `fleet-control.service` for user `me` on `me-desktop` (Manjaro), enabled, linger on. Release `d48acd7` in `~/Development/fleet-control-service` (`git archive` plus pinned `vendor/agent-fleet` `3bd26d8`, `RELEASE` file). Loopback `127.0.0.1:4871` without TLS and the tailnet listener `100.64.0.5:4871` as `https://local-arch.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate (`sudo tailscale cert`, owned by `me`, valid to 2027-02-05, not renewed automatically). No LAN listener. Test fleet only: socket `fleet-fctrl-test`, session `probe-shell` running `cat`; production `tv-*` sessions on the default socket are not attached.
+systemd user unit `fleet-control.service` for user `me` on `me-desktop` (Manjaro), enabled, linger on. Release `65f608c` in `~/Development/fleet-control-service` (`git archive` plus pinned `vendor/agent-fleet` `5c57a62`, `RELEASE` file; `d48acd7` before, kept as `fleet-control-service.before-65f608c`). Managed agents in `~/fleet-agents` (`FLEET_CONTROL_AGENT_ROOTS`); the unit's `PATH` starts with `/home/me/.local/bin` so the watchdog finds `claude`. Loopback `127.0.0.1:4871` without TLS and the tailnet listener `100.64.0.5:4871` as `https://local-arch.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate (`sudo tailscale cert`, owned by `me`, valid to 2027-02-05, not renewed automatically). No LAN listener. Test fleet only: socket `fleet-fctrl-test`, session `probe-shell` running `cat`; production `tv-*` sessions on the default socket are not attached.
 
 | Item | Path on `.15` |
 | --- | --- |
