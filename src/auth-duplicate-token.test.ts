@@ -35,12 +35,12 @@ test("constructor snapshots the map and hash bytes", () => {
   bytes.fill(0);
   hashes.set("bob", Buffer.from(hash, "hex"));
   hashes.delete("alice");
-  expect(auth.check(token)).toEqual({ name: "alice" });
+  expect(auth.check(token)).toEqual({ name: "alice", role: "agent" });
 });
 
 test("distinct hashes authenticate their own principals", () => {
   const auth = new Auth(parseTokens(`${tokenLine("alice", token)}\n${tokenLine("bob", "synthetic-other-token")}`));
-  expect(auth.check(token)).toEqual({ name: "alice" });
-  expect(auth.check("synthetic-other-token")).toEqual({ name: "bob" });
+  expect(auth.check(token)).toEqual({ name: "alice", role: "agent" });
+  expect(auth.check("synthetic-other-token")).toEqual({ name: "bob", role: "agent" });
   expect(auth.check("unknown-token")).toBeNull();
 });

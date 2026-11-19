@@ -17,7 +17,7 @@ for (const mode of ["local", "legacy central"] as const) {
       const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "request_create", arguments: args } });
       const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer token", host: "localhost" };
       const response = mode === "local"
-        ? await handleMcp(new Request("http://localhost/mcp", { method: "POST", headers, body }), { commands: {} as never, deliverer: {} as never, requests: requests as unknown as Requests }, ["localhost"], "supervisor")
+        ? await handleMcp(new Request("http://localhost/mcp", { method: "POST", headers, body }), { commands: {} as never, deliverer: {} as never, requests: requests as unknown as Requests }, ["localhost"], { name: "supervisor", role: "agent" })
         : await app.request("/mcp", { method: "POST", headers, body });
       expect(response.status).toBe(200);
       return await response.json();

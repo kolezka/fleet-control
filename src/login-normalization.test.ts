@@ -27,7 +27,7 @@ test.each([
       headers: { cookie: cookie!.split(";")[0]! },
     }), {});
     expect(who.status).toBe(200);
-    expect(await who.json()).toEqual({ principal: "web", auth: true });
+    expect(await who.json()).toEqual({ principal: "web", role: "agent", auth: true });
   } finally {
     fakeServe.mockRestore();
   }

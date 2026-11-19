@@ -12,6 +12,7 @@ import { requestUseCases } from "./application/requests.ts";
 import { sessionReader } from "./application/sessions.ts";
 import { handleMcp, type ControlDeps } from "./mcp.ts";
 import { RequestError } from "./domain/requests.ts";
+import { RoleError } from "./domain/roles.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -59,6 +60,7 @@ type TerminalDeps = { fleetBin: string; confPath: string };
 const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
 const requestStatus: Record<RequestError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400, forbidden: 403 };
 function commandError(e: unknown): Response {
+  if (e instanceof RoleError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: 403 });
   if (e instanceof RequestError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: requestStatus[e.kind] });
   if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
@@ -126,8 +128,8 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   // A command carrying one of this service's tokens is refused on REST and MCP alike.
   const control = deps.control && auth ? { ...deps.control, carriesSecret: (text: string) => auth.appearsIn(text) } : deps.control;
   // With auth the caller's name replaces any actor the body declares; the use cases apply that rule.
-  const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who?.name) : null);
-  const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who?.name) : null);
+  const queueFor = (who: Principal | null) => (control ? commandUseCases(control, who ?? undefined) : null);
+  const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who ?? undefined) : null);
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
   type Handler = (req: any, server: any) => Response | Promise<Response> | undefined | Promise<Response | undefined>;
@@ -212,7 +214,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           peers: opts.peers ?? [],
         })),
       },
-      "/api/whoami": { GET: guard((_req, _s, who) => Response.json({ principal: who?.name ?? null, auth: Boolean(auth) })) },
+      "/api/whoami": { GET: guard((_req, _s, who) => Response.json({ principal: who?.name ?? null, role: who?.role ?? null, auth: Boolean(auth) })) },
       "/api/sessions": { GET: guard(() => app.sessions()) },
       "/api/sessions/:name/screen": {
         GET: guard((req) => {
@@ -314,7 +316,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         if (!control) return noControl();
         if (!originAllowed(req)) return forbidden();
         const hosts = [`127.0.0.1:${server.port}`, `localhost:${server.port}`, ...(isLoopback(hostname) ? [] : [`${hostname}:${server.port}`]), ...(opts.allowedHosts ?? [])];
-        return handleMcp(req, control, hosts, who?.name);
+        return handleMcp(req, control, hosts, who ?? undefined);
       }),
       // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
       // a resize would resize the agent's window, since the viewer may be its only tmux client.

@@ -81,13 +81,13 @@ Environment for `bun index.ts`:
 | `FLEET_CONTROL_DB` | SQLite file. Default `:memory:`, which loses commands and requests on restart. |
 | `PORT` | Default 4871. |
 | `FLEET_CONTROL_HOST` | Bind address. Default `127.0.0.1`. Any other value requires `FLEET_CONTROL_TOKENS`; the service refuses to start without it. |
-| `FLEET_CONTROL_TOKENS` | Tokens file: `<principal> <sha256 hex>` per line. Only hashes live on the host. Principal names and token hashes must both be unique; a duplicate prevents startup. Auth copies configured hashes at construction; changing an in-memory map later does not rotate or revoke credentials. |
+| `FLEET_CONTROL_TOKENS` | Tokens file: `<principal> <sha256 hex> [operator\|agent\|viewer]` per line; no role means `agent`. Only hashes live on the host. Principal names and token hashes must both be unique; a duplicate prevents startup. Auth copies configured hashes at construction; changing an in-memory map later does not rotate or revoke credentials. |
 | `FLEET_CONTROL_ALLOWED_HOSTS` | Extra `host:port` values accepted on `/mcp` (DNS rebinding protection), e.g. a Tailscale name. The bind address is added automatically. |
 | `FLEET_CONTROL_TLS_CERT`, `FLEET_CONTROL_TLS_KEY` | Optional PEM files. Without them traffic is plain HTTP, so tokens cross the network in clear text. Use Tailscale (encrypted) or add TLS before using LAN. |
 
 Clear `NO_COLOR` in the service environment: agent-fleet misreads Claude Code's input line when it is set (docs/bugs/agent-fleet-no-color-user-typing.md).
 
-Tokens: `bun scripts/new-token.ts <principal> <tokens-file>` prints a token once and appends its hash line to the tokens file (without the file argument it prints the line instead). One principal per client, e.g. `macbook-session`, `web-mariusz`, `orchestrator`. The principal is recorded as the actor of every command, answer and phase write, and replaces any actor name a client sends. Revoke by deleting the line and restarting the service.
+Tokens: `bun scripts/new-token.ts <principal> <tokens-file> [role]` prints a token once and appends its hash line to the tokens file (without the file argument it prints the line instead). One principal per client, e.g. `macbook-session`, `web-mariusz`, `orchestrator`. The principal is recorded as the actor of every command, answer and phase write, and replaces any actor name a client sends. Roles: `operator` for the human's consoles (gateway, browser, DSH panel), the only role that may answer a request; `agent` (the default) for orchestrators and workers; `viewer` for read-only access. Set or change a role with `bun scripts/tokens.ts role <principal> <role> <tokens-file>` and send the service SIGHUP. Revoke with `scripts/tokens.ts revoke`.
 
 Clients:
 

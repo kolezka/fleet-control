@@ -14,8 +14,8 @@ describe("tokens file", () => {
     const line = tokenLine("macbook", "secret-a");
     expect(line).not.toContain("secret-a");
     const auth = new Auth(parseTokens(`# comment\n${line}\n${tokenLine("web", "secret-b")}\n`));
-    expect(auth.check("secret-a")).toEqual({ name: "macbook" });
-    expect(auth.check("secret-b")).toEqual({ name: "web" });
+    expect(auth.check("secret-a")).toEqual({ name: "macbook", role: "agent" });
+    expect(auth.check("secret-b")).toEqual({ name: "web", role: "agent" });
     expect(auth.check("secret-c")).toBeNull();
     expect(auth.check("")).toBeNull();
   });
@@ -129,7 +129,7 @@ describe("service with auth", () => {
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
     const who = await fetch(url("/api/whoami"), { headers: { cookie: cookie.split(";")[0]! } });
-    expect(await who.json()).toEqual({ principal: "web", auth: true });
+    expect(await who.json()).toEqual({ principal: "web", role: "agent", auth: true });
   });
 
   // A delivered command lands in the pane's scrollback, where every terminal viewer can read it.

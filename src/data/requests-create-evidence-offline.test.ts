@@ -61,7 +61,7 @@ test("exact local MCP JSON call rejects malformed evidence and accepts clean con
   try {
     const send = async (evidence: string[]) => {
       const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "request_create", arguments: { ...f.input, evidence } } });
-      const response = await handleMcp(new Request("http://localhost/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", host: "localhost" }, body }), { commands: {} as never, deliverer: {} as never, requests: f.requests }, ["localhost"], "owner");
+      const response = await handleMcp(new Request("http://localhost/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", host: "localhost" }, body }), { commands: {} as never, deliverer: {} as never, requests: f.requests }, ["localhost"], { name: "owner", role: "agent" });
       expect(response.status).toBe(200);
       return await response.json();
     };

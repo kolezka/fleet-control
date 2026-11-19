@@ -97,7 +97,7 @@ One token per client. The host keeps only hashes; each client keeps its own toke
 
 ```bash
 cd ~/Development/fleet-control-service
-~/.bun/bin/bun scripts/new-token.ts web-mariusz ~/.config/fleet-control/tokens      # for the browser
+~/.bun/bin/bun scripts/new-token.ts web-mariusz ~/.config/fleet-control/tokens operator  # for the browser; only operators answer requests
 ~/.bun/bin/bun scripts/new-token.ts macbook-session ~/.config/fleet-control/tokens  # for Claude Code
 ```
 
@@ -116,6 +116,7 @@ The token name is recorded as the author of everything that client does. To chan
 ~/.bun/bin/bun scripts/tokens.ts list ~/.config/fleet-control/tokens
 ~/.bun/bin/bun scripts/tokens.ts rotate web-mariusz ~/.config/fleet-control/tokens   # prints the new token once
 ~/.bun/bin/bun scripts/tokens.ts revoke macbook-session ~/.config/fleet-control/tokens
+~/.bun/bin/bun scripts/tokens.ts role dsh-panel operator ~/.config/fleet-control/tokens   # operator, agent (default) or viewer
 ```
 
 Changes run one at a time through a `tokens.lock` file beside the tokens file; a second change waits up to 5 s. The lock holds the process id of the change. If a change was killed and left the lock behind, the next one refuses, names the file and says whether that process still runs; it never removes the lock itself.
@@ -243,7 +244,9 @@ claude mcp remove --scope user fleet-control-mini
 | Symptom | Cause and fix |
 | --- | --- |
 | `refusing to bind 192.168.50.4 without auth; set FLEET_CONTROL_TOKENS` in the log | The tokens file is missing or the variable is not set. |
-| `tokens file line N: expected "<name> <sha256 hex>"` | That line is not `<name> <64 hex chars>`. Recreate it with `new-token.ts`. |
+| `tokens file line N: expected "<name> <sha256 hex> [role]"` | That line is not `<name> <64 hex chars>` with an optional role. Recreate it with `new-token.ts`. |
+| `tokens file line N: role must be one of operator, agent, viewer` | The third column is not a known role. Fix it with `tokens.ts role`. |
+| Approve in the page returns 403 `forbidden` | The token the page signed in with is not an `operator`. Run `tokens.ts role <principal> operator <tokens-file>` and send the service SIGHUP. |
 | `curl` says the certificate is not trusted | `mkcert -install` was not run on this MacBook, or the certificate was made for another address. |
 | Every request returns 401 | Wrong or revoked token. In the browser, open `/logout` and sign in again. |
 | `SQLiteError: unable to open database file` | The folder for `FLEET_CONTROL_DB` does not exist. `mkdir -p` it. |

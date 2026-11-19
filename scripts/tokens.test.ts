@@ -44,7 +44,7 @@ test("the command line rotates a file atomically with mode 0600 and prints the t
   expect(statSync(file).mode & 0o777).toBe(0o600);
   expect(new Auth(parseTokens(readFileSync(file, "utf8"))).check(token)?.name).toBe("web");
   expect(readdirSync(dir)).toEqual(["tokens"]);
-  expect(run(["list", file]).stdout.toString()).toBe("web\nmac\n");
+  expect(run(["list", file]).stdout.toString()).toBe("web agent\nmac agent\n");
 });
 
 test("a refused change leaves the file untouched", () => {
@@ -107,5 +107,30 @@ test("add creates a new file", () => {
   const out = run(["add", "first", file]);
   expect(out.exitCode).toBe(0);
   expect(statSync(file).mode & 0o777).toBe(0o600);
-  expect(run(["list", file]).stdout.toString()).toBe("first\n");
+  expect(run(["list", file]).stdout.toString()).toBe("first agent\n");
+});
+
+test("roles: add with a role, rotate keeps it, role changes it, list shows it, a bad role is refused", () => {
+  const added = change("add", "gw", base, "gw-token", "operator");
+  expect(new Auth(parseTokens(added.text)).check("gw-token")).toEqual({ name: "gw", role: "operator" });
+  const rotated = change("rotate", "gw", added.text, "gw-new");
+  expect(new Auth(parseTokens(rotated.text)).check("gw-new")).toEqual({ name: "gw", role: "operator" });
+  const lowered = change("role", "gw", rotated.text, undefined, "viewer");
+  expect(lowered.token).toBeUndefined();
+  expect(new Auth(parseTokens(lowered.text)).check("gw-new")).toEqual({ name: "gw", role: "viewer" });
+  // An old two-column line is an agent and gains a role column only when asked.
+  expect(new Auth(parseTokens(base)).check("old-web")?.role).toBe("agent");
+  expect(new Auth(parseTokens(change("role", "web", base, undefined, "operator").text)).check("old-web")?.role).toBe("operator");
+  expect(() => change("add", "x", base, "t", "admin")).toThrow("role must be one of");
+  expect(() => change("role", "web", base, undefined, "admin")).toThrow("role must be one of");
+  expect(() => change("role", "nobody", base, undefined, "viewer")).toThrow("no principal");
+
+  const dir = mkdtempSync(join(tmpdir(), "tokens-role-")); dirs.push(dir);
+  const file = join(dir, "tokens");
+  writeFileSync(file, base, { mode: 0o600 });
+  expect(run(["role", "web", "operator", file]).exitCode).toBe(0);
+  expect(run(["add", "gw", file, "viewer"]).exitCode).toBe(0);
+  expect(run(["role", "web", "admin", file]).exitCode).toBe(1);
+  const listed = run(["list", file]).stdout.toString();
+  expect(listed).toBe("web operator\nmac agent\ngw viewer\n");
 });
