@@ -244,7 +244,16 @@ The owner chose option 1a: the host service only. The service on `.4` now runs `
 - **Browser (headless Chromium on `.4`, same day):** after signing in on `/login` the page listed `mac-mini` with `probe-shell`, the supervisor panel showed the stored run and request, and the `probe-shell` pane read "Read-only · live" with one read-only tmux client; after the browser closed, 0 clients were left. The log showed one `AbortError` from the page while an earlier browser session closed, nothing else. With only a bearer header and no sign-in the pane showed "Disconnected (1006)", because the browser does not send that header with the WebSocket; a test setup limit, not a service fault.
 - **Not shown by this:** the MacBook as a client, a real fleet.
 
-## Not yet released (checked 2026-11-16, main at 05b18aa)
+## Release 6836a15 on both hosts (2026-11-17, approved)
+
+The owner asked to upgrade both installations to `origin/main`, keeping config, tokens and data. Host service on `.4`, cooperative central and desktop adapter on `.15`, and the mini adapter now run `6836a15`. The waker is still not installed.
+
+- **Host service on `.4`:** built from `git archive 6836a15` plus submodule `3bd26d8`, `bun install --frozen-lockfile`; only `dsh/proxy.js` and `src/server.ts` (#184, production page bundles) differ from `05b18aa` outside docs and tests, and their 9 tests passed. `scripts/host-backup.ts` copied the live database (7 tables, 53 rows equal, sha256 `d53a52ef…2c81a2a`), `host-restore-check.ts` read it (10 commands, 1 run, 2 requests); a second copy is on `.15` in `~/fleet-control-host-backups/` with the same checksum. Swap with `bootout`, rename to `fleet-control-service.before-6836a15`, `bootstrap` of the unchanged plist. Afterwards: 401 without and with a wrong token, plain HTTP refused, `/api/whoami` with the `dsh-panel` token, sessions list `probe-shell`, `latest=6` gave 6, the login page loads `/chunk-*.js` (no `/_bun/`), DSH `/fleet-control/` answers 401 without a DSH login, and a read-only terminal socket received 3118 bytes with 0 tmux clients left. Rollback files in `~/.config/fleet-control/rollback-6836a15/`.
+- **Cooperative on `.15`:** `backup.sh --check-restore` from the new release wrote `/home/me/fleet-cooperative-backups/fleet-20261117-pre-6836a15.dump` (sha256 `5a1b7031…e99ff6`, 16 tables equal, fingerprint `a33961f0…c8886`, definition `cd9003d8…ccb32`); second copy on `.4` in `~/fleet-cooperative-backups/` with the same checksum. Release at `/home/me/fleet-cooperative-releases/6836a15` with the same `.env`. Old image tagged `fleet-cooperative-central:before-6836a15`. `up -d --no-deps central adapter`; postgres was not restarted. Incarnation file checksum unchanged. Local and tailnet API answer 401 without a token, operator lists per host work, adapter MCP lists `cooperative_wait` and it returns `pending: false`.
+- **Mini adapter:** new release dir `fleet-cooperative-adapter-releases/6836a15`, plist path changed (old plist in the rollback dir), incarnation checksum unchanged, `cooperative_wait` returns `pending: false` through central.
+- **Not shown:** a claim or report through the new adapters (no synthetic command was submitted to the real supervisors), the MacBook as a client.
+
+## Not yet released (checked 2026-11-16, main at 05b18aa; superseded by the section above)
 
 The cooperative services run older code and need the owner's approval for a release. The host items below were installed with `05b18aa` (section above); the rest was not installed.
 
