@@ -33,7 +33,7 @@ test("without an authenticated caller the declared names are used as given", () 
 
 test("an authenticated caller replaces the orchestrator, actor and origin of every write", () => {
   const { calls, requests } = recording();
-  const use = requestUseCases(requests, "token-holder");
+  const use = requestUseCases(requests, { name: "token-holder", role: "operator" });
   use.registerRun({ runId: "run", orchestrator: "orch", phase: "plan" });
   use.updatePhase({ runId: "run", actor: "orch", expectedRevision: 1, phaseStatus: "working", newRevision: false });
   use.create({ runId: "run", origin: "orch", expectedRevision: 1, kind: "approval", question: "ok?" });

@@ -21,7 +21,7 @@ const configs = ["alpha", "beta"].map((id) => {
   const service = serve({
     fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => id }, store,
     control: { commands, requests, deliverer: new Deliverer(commands, async () => ({ exitCode: 0, stdout: "supervisor: delivered", stderr: "" })) },
-  }, 0, { auth: new Auth(parseTokens(tokenLine(`${id}-client`, token))) });
+  }, 0, { auth: new Auth(parseTokens(tokenLine(`${id}-client`, token, "operator"))) });
   services.push(service);
   return { id, name: id, origin: service.url.origin, token, commands, requests, request };
 });

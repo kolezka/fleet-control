@@ -1,16 +1,22 @@
 // What the web API and the MCP tools do with runs and supervisor requests on the host.
 import type { Requests } from "../data/requests.ts";
+import { asCaller, requirePermission, type Caller, type Permission } from "../domain/roles.ts";
 import { EVENT_PAGE } from "./commands.ts";
 
 // Without auth, names are self-declared and the orchestrator check only stops mistakes.
-// With auth, `principal` is the authenticated caller and replaces them, so a worker token cannot write the phase record.
-export function requestUseCases(requests: Requests, principal?: string) {
-  const as = <T extends object>(input: T, key: keyof T): T => (principal ? { ...input, [key]: principal } : input);
+// With auth, `who` is the authenticated caller and replaces them, so a worker token cannot write the phase record.
+// Its role decides what it may do: only an operator answers a request, a viewer changes nothing.
+export function requestUseCases(requests: Requests, who?: Caller | string) {
+  const caller = asCaller(who);
+  const as = <T extends object>(input: T, key: keyof T, permission: Permission = "write"): T => {
+    requirePermission(caller, permission);
+    return caller ? { ...input, [key]: caller.name } : input;
+  };
   return {
     registerRun: (input: Parameters<Requests["registerRun"]>[0]) => requests.registerRun(as(input, "orchestrator")),
     updatePhase: (input: Parameters<Requests["updatePhase"]>[0]) => requests.updatePhase(as(input, "actor")),
     create: (input: Parameters<Requests["create"]>[0]) => requests.create(as(input, "origin")),
-    resolve: (input: Parameters<Requests["resolve"]>[0]) => requests.resolve(as(input, "actor")),
+    resolve: (input: Parameters<Requests["resolve"]>[0]) => requests.resolve(as(input, "actor", "answer")),
     acknowledge: (input: Parameters<Requests["acknowledge"]>[0]) => requests.acknowledge(as(input, "actor")),
     withdraw: (input: Parameters<Requests["withdraw"]>[0]) => requests.withdraw(as(input, "actor")),
 

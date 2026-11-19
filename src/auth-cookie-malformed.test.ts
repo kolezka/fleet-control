@@ -38,18 +38,18 @@ for (const malformed of ["%", "%FF"]) {
 
 test("encoded cookie authenticates through principal and host guard", async () => {
   const req = request(encodeURIComponent(token));
-  expect(auth.principal(req)).toEqual({ name: "operator" });
+  expect(auth.principal(req)).toEqual({ name: "operator", role: "agent" });
   const response = await hostGuard()(req, {});
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ principal: "operator", auth: true });
+  expect(await response.json()).toEqual({ principal: "operator", role: "agent", auth: true });
 });
 
 test("valid bearer ignores a malformed cookie", async () => {
   const req = request("%FF", `Bearer ${token}`);
-  expect(auth.principal(req)).toEqual({ name: "operator" });
+  expect(auth.principal(req)).toEqual({ name: "operator", role: "agent" });
   const response = await hostGuard()(req, {});
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ principal: "operator", auth: true });
+  expect(await response.json()).toEqual({ principal: "operator", role: "agent", auth: true });
 });
 
 test("invalid bearer does not fall back to a valid cookie", async () => {

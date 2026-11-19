@@ -1,37 +1,53 @@
-// Manage the host tokens file without hand edits: add, rotate, revoke, list.
-// Usage: bun scripts/tokens.ts add|rotate <principal> <tokens-file>
-//        bun scripts/tokens.ts revoke <principal> <tokens-file>
+// Manage the host tokens file without hand edits: add, rotate, revoke, set a role, list.
+// Usage: bun scripts/tokens.ts add <principal> <tokens-file> [operator|agent|viewer]
+//        bun scripts/tokens.ts rotate|revoke <principal> <tokens-file>
+//        bun scripts/tokens.ts role <principal> <operator|agent|viewer> <tokens-file>
 //        bun scripts/tokens.ts list <tokens-file>
+// A line without a role is an agent. Rotate keeps the role.
 // The new token is printed once on stdout. The file is checked, then replaced atomically with mode 0600.
 // The running service rereads the file on SIGHUP (releases before that only at start).
 import { chmodSync, closeSync, constants, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { AuthConfigError, newToken, parseTokens, tokenLine } from "../src/auth.ts";
+import { isRole, ROLES, type Role } from "../src/domain/roles.ts";
 
-export type Change = { action: "add" | "rotate" | "revoke"; name: string; token?: string; text: string };
+export type Change = { action: "add" | "rotate" | "revoke" | "role"; name: string; token?: string; text: string };
 
 const lineName = (raw: string) => {
   const line = raw.trim();
   return !line || line.startsWith("#") ? null : line.split(/\s+/)[0]!;
 };
 
+const checkRole = (role: string | undefined): Role | undefined => {
+  if (role !== undefined && !isRole(role)) throw new AuthConfigError(`role must be one of ${ROLES.join(", ")}`);
+  return role;
+};
+// The role column of an existing line, undefined for an old two-column line.
+const lineRole = (raw: string): Role | undefined => checkRole(raw.trim().split(/\s+/)[2]);
+
 // Pure: returns the new file text. Comments and order are kept; the result must parse.
-export function change(action: Change["action"], name: string, text: string, token = newToken()): Change {
+// `role` is the role for add (none writes an old-style agent line) and the new role for "role".
+export function change(action: Change["action"], name: string, text: string, token = newToken(), role?: string): Change {
   tokenLine(name, token); // validates the name
+  const wanted = checkRole(role);
+  if (action === "role" && !wanted) throw new AuthConfigError(`role must be one of ${ROLES.join(", ")}`);
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const at = lines.findIndex((l) => lineName(l) === name);
   if (action === "add") {
     if (at >= 0) throw new AuthConfigError(`${name} already has a token; use rotate`);
-    lines.push(tokenLine(name, token));
+    lines.push(tokenLine(name, token, wanted));
   } else if (at < 0) {
     throw new AuthConfigError(`no principal ${name} in the tokens file`);
   } else if (action === "rotate") {
-    lines[at] = tokenLine(name, token);
+    lines[at] = tokenLine(name, token, lineRole(lines[at]!));
+  } else if (action === "role") {
+    const [n, hash] = lines[at]!.trim().split(/\s+/);
+    lines[at] = `${n} ${hash} ${wanted}`;
   } else {
     lines.splice(at, 1);
   }
   const out = lines.length ? `${lines.join("\n")}\n` : "";
-  parseTokens(out); // refuses an empty file and duplicate names or hashes, as the service would
-  return { action, name, ...(action === "revoke" ? {} : { token }), text: out };
+  parseTokens(out); // refuses an empty file, unknown roles and duplicate names or hashes, as the service would
+  return { action, name, ...(action === "rotate" || action === "add" ? { token } : {}), text: out };
 }
 
 // Two changes at once would each read the old file and the later rename would drop the other's
@@ -84,26 +100,31 @@ export function writeAtomic(file: string, text: string) {
 if (import.meta.main) {
   const [action, a, b, ...extra] = process.argv.slice(2);
   const usage = () => {
-    console.error("usage: bun scripts/tokens.ts add|rotate|revoke <principal> <tokens-file> | list <tokens-file>");
+    console.error("usage: bun scripts/tokens.ts add <principal> <tokens-file> [role] | rotate|revoke <principal> <tokens-file> | role <principal> <role> <tokens-file> | list <tokens-file>");
     process.exit(2);
   };
   try {
     if (action === "list") {
       if (!a || b) usage();
-      for (const name of parseTokens(readFileSync(a!, "utf8")).keys()) console.log(name);
-    } else if (action === "add" || action === "rotate" || action === "revoke") {
-      if (!a || !b || extra.length) usage();
-      if (action !== "add" && !existsSync(b!)) throw new AuthConfigError(`no tokens file ${b}`);
-      const result = withLock(b!, () => {
-        const next = change(action, a!, existsSync(b!) ? readFileSync(b!, "utf8") : "");
-        writeAtomic(b!, next.text);
+      for (const [name, entry] of parseTokens(readFileSync(a!, "utf8"))) console.log(`${name} ${entry.role}`);
+    } else if (action === "add" || action === "rotate" || action === "revoke" || action === "role") {
+      // add takes an optional role after the file; role takes the role before the file.
+      const max = action === "add" ? 1 : action === "role" ? 1 : 0;
+      if (!a || !b || extra.length > max || (action === "role" && extra.length !== 1)) usage();
+      const file = action === "role" ? extra[0]! : b!;
+      const role = action === "role" ? b : action === "add" ? extra[0] : undefined;
+      if (action !== "add" && !existsSync(file)) throw new AuthConfigError(`no tokens file ${file}`);
+      const result = withLock(file, () => {
+        const next = change(action, a!, existsSync(file) ? readFileSync(file, "utf8") : "", newToken(), role);
+        writeAtomic(file, next.text);
         return next;
       });
       if (result.token) {
         console.error("Token (shown once, give it to the client, do not store it on the host):");
         console.log(result.token);
       }
-      console.error(`${action === "revoke" ? "Revoked" : action === "rotate" ? "Rotated" : "Added"} ${a} in ${b}. Send the service SIGHUP (or restart it) for it to take effect.`);
+      const done = { revoke: "Revoked", rotate: "Rotated", add: "Added", role: `Set role ${role} for` }[action];
+      console.error(`${done} ${a} in ${file}. Send the service SIGHUP (or restart it) for it to take effect.`);
       if (action === "rotate") console.error("The old token stops working at that reload.");
     } else usage();
   } catch (e) {

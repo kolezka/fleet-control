@@ -10,7 +10,7 @@ import { PANEL_PREFIX, TERMINAL_PATH, readSettings, relaySocket, respond, rewrit
 
 const token = "panel-token-0123456789";
 const fleet = { screen: async () => "", status: async () => ({ raw: "", sessions: [] }) };
-const auth = new Auth(parseTokens(tokenLine("dsh-panel", token)));
+const auth = new Auth(parseTokens(tokenLine("dsh-panel", token, "operator")));
 const service = serve({ fleet, store: new Store(), terminal: { fleetBin: "/nonexistent/fleet", confPath: "/nonexistent/fleet.conf" } }, 0, { auth });
 const settings = { upstream: new URL(service.url.origin), token };
 let admitted = true;
@@ -36,7 +36,7 @@ test("page and API answer below the prefix with the panel principal, assets poin
     expect((await fetch(base + ref)).status).toBe(200);
   }
   const who = await (await fetch(base + PANEL_PREFIX + "/api/whoami", { headers: { cookie: "fc_session=other; dsh=secret" } })).json();
-  expect(who).toEqual({ principal: "dsh-panel", auth: true });
+  expect(who).toEqual({ principal: "dsh-panel", role: "operator", auth: true });
 });
 
 test("the panel offers no sign-in or sign-out of its own", async () => {

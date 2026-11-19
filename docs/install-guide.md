@@ -97,7 +97,7 @@ One token per client. The host keeps only hashes; each client keeps its own toke
 
 ```bash
 cd ~/Development/fleet-control-service
-~/.bun/bin/bun scripts/new-token.ts web-mariusz ~/.config/fleet-control/tokens      # for the browser
+~/.bun/bin/bun scripts/new-token.ts web-mariusz ~/.config/fleet-control/tokens operator  # for the browser; only operators answer requests
 ~/.bun/bin/bun scripts/new-token.ts macbook-session ~/.config/fleet-control/tokens  # for Claude Code
 ```
 
@@ -116,6 +116,7 @@ The token name is recorded as the author of everything that client does. To chan
 ~/.bun/bin/bun scripts/tokens.ts list ~/.config/fleet-control/tokens
 ~/.bun/bin/bun scripts/tokens.ts rotate web-mariusz ~/.config/fleet-control/tokens   # prints the new token once
 ~/.bun/bin/bun scripts/tokens.ts revoke macbook-session ~/.config/fleet-control/tokens
+~/.bun/bin/bun scripts/tokens.ts role dsh-panel operator ~/.config/fleet-control/tokens   # operator, agent (default) or viewer
 ```
 
 Changes run one at a time through a `tokens.lock` file beside the tokens file; a second change waits up to 5 s. The lock holds the process id of the change. If a change was killed and left the lock behind, the next one refuses, names the file and says whether that process still runs; it never removes the lock itself.

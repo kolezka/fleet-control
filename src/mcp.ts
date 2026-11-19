@@ -7,11 +7,12 @@ import { CommandError, MAX_TEXT } from "./domain/commands.ts";
 import { commandUseCases, EVENT_PAGE, MAX_EVENT_PAGE, MAX_PAGE, PAGE } from "./application/commands.ts";
 import { requestUseCases } from "./application/requests.ts";
 import { RequestError } from "./domain/requests.ts";
+import { RoleError, type Caller } from "./domain/roles.ts";
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 const failure = (e: unknown) => ({
   isError: true,
-  content: [{ type: "text" as const, text: e instanceof CommandError || e instanceof RequestError ? `${e.kind}: ${e.message}` : `internal error: ${(e as Error).message}` }],
+  content: [{ type: "text" as const, text: e instanceof CommandError || e instanceof RequestError || e instanceof RoleError ? `${e.kind}: ${e.message}` : `internal error: ${(e as Error).message}` }],
 });
 // A full page means more events may follow: poll again from the last seq.
 const eventPage = <E extends { seq: number }>(events: E[], limit: number) =>
@@ -30,7 +31,7 @@ const attempt = async (f: () => unknown) => { try { return json(await f()); } ca
 export type ControlDeps = Parameters<typeof commandUseCases>[0] & { requests?: Parameters<typeof requestUseCases>[0] };
 
 // With auth, `principal` is the authenticated caller and replaces any self-declared actor.
-export function buildMcpServer(deps: ControlDeps, principal?: string) {
+export function buildMcpServer(deps: ControlDeps, principal?: Caller | string) {
   const queue = commandUseCases(deps, principal);
   const server = new McpServer({ name: "fleet-control", version: "0.1.0" });
 
@@ -171,7 +172,7 @@ function registerRequestTools(server: McpServer, requests: ReturnType<typeof req
   }, async ({ afterSeq, limit }) => json(eventPage(requests.eventsAfter(afterSeq, limit), limit)));
 }
 
-export async function handleMcp(req: Request, deps: ControlDeps, allowedHosts: string[], principal?: string): Promise<Response> {
+export async function handleMcp(req: Request, deps: ControlDeps, allowedHosts: string[], principal?: Caller | string): Promise<Response> {
   const server = buildMcpServer(deps, principal);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

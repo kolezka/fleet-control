@@ -2,6 +2,7 @@
 import type { Commands } from "../data/commands.ts";
 import { MAX_PAGE, PAGE } from "../data/page.ts";
 import { CommandError, MAX_TEXT, type Command, type CommandEvent, type CommandStatus } from "../domain/commands.ts";
+import { asCaller, requirePermission, type Caller } from "../domain/roles.ts";
 import type { Deliverer } from "./delivery.ts";
 
 export type CommandView = { command: Command; events: CommandEvent[] };
@@ -11,10 +12,14 @@ export { MAX_PAGE, PAGE } from "../data/page.ts";
 export const EVENT_PAGE = PAGE;
 export const MAX_EVENT_PAGE = MAX_PAGE;
 
-// With auth, `principal` is the authenticated caller and replaces any self-declared actor.
+// With auth, `who` is the authenticated caller: its name replaces any self-declared actor and its
+// role decides whether it may change anything. A viewer only reads.
 // `carriesSecret` says whether a text holds a live access token; such a text is neither stored nor delivered.
-export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, principal?: string) {
+export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer; carriesSecret?: (text: string) => boolean }, who?: Caller | string) {
   const { commands, deliverer } = deps;
+  const caller = asCaller(who);
+  const principal = caller?.name;
+  const write = () => requirePermission(caller, "write");
   // Delivered text stays in the pane's scrollback, readable by every terminal viewer.
   // Text over MAX_TEXT is left to the store's own length error, so a huge body costs no scan.
   // The length is measured after trim, as the store does, so padding cannot skip the scan.
@@ -25,6 +30,7 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
   return {
     // Queues the instruction and tries to deliver it once. A repeated key returns the original command and delivers nothing.
     async submit(input: { idempotencyKey: string; target: string; actor: string; text: string }): Promise<CommandView & { created: boolean }> {
+      write();
       refuseSecret(input.text, "not stored or delivered");
       const { command, created } = commands.submit(principal ? { ...input, actor: principal } : input);
       const after = created ? await deliverer.deliver(command.id) : command;
@@ -33,6 +39,7 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
 
     // A row queued before the guard existed, or by an instance without auth, is checked again here.
     async deliver(id: string): Promise<CommandView> {
+      write();
       // Only a queued row is sent; other statuses come back unchanged, as before.
       const stored = commands.get(id);
       if (stored.status === "queued") refuseSecret(stored.text, "not delivered");
@@ -52,10 +59,14 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
     eventsAfter: (afterSeq: number, limit = EVENT_PAGE): CommandEvent[] => commands.events(undefined, afterSeq, limit),
 
     // The recipient's answer. Without a reason the decision itself is recorded as the detail.
-    respond: (id: string, decision: "accepted" | "rejected", actor: string, reason: string): Command =>
-      commands.transition(id, decision, principal ?? actor, reason || decision),
+    respond: (id: string, decision: "accepted" | "rejected", actor: string, reason: string): Command => {
+      write();
+      return commands.transition(id, decision, principal ?? actor, reason || decision);
+    },
 
-    report: (id: string, status: "running" | "completed" | "failed", actor: string, evidence: string): Command =>
-      commands.transition(id, status, principal ?? actor, evidence),
+    report: (id: string, status: "running" | "completed" | "failed", actor: string, evidence: string): Command => {
+      write();
+      return commands.transition(id, status, principal ?? actor, evidence);
+    },
   };
 }

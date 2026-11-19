@@ -19,7 +19,7 @@ Fleet Control still runs as its own service and its page keeps working on its ow
 
    ```bash
    umask 077
-   bun -e 'import { newToken, tokenLine } from "./src/auth.ts"; const t = newToken(); await Bun.write(process.env.HOME + "/.config/fleet-control/token-dsh-panel", t); console.log(tokenLine("dsh-panel", t));' >> ~/.config/fleet-control/tokens
+   bun -e 'import { newToken, tokenLine } from "./src/auth.ts"; const t = newToken(); await Bun.write(process.env.HOME + "/.config/fleet-control/token-dsh-panel", t); console.log(tokenLine("dsh-panel", t, "operator"));' >> ~/.config/fleet-control/tokens
    ```
 
    Restart the host service so it reads the new line.
