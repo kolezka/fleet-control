@@ -97,11 +97,11 @@ Clients:
 
 ## Installed on 192.168.50.4 (2026-11-09, approved by the owner)
 
-LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` with TLS and tokens. Nothing listens on Tailscale or loopback (owner decision). It serves a **test fleet only**: socket `fleet-fctrl-test`, one session `probe-shell` running `cat`, no agent. No production session is attached.
+LaunchAgent `pl.raqz.fleet-control` for user `me`, bound to `192.168.50.4:4871` with TLS and tokens. Since 2026-11-19 (release `d48acd7`) it also listens on `100.64.0.6:4871` as `https://mac-mini-mariusz.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate in `~/.config/fleet-control/tailnet-tls/` (valid to 2027-02-15, not renewed automatically). The earlier owner decision "nothing on Tailscale" was changed by the owner on 2026-11-19 for the MacBook gateway. It serves a **test fleet only**: socket `fleet-fctrl-test`, one session `probe-shell` running `cat`, no agent. No production session is attached.
 
 | Item | Path on `.4` |
 | --- | --- |
-| Service checkout (since 2026-11-16: `git archive` of `main` at `05b18aa` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`; `59965a3` earlier on 2026-11-16, `735c1f8` from 2026-11-15 before that) | `~/Development/fleet-control-service` |
+| Service checkout (since 2026-11-19: `git archive` of `main` at `d48acd7`; before that `ad23ff2` and `6836a15`; on 2026-11-16 `05b18aa` plus the pinned `vendor/agent-fleet` files, no `.git`; the commit is in `RELEASE`; `59965a3` earlier on 2026-11-16, `735c1f8` from 2026-11-15 before that) | `~/Development/fleet-control-service` |
 | Plist | `~/Library/LaunchAgents/pl.raqz.fleet-control.plist` |
 | fleet.conf (must sit in `FLEET_DIR`: agent-fleet's `watchdog.sh` reads `$FLEET_DIR/fleet.conf`) | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
 | State database | `~/Library/Application Support/fleet-control/state.db` |
@@ -115,7 +115,7 @@ At start the service checks `FLEET_CONTROL_TLS_CERT` and `FLEET_CONTROL_TLS_KEY`
 
 To rotate: make the new pair (same CA and names), run `bun scripts/tls-check.ts <new cert> <new key>` on the host (same checks, exit 0 or a reason), keep the old files under another name, move the new ones into place and restart (`launchctl kickstart -k`). The service reads the files only at start: a hot reload is not offered, because in Bun 1.4.4 `server.reload({ tls })` returned without error but kept serving the old certificate (checked with `openssl s_client`, 2026-11-16). A token change does not need a restart (SIGHUP, see install-guide.md). The installed `.4` service has not been restarted with this check.
 
-Principals: `macbook-session` (MCP from the MacBook), `web-mariusz` (browser), `mini-orchestrator` (test orchestrator on `.4`). Plain tokens are only in `~/.config/fleet-control/token-*` on the machine that uses them.
+Principals and roles since 2026-11-19: `macbook-session` agent (MCP from the MacBook), `web-mariusz` operator (browser), `mini-orchestrator` agent (test orchestrator on `.4`), `dsh-panel` operator (DeepSeek Harness panel). Plain tokens are only in `~/.config/fleet-control/token-*` on the machine that uses them.
 
 MacBook MCP registration (user scope, in `~/.claude.json`): `fleet-control-mini` → `https://192.168.50.4:4871/mcp` with the bearer header. `claude mcp list` reports it connected. Other Node/Bun clients need `NODE_EXTRA_CA_CERTS` pointing at the mkcert CA.
 
@@ -150,6 +150,20 @@ Update the service (run on `.4`, as done on 2026-11-15; evidence in [implementat
 Keep the old checkout and the copies until the new release has been used. If the old checkout is removed earlier, first check that it can be rebuilt from a commit in git (compare the files, run the frozen install once) and write that commit into the rollback steps. The earlier instruction (rsync into the live directory, then `kickstart -k`) left nothing to go back to. The rollback of the 2026-11-15 update was drilled once in both directions; see the implementation status.
 
 Starting an agent with `fleet start` at the pinned CLI needs a Claude Code footer that says `bypass permissions on` or `for shortcuts`. `--permission-mode dontAsk` and auto mode show neither, and the start then fails after 90 s.
+
+## Installed on 192.168.50.15 (2026-11-19, approved by the owner)
+
+systemd user unit `fleet-control.service` for user `me` on `me-desktop` (Manjaro), enabled, linger on. Release `d48acd7` in `~/Development/fleet-control-service` (`git archive` plus pinned `vendor/agent-fleet` `3bd26d8`, `RELEASE` file). Loopback `127.0.0.1:4871` without TLS and the tailnet listener `100.64.0.5:4871` as `https://local-arch.tail4a51cb.ts.net:4871/` with a `tailscale cert` certificate (`sudo tailscale cert`, owned by `me`, valid to 2027-02-05, not renewed automatically). No LAN listener. Test fleet only: socket `fleet-fctrl-test`, session `probe-shell` running `cat`; production `tv-*` sessions on the default socket are not attached.
+
+| Item | Path on `.15` |
+| --- | --- |
+| Unit | `~/.config/systemd/user/fleet-control.service` |
+| fleet.conf | `~/.local/share/fleet-control/test-fleet/fleet.conf` |
+| State database | `~/.local/share/fleet-control/state.db` |
+| Tokens (hashes with roles) and plain tokens of `local-orchestrator` (agent) and `local-operator` (operator), kept on `.15` with the owner's approval until the MacBook gateway takes the operator token | `~/.config/fleet-control/` (dir 700, files 600) |
+| Log | `journalctl --user -u fleet-control` |
+
+Operate: `systemctl --user status|restart fleet-control`. Remove: `systemctl --user disable --now fleet-control`, delete the unit, `tmux -L fleet-fctrl-test kill-server`. After a reboot the unit starts, `probe-shell` does not: `tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"`.
 
 ## launchd draft (history)
 
