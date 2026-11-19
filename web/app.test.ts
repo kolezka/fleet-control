@@ -22,13 +22,15 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   let source = await Bun.file(new URL("./app.ts", import.meta.url)).text();
   source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = class {};");
   source = source.replace(/import {([\s\S]*?)} from ".\/host-state.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = state;");
+  source = source.replace(/import {([\s\S]*?)} from ".\/agents.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = agentsModule;");
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
-  const run = new Function("state", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const agentsModule = await import("./agents.ts");
+  const run = new Function("state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
   const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
   const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
-  const app = await run(state, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
+  const app = await run(state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
@@ -69,7 +71,8 @@ test("browser skips polling while the tab is hidden and refreshes when it is sho
   const intervals: (() => void)[] = [];
   const legacy = { id: "a", name: "A", apiBase: "/api/hosts/a" };
   const b = await browser([legacy], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] }, intervals);
-  expect(intervals).toHaveLength(3);
+  // sessions, commands/requests, agents, host list
+  expect(intervals).toHaveLength(4);
   const reads = () => b.calls.length;
   b.document.hidden = true;
   const before = reads();
@@ -130,6 +133,9 @@ test("browser mapped panel reads commands without approvals, escapes content, an
   expect(b.element("exchangeRows").innerHTML).toContain("&lt;img");
   expect(b.element("exchangeRows").innerHTML).not.toContain('<img src');
   expect(b.element("eventText").textContent).toContain("not complete history");
+  // No agent routes through the central supervisor: the box is hidden and never read.
+  expect(b.element("agentsBox").hidden).toBe(true);
+  expect(b.calls.some(c => c.path.endsWith("/agents"))).toBe(false);
   await b.click({ page: "commands", host: "a" });
   expect(b.calls.some(c => c.path.endsWith("/commands?cursor=next"))).toBe(true);
   expect(b.calls.some(c => c.path.includes("/cooperative"))).toBe(false);
@@ -260,11 +266,12 @@ test("host-provided strings never become markup anywhere on the page", async () 
   const request = { id: evil("req"), runId: run.id, phase: run.phase, revision: 1, kind: "approval", question: evil("question"), proposedAction: evil("action"), scope: evil("scope"),
     evidence: [evil("evidence")], allowedResponses: [evil("answer")], status: "open", response: evil("response"), resolvedBy: evil("resolver"), resolutionNote: evil("note") };
   const cmd = { id: evil("cmd"), target: evil("target"), actor: evil("actor"), text: evil("text"), status: evil("status"), response: evil("cmdresponse"), createdAt: "t", updatedAt: "t" };
-  const b = await browser([hostile], path => path.endsWith("/sessions") ? { sessions: [session] } : path.includes("/requests") ? { runs: [run], requests: [request] } : { commands: [cmd] });
+  const agent = { name: evil("agent"), cwd: evil("cwd"), model: evil("agentmodel"), state: "failed", error: evil("agenterror"), createdBy: "x", updatedAt: "t", alive: false };
+  const b = await browser([hostile], path => path.endsWith("/agents") ? { agents: [agent], models: [evil("modelopt")], folders: [evil("folder")] } : path.endsWith("/sessions") ? { sessions: [session] } : path.includes("/requests") ? { runs: [run], requests: [request] } : { commands: [cmd] });
   await new Promise(resolve => setTimeout(resolve, 0));
-  const html = ["sidebar", "requests", "workflowSteps", "exchangeRows"].map(id => b.element(id).innerHTML).join("\n");
+  const html = ["sidebar", "requests", "workflowSteps", "exchangeRows", "agentRows", "agentFolder", "agentModel"].map(id => b.element(id).innerHTML).join("\n");
   // The fixture must reach every panel, or the check below proves nothing.
-  for (const tag of ["hostname", "session", "model", "question", "evidence", "answer", "text", "actor", "status", "phase"]) expect(html).toContain("x-evil-" + tag);
+  for (const tag of ["hostname", "session", "model", "question", "evidence", "answer", "text", "actor", "status", "phase", "agent", "cwd", "agenterror", "modelopt", "folder"]) expect(html).toContain("x-evil-" + tag);
   expect(html).not.toMatch(/<x-evil/);
   expect(html).not.toMatch(/"x-evil-[a-z]+=/);
 });
@@ -287,4 +294,58 @@ test("a pane says live only after output, so a busy host never flashes live", as
   expect(status()).not.toContain("live");
   next.onmessage({ data: new TextEncoder().encode("x").buffer });
   expect(status()).toBe("Read-only · live");
+});
+
+test("agent form starts only after the name is typed again, and Stop posts to that agent", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const agents: any[] = [{ name: "fc-old", cwd: "/r/sandbox", model: "haiku", state: "running", error: null, createdBy: "gw", updatedAt: "2026-11-19T16:00:00Z", alive: true }];
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 202, agent: { ...JSON.parse(String(init.body)), state: "starting" } };
+    if (path.endsWith("/agents/fc-old/stop")) return { agent: { ...agents[0], state: "stopped" } };
+    if (path.endsWith("/agents")) return { agents, models: ["sonnet", "haiku"], folders: ["/r/sandbox", "/r/other"] };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("agentRows").innerHTML).toContain("Stop fc-old");
+  const type = async (id: string, value: string) => { b.element(id).value = value; await b.listeners.get(id + ":input")!({}); };
+  await type("agentName", "fc-new");
+  await type("agentFolder", "/r/other");
+  await type("agentModel", "haiku");
+  await type("agentPrompt", "Say hi");
+  expect(b.element("agentStart").disabled).toBe(true);
+  expect(b.element("agentGate").textContent).toBe("Type fc-new to confirm");
+  await type("agentConfirm", "fc-ne");
+  expect(b.element("agentStart").disabled).toBe(true);
+  await type("agentConfirm", "fc-new");
+  expect(b.element("agentStart").disabled).toBe(false);
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
+  expect(JSON.parse(String(post.init!.body))).toEqual({ name: "fc-new", cwd: "/r/other", model: "haiku", prompt: "Say hi", confirm: "fc-new" });
+  expect(b.element("agentStatus").textContent).toContain("fc-new accepted, starting");
+  expect(b.element("agentConfirm").value).toBe("");
+  await b.click({ stop: "fc-old", host: "a" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/agents/fc-old/stop" && c.init?.method === "POST")).toBe(true);
+  expect(b.element("agentStatus").textContent).toContain("fc-old stopped, session closed");
+});
+
+test("a refused start shows the host's reason and a host without agents hides the form", async () => {
+  const hosts = [{ id: "a", name: "A", apiBase: "/api/hosts/a" }, { id: "b", name: "B", apiBase: "/api/hosts/b" }];
+  const b = await browser(hosts, (path, init) => {
+    if (path === "/api/hosts/b/agents") return { __status: 503, error: { kind: "unavailable", message: "managed agents not configured on this host" } };
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 400, error: { kind: "invalid", message: "cwd must be a folder inside /r" } };
+    if (path.endsWith("/agents")) return { agents: [], models: ["haiku"], folders: ["/r/s"] };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  for (const [id, v] of [["agentName", "fc-x"], ["agentPrompt", "t"], ["agentConfirm", "fc-x"]] as const) { b.element(id).value = v; await b.listeners.get(id + ":input")!({}); }
+  expect(b.element("agentStart").disabled).toBe(false);
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("agentStatus").textContent).toBe("A: fc-x not started: cwd must be a folder inside /r");
+  await b.click({ host: "b" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("agentForm").hidden).toBe(true);
+  expect(b.element("agentListStatus").textContent).toBe("Managed agents are not configured on B.");
 });

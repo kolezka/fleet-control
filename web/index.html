@@ -29,6 +29,18 @@
           <div class="coordinationbody">
             <section class="request" id="requests" aria-live="polite"></section>
             <section class="workflow"><div class="sectionheading"><h3>Workflow</h3><small id="runName"></small></div><p id="phaseState" class="phase-note">No run registered on this service.</p><ol id="workflowSteps"></ol></section>
+            <details class="exchange agents" id="agentsBox" open><summary>Agents</summary><ol id="agentRows"></ol><p id="agentListStatus" class="fineprint"></p>
+              <form id="agentForm" class="agentform">
+                <label for="agentName">Name</label><input id="agentName" maxlength="34" placeholder="fc-review" autocomplete="off" spellcheck="false">
+                <label for="agentFolder">Folder</label><select id="agentFolder"></select>
+                <label for="agentModel">Model</label><select id="agentModel"></select>
+                <label for="agentPrompt">Task</label><textarea id="agentPrompt" rows="3" placeholder="What the agent should do"></textarea>
+                <label for="agentConfirm">Type the name to confirm</label><input id="agentConfirm" autocomplete="off" spellcheck="false">
+                <p class="fineprint">The agent runs unattended with permission prompts skipped, inside the chosen folder.</p>
+                <div class="composerfooter"><span id="agentGate"></span><button type="submit" id="agentStart" disabled>Start agent</button></div>
+                <p id="agentStatus" role="status"></p>
+              </form>
+            </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
           </div>
           <form id="instructionForm" class="instructionform"><label for="instruction">Instruction to supervisor</label><textarea id="instruction" rows="2" maxlength="4000" placeholder="Clarify the scope or give an instruction..."></textarea><div class="composerfooter"><span id="composerTarget">Select a session</span><button type="submit" id="sendInstruction" disabled>Send</button></div><p id="instructionStatus" role="status"></p></form>
