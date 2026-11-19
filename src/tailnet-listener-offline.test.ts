@@ -71,3 +71,24 @@ test("one command posted on the LAN listener is read on the tailnet listener, wh
   // The certificate names localhost, not the IP, so dialing the IP fails verification.
   await expect(fetch(`https://[::1]:${port}/api/whoami`, { headers: auth, tls } as RequestInit)).rejects.toThrow();
 }, 30_000);
+
+test("when the tailnet address cannot be bound the service stops instead of serving only the LAN", async () => {
+  const port = await freePort();
+  // A Tailscale address this machine does not own, so the second bind fails after the LAN one succeeded.
+  const failed = Bun.spawn(["bun", "index.ts"], {
+    cwd: join(import.meta.dir, ".."),
+    env: {
+      ...process.env, PORT: String(port), FLEET_CONF: join(dir, "fleet.conf"), FLEET_CONTROL_DB: join(dir, "state-2.db"),
+      FLEET_CONTROL_HOST: "127.0.0.1", FLEET_CONTROL_TOKENS: join(dir, "tokens"),
+      FLEET_CONTROL_TAILNET_HOST: "100.127.255.254", FLEET_CONTROL_TAILNET_NAME: "box.tail.ts.net",
+      FLEET_CONTROL_TAILNET_TLS_CERT: join(dir, "cert.pem"), FLEET_CONTROL_TAILNET_TLS_KEY: join(dir, "key.pem"),
+    },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const code = await Promise.race([failed.exited, Bun.sleep(20_000).then(() => "timeout" as const)]);
+  if (code === "timeout") failed.kill();
+  expect(code).toBe(1);
+  expect(await new Response(failed.stderr as ReadableStream).text()).toContain("tailnet listener failed");
+  expect(await new Response(failed.stdout as ReadableStream).text()).not.toContain("Fleet Control service on");
+  await expect(fetch(`http://127.0.0.1:${port}/api/whoami`)).rejects.toThrow();
+}, 30_000);
