@@ -244,9 +244,10 @@ test("rows are read when the file is written, so a stop is not undone by a start
   };
   for (const name of ["fc-a", "fc-c"]) agents.claim({ ...row(name, "starting"), state: "running" } as never);
   const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  // The start is queued first, while fc-a and fc-c still run; both are stopped before its write runs.
+  const { launched } = await uc.start(spec({ name: "fc-b", confirm: "fc-b", cwd: root }));
   const stopA = uc.stop("fc-a");
   const stopC = uc.stop("fc-c");
-  const { launched } = await uc.start(spec({ name: "fc-b", confirm: "fc-b", cwd: root }));
   release();
   await Promise.all([stopA, stopC, launched]);
   expect(agents.get("fc-a")!.state).toBe("stopped");

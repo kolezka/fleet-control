@@ -210,3 +210,8 @@ test("an include line with trailing spaces or CRLF is not added twice", async ()
   await l.rewrite(() => []);
   expect((await readFile(confPath, "utf8")).split("\n").filter((line) => line.includes(MANAGED_FILE))).toHaveLength(1);
 });
+
+test("the pinned agent-fleet watchdog passes the launcher's agent_overrides check", async () => {
+  const pinned = await readFile(join(import.meta.dir, "..", "..", "vendor", "agent-fleet", "scripts", "watchdog.sh"), "utf8");
+  expect(pinned).toContain("agent_overrides");
+});
