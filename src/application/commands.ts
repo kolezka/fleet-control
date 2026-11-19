@@ -17,8 +17,10 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
   const { commands, deliverer } = deps;
   // Delivered text stays in the pane's scrollback, readable by every terminal viewer.
   // Text over MAX_TEXT is left to the store's own length error, so a huge body costs no scan.
+  // The length is measured after trim, as the store does, so padding cannot skip the scan.
   const refuseSecret = (text: string, what: string) => {
-    if (text.length <= MAX_TEXT && deps.carriesSecret?.(text)) throw new CommandError("invalid", `text contains an access token; it was ${what}`);
+    const trimmed = text.trim();
+    if (trimmed.length <= MAX_TEXT && deps.carriesSecret?.(trimmed)) throw new CommandError("invalid", `text contains an access token; it was ${what}`);
   };
   return {
     // Queues the instruction and tries to deliver it once. A repeated key returns the original command and delivers nothing.
@@ -31,7 +33,9 @@ export function commandUseCases(deps: { commands: Commands; deliverer: Deliverer
 
     // A row queued before the guard existed, or by an instance without auth, is checked again here.
     async deliver(id: string): Promise<CommandView> {
-      refuseSecret(commands.get(id).text, "not delivered");
+      // Only a queued row is sent; other statuses come back unchanged, as before.
+      const stored = commands.get(id);
+      if (stored.status === "queued") refuseSecret(stored.text, "not delivered");
       const command = await deliverer.deliver(id);
       return { command, events: commands.events(id) };
     },

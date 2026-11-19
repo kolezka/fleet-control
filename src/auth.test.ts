@@ -151,6 +151,15 @@ describe("service with auth", () => {
     });
     expect(long.status).toBe(400);
     expect((await long.json()).error.message).toContain("longer than");
+    // Padding that the store trims away does not skip the scan.
+    const padded = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-padded-0001", target: "sup", text: `${tokens.web}${" ".repeat(4200)}` }),
+    });
+    expect(padded.status).toBe(400);
+    expect((await padded.json()).error.message).toContain("token");
+    expect(sent.length).toBe(before);
     // Refused texts are not stored either, so command_list cannot show them.
     const stored = commands.list().map((c) => c.text).join("\n");
     for (const token of Object.values(tokens)) expect(stored).not.toContain(token);
@@ -178,6 +187,14 @@ describe("service with auth", () => {
     const ok = await client.callTool({ name: "command_deliver", arguments: { id: clean.id } });
     expect(ok.isError).toBeFalsy();
     expect(sent.length).toBe(before + 1);
+    // A row already delivered before the guard comes back unchanged, as the tool describes.
+    const { command: old } = commands.submit({ idempotencyKey: "seeded-done-0001", target: "sup", actor: "old", text: `done with ${tokens.web}` });
+    expect((await new Deliverer(commands, fakeSend).deliver(old.id)).status).toBe("delivered");
+    const sentBefore = sent.length;
+    const again = await client.callTool({ name: "command_deliver", arguments: { id: old.id } });
+    expect(again.isError).toBeFalsy();
+    expect(JSON.stringify(again.content)).toContain("delivered");
+    expect(sent.length).toBe(sentBefore);
     await client.close();
   });
 });
