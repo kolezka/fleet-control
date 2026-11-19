@@ -42,10 +42,11 @@ describe("service with auth", () => {
   const tokens = { orch: "tok-orchestrator", worker: "tok-worker", web: "tok-web" };
   let server: ReturnType<typeof serve>;
   let requests: Requests;
+  let commands: Commands;
 
   beforeAll(() => {
     const store = new Store();
-    const commands = new Commands(store.db);
+    commands = new Commands(store.db);
     requests = new Requests(store.db);
     const auth = new Auth(parseTokens(Object.entries(tokens).map(([n, t]) => tokenLine(n, t)).join("\n")));
     server = serve({ fleet, store, control: { commands, deliverer: new Deliverer(commands, fakeSend), requests } }, 0, { auth });
@@ -139,8 +140,20 @@ describe("service with auth", () => {
     const client = await mcp(tokens.worker);
     const denied = await client.callTool({ name: "command_submit", arguments: { target: "sup", text: `here: ${tokens.orch}`, idempotencyKey: "leak-mcp-0001", actor: "x" } });
     expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toContain("token");
     await client.close();
     expect(sent.length).toBe(before);
+    // Text over the length cap gets the store's length error without a token scan.
+    const long = await fetch(url("/api/commands"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "leak-long-0001", target: "sup", text: `${tokens.orch} ${"x ".repeat(2100)}` }),
+    });
+    expect(long.status).toBe(400);
+    expect((await long.json()).error.message).toContain("longer than");
+    // Refused texts are not stored either, so command_list cannot show them.
+    const stored = commands.list().map((c) => c.text).join("\n");
+    for (const token of Object.values(tokens)) expect(stored).not.toContain(token);
     // Control: the same shape of text without a token still goes through.
     const ok = await fetch(url("/api/commands"), {
       method: "POST",
@@ -149,5 +162,22 @@ describe("service with auth", () => {
     });
     expect(ok.status).toBe(201);
     expect(sent.length).toBe(before + 1);
+  });
+
+  // A row queued before the guard existed, or by an instance without auth, must not reach the pane either.
+  test("command_deliver refuses a queued command whose text carries a live token", async () => {
+    const { command } = commands.submit({ idempotencyKey: "seeded-leak-0001", target: "sup", actor: "old", text: `please use ${tokens.web} now` });
+    const { command: clean } = commands.submit({ idempotencyKey: "seeded-clean-0001", target: "sup", actor: "old", text: "please use nothing now" });
+    const before = sent.length;
+    const client = await mcp(tokens.worker);
+    const denied = await client.callTool({ name: "command_deliver", arguments: { id: command.id } });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toContain("token");
+    expect(sent.length).toBe(before);
+    // Control: a clean queued row is still delivered through the same tool.
+    const ok = await client.callTool({ name: "command_deliver", arguments: { id: clean.id } });
+    expect(ok.isError).toBeFalsy();
+    expect(sent.length).toBe(before + 1);
+    await client.close();
   });
 });
