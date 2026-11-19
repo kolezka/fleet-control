@@ -121,7 +121,13 @@ describe("service with auth", () => {
   // A delivered command lands in the pane's scrollback, where every terminal viewer can read it.
   test("a command whose text carries a live token is refused on REST and MCP and never delivered", async () => {
     const before = sent.length;
-    for (const text of [`login with ${tokens.orch} please`, `curl -H "Authorization: Bearer ${tokens.web}"`, tokens.worker]) {
+    for (const text of [
+      `login with ${tokens.orch} please`,
+      `curl -H "Authorization: Bearer ${tokens.web}"`,
+      tokens.worker,
+      `export token=${tokens.orch}`,
+      `open https://host:4871/?t=${tokens.web}`,
+    ]) {
       const res = await fetch(url("/api/commands"), {
         method: "POST",
         headers: { authorization: `Bearer ${tokens.web}`, "content-type": "application/json" },
