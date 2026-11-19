@@ -1,7 +1,17 @@
 // Service options from the environment, shared by index.ts and the dev script.
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { Auth, AuthConfigError } from "./auth.ts";
+import { isIP } from "node:net";
+import { Auth, AuthConfigError, isLoopback } from "./auth.ts";
 import type { Peer, ServeOptions } from "./server.ts";
+
+// Tailscale hands out 100.64.0.0/10 (CGNAT) and fd7a:115c:a1e0::/48. Loopback is allowed for tests.
+export function isTailnetAddress(host: string): boolean {
+  if (isIP(host) === 4) {
+    const [a, b] = host.split(".").map(Number) as [number, number];
+    return a === 100 && b >= 64 && b <= 127;
+  }
+  return isIP(host) === 6 && /^fd7a:115c:a1e0:/i.test(host);
+}
 
 // FLEET_CONTROL_PEERS="me-desktop=http://100.64.0.5:4871,other=https://host:4871"
 // A peer is a service origin; a path is dropped, as before. Credentials in the URL and a repeated
@@ -45,6 +55,37 @@ export async function serveOptionsFromEnv(env = process.env): Promise<ServeOptio
     allowedHosts: (env.FLEET_CONTROL_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean),
     tls: await tlsFromEnv(env, file),
   };
+}
+
+// A second listener for the tailnet, next to the main one (the LAN address the DSH panel uses).
+// FLEET_CONTROL_TAILNET_HOST is this machine's Tailscale IP; FLEET_CONTROL_TAILNET_NAME its MagicDNS
+// name, which clients use and the certificate names. Both listeners share one store, queue and
+// token set. It needs auth and its own certificate (from `tailscale cert`), so a token never
+// crosses it in clear text and the name the client dials is the name the certificate holds.
+export async function tailnetOptionsFromEnv(
+  env: Record<string, string | undefined>,
+  base: ServeOptions,
+  port: number,
+  file: (path: string) => Promise<string> = (p) => Bun.file(p).text(),
+  now = new Date(),
+  warn: (message: string) => void = (m) => console.warn(m),
+): Promise<ServeOptions | undefined> {
+  const host = env.FLEET_CONTROL_TAILNET_HOST;
+  const name = env.FLEET_CONTROL_TAILNET_NAME;
+  const certPath = env.FLEET_CONTROL_TAILNET_TLS_CERT;
+  const keyPath = env.FLEET_CONTROL_TAILNET_TLS_KEY;
+  if (!host && !name && !certPath && !keyPath) return undefined;
+  if (!host) throw new Error("FLEET_CONTROL_TAILNET_HOST is required for the tailnet listener");
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(name ?? "")) throw new Error("FLEET_CONTROL_TAILNET_NAME must be the MagicDNS name, e.g. host.tailnet.ts.net");
+  if (!base.auth) throw new Error("the tailnet listener needs FLEET_CONTROL_TOKENS");
+  if (!certPath || !keyPath) throw new Error("the tailnet listener needs FLEET_CONTROL_TAILNET_TLS_CERT and FLEET_CONTROL_TAILNET_TLS_KEY");
+  const tls = await tlsFromEnv({ FLEET_CONTROL_TLS_CERT: certPath, FLEET_CONTROL_TLS_KEY: keyPath }, file, now, warn);
+  const x509 = new X509Certificate(tls!.cert);
+  if (!x509.checkHost(name!)) throw new Error(`FLEET_CONTROL_TAILNET_TLS_CERT does not name ${name}`);
+  if (host === base.hostname) throw new Error("FLEET_CONTROL_TAILNET_HOST must differ from FLEET_CONTROL_HOST");
+  if (!isTailnetAddress(host) && !isLoopback(host)) throw new Error("FLEET_CONTROL_TAILNET_HOST must be a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48)");
+  if (!Number.isSafeInteger(port) || port < 1) throw new Error("the tailnet listener needs a fixed PORT");
+  return { ...base, hostname: host, tls, allowedHosts: [...(base.allowedHosts ?? []), `${name}:${port}`] };
 }
 
 // SIGHUP rereads FLEET_CONTROL_TOKENS. Requests check the token each time, so a revoked token stops

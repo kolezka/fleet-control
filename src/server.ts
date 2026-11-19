@@ -105,9 +105,18 @@ export type ServeOptions = {
   allowedHosts?: string[]; // extra Host header values for MCP, e.g. "192.168.50.4:4871"
   tls?: { cert: string; key: string }; // PEM text
   maxViewers?: number; // open terminal sockets at once, each one a PTY process; default MAX_VIEWERS
+  viewerSlots?: ViewerSlots; // pass the same slots to every listener of one process so the cap is per process
 };
 
 export const MAX_VIEWERS = 16;
+
+// The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
+export class ViewerSlots {
+  open = 0;
+  constructor(readonly max = MAX_VIEWERS) {
+    if (!Number.isSafeInteger(max) || max < 1) throw new Error("maxViewers must be a positive integer");
+  }
+}
 export const BUSY_REASON = "too many open terminal viewers";
 
 export const MAX_REQUEST_BODY = 256 * 1024;
@@ -141,9 +150,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
 
   // Every socket starts a PTY process, so the number open at once is capped. A slot is taken at the
   // upgrade and given back when the socket closes.
-  const maxViewers = opts.maxViewers ?? MAX_VIEWERS;
-  if (!Number.isSafeInteger(maxViewers) || maxViewers < 1) throw new Error("maxViewers must be a positive integer");
-  let viewers = 0;
+  const slots = opts.viewerSlots ?? new ViewerSlots(opts.maxViewers ?? MAX_VIEWERS);
   // Open terminal sockets, so a token reload can close the ones whose token was revoked or rotated.
   const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void }>();
   const unsubscribe = auth?.onReplace(() => {
@@ -159,11 +166,11 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     }
     // A browser cannot read the status of a refused upgrade, so over the cap the socket opens and closes
     // at once with 1013 and a reason the page can show. It never takes a slot.
-    if (viewers >= maxViewers) {
+    if (slots.open >= slots.max) {
       if (server.upgrade(req, { data: { session, ...size, busy: true } })) return undefined;
       return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
     }
-    if (server.upgrade(req, { data: { session, ...size, principal: who ?? undefined } })) { viewers++; return undefined; }
+    if (server.upgrade(req, { data: { session, ...size, principal: who ?? undefined } })) { slots.open++; return undefined; }
     return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
 
@@ -349,7 +356,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       close(ws) {
         if (ws.data.busy) return;
-        if (!ws.data.closed) viewers--;
+        if (!ws.data.closed) slots.open--;
         sockets.delete(ws);
         ws.data.closed = true;
         ws.data.viewer?.close();
