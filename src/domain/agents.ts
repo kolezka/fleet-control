@@ -49,8 +49,9 @@ export function checkSpec(spec: { name?: unknown; cwd?: unknown; model?: unknown
 export const restartable = (state: AgentState) => state === "failed" || state === "stopped";
 // A stopping row may be stopped again: its earlier stop may have been cut off by a restart.
 export const stoppable = (state: AgentState) => state !== "stopped";
-// Only these keep a fleet row. A failed agent has none, so the watchdog does not recreate it.
-export const keepsFleetRow = (state: AgentState) => state === "starting" || state === "running" || state === "stopping";
+// Only these keep a fleet row. A failed, stopping or stopped agent has none, so a watchdog started later
+// does not recreate it.
+export const keepsFleetRow = (state: AgentState) => state === "starting" || state === "running";
 
 // After a service restart nothing is waiting on a starting or stopping row any more.
 // alive: the agent's tmux session exists now.
@@ -68,13 +69,13 @@ export interface AgentLauncher {
   resolveDir(path: string): Promise<string>;
   // Directories directly under each allowed root, for the panel's picker.
   folders(): Promise<string[]>;
-  // Writes the prompt and the fleet rows for every managed agent, then starts this one.
-  // `all` is every managed agent that keeps a fleet row, this one included.
-  start(agent: AgentSpec, all: FleetRow[]): Promise<void>;
-  // Ends the tmux session and rewrites the rows without this agent. Does not wait for a start in progress.
-  stop(name: string, remaining: FleetRow[]): Promise<void>;
-  // Rewrites the managed fleet rows to exactly these.
-  rewrite(rows: FleetRow[]): Promise<void>;
+  // Writes the prompt and the fleet rows, then starts this one. `rows` is read when the file is written, so
+  // a change made while an earlier write waited is not undone. It must include this agent.
+  start(agent: AgentSpec, rows: () => FleetRow[]): Promise<void>;
+  // Ends the tmux session and rewrites the rows. Does not wait for a start in progress.
+  stop(name: string, rows: () => FleetRow[]): Promise<void>;
+  // Rewrites the managed fleet rows to what `rows` returns when the write runs.
+  rewrite(rows: () => FleetRow[]): Promise<void>;
   // Names of managed sessions that have a tmux session now.
   running(): Promise<Set<string>>;
 }

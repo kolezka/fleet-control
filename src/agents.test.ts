@@ -34,12 +34,12 @@ class FakeLauncher implements AgentLauncher {
     return real;
   }
   async folders() { return [join(root, "sandbox")]; }
-  start(agent: AgentSpec, all: FleetRow[]) {
-    this.started.push({ agent, all });
+  start(agent: AgentSpec, rows: () => FleetRow[]) {
+    this.started.push({ agent, all: rows() });
     return new Promise<void>((resolve, reject) => { this.finish = (e) => { if (e) reject(e); else { this.open.add(agent.name); resolve(); } }; });
   }
-  async stop(name: string, remaining: FleetRow[]) { this.stopped.push({ name, remaining }); if (this.stopError) throw this.stopError; this.open.delete(name); }
-  async rewrite(rows: FleetRow[]) { this.rewrites.push(rows); }
+  async stop(name: string, rows: () => FleetRow[]) { this.stopped.push({ name, remaining: rows().filter((r) => r.name !== name) }); if (this.stopError) throw this.stopError; this.open.delete(name); }
+  async rewrite(rows: () => FleetRow[]) { this.rewrites.push(rows()); }
   async running() { return new Set(this.open); }
 }
 
@@ -227,4 +227,62 @@ test("serve refuses managed agents without tokens", () => {
   const fleet = { screen: async () => "", status: async () => ({ sessions: [], raw: "" }) } as never;
   expect(() => serve({ fleet, store, agents: { agents: new Agents(store.db), launcher: new FakeLauncher(), models: ["haiku"] } }, 0, {}))
     .toThrow("managed agents need tokens");
+});
+
+test("rows are read when the file is written, so a stop is not undone by a start that waited", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  // Writes happen in call order but only when the test releases them, like the launcher's queue.
+  const writes: string[][] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let queue: Promise<unknown> = gate;
+  const write = (rows: () => FleetRow[]) => { const next = queue.then(() => { writes.push(rows().map((r) => r.name)); }); queue = next; return next; };
+  const launcher: AgentLauncher = {
+    resolveDir: async (p) => p, folders: async () => [], running: async () => new Set(),
+    start: (_a, rows) => write(rows), stop: (_n, rows) => write(rows), rewrite: (rows) => write(rows),
+  };
+  for (const name of ["fc-a", "fc-c"]) agents.claim({ ...row(name, "starting"), state: "running" } as never);
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const stopA = uc.stop("fc-a");
+  const stopC = uc.stop("fc-c");
+  const { launched } = await uc.start(spec({ name: "fc-b", confirm: "fc-b", cwd: root }));
+  release();
+  await Promise.all([stopA, stopC, launched]);
+  expect(agents.get("fc-a")!.state).toBe("stopped");
+  // Every write saw the store as it was then; the last one holds only the agent still running.
+  expect(writes.at(-1)).toEqual(["fc-b"]);
+  expect(writes.every((w) => !w.includes("fc-a") && !w.includes("fc-c"))).toBe(true);
+});
+
+test("a late failure of an earlier start does not touch a newer start of the same name", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  let clock = 0;
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"], now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, clock++)) }, opCaller);
+  const first = await uc.start(spec());
+  const finishFirst = launcher.finish!;
+  // Stopped while starting, then started again before the first launch gave up.
+  expect((await uc.stop("fc-one")).state).toBe("stopped");
+  const second = await uc.start(spec());
+  finishFirst(new Error("claude UI not detected after 90 s"));
+  await first.launched;
+  expect(agents.get("fc-one")).toMatchObject({ state: "starting", createdAt: second.agent.createdAt });
+  launcher.finish!();
+  await second.launched;
+  expect(agents.get("fc-one")!.state).toBe("running");
+});
+
+test("a failed rewrite after a failed start is reported, not swallowed", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  launcher.rewrite = async () => { throw new Error("disk full"); };
+  const warned: string[] = [];
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"], warn: (m) => warned.push(m) }, opCaller);
+  const { launched } = await uc.start(spec());
+  launcher.finish!(new Error("fleet start exited 1"));
+  await launched;
+  expect(warned).toEqual(["agent fc-one: fleet rows not rewritten after a failed start: disk full"]);
 });

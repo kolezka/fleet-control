@@ -11,6 +11,8 @@ export type AgentDeps = {
   models: readonly string[];
   now?: () => Date;
   carriesSecret?: (text: string) => boolean;
+  // Where background failures go (a rewrite or a second stop after the reply was sent). Default: console.error.
+  warn?: (message: string) => void;
 };
 
 // alive: a tmux session with this name exists now. A running row without one has exited.
@@ -20,7 +22,8 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).sli
 
 export function agentUseCases(deps: AgentDeps, caller?: Caller) {
   const now = () => (deps.now ?? (() => new Date()))().toISOString();
-  // Rows that still own a fleet entry: every start rewrites the managed rows from these.
+  const warn = deps.warn ?? ((m: string) => console.error(m));
+  // Rows that still own a fleet entry, read when the launcher writes the file.
   const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, cwd, model }) => ({ name, cwd, model }));
 
   return {
@@ -42,7 +45,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         const next = recovered(a.state, alive.has(a.name));
         if (next && deps.agents.transition(a.name, [a.state], next.state, next.error, now())) changed.push(a.name);
       }
-      await deps.launcher.rewrite(fleetRows());
+      await deps.launcher.rewrite(fleetRows);
       return changed;
     },
 
@@ -64,15 +67,17 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         createdBy: caller?.name ?? "local", createdAt: at, state: "starting", error: null, updatedAt: at,
       };
       if (!deps.agents.claim(agent)) throw new AgentError("conflict", `agent ${spec.name} was started by another request`);
-      const launched = deps.launcher.start({ ...spec, cwd }, fleetRows()).then(
+      const launched = deps.launcher.start({ ...spec, cwd }, fleetRows).then(
         async () => {
-          if (deps.agents.transition(spec.name, ["starting"], "running", null, now())) return;
-          // Stopped while it was starting: the stop may have run before the session existed.
-          if (deps.agents.get(spec.name)?.state === "stopped") await deps.launcher.stop(spec.name, fleetRows()).catch(() => undefined);
+          if (deps.agents.transition(spec.name, ["starting"], "running", null, now(), at)) return;
+          // Stopped (or its stop failed) while it was starting: the stop may have run before the session
+          // existed. End the session this launch made, unless a newer start owns the name now.
+          if (deps.agents.get(spec.name)?.createdAt !== at) return;
+          await deps.launcher.stop(spec.name, fleetRows).catch((e) => warn(`agent ${spec.name}: stop after a late start failed: ${message(e)}`));
         },
         async (e) => {
-          if (deps.agents.transition(spec.name, ["starting"], "failed", message(e), now())) {
-            await deps.launcher.rewrite(fleetRows()).catch(() => undefined);
+          if (deps.agents.transition(spec.name, ["starting"], "failed", message(e), now(), at)) {
+            await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${spec.name}: fleet rows not rewritten after a failed start: ${message(e2)}`));
           }
         },
       );
@@ -86,10 +91,11 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if (!stoppable(agent.state)) throw new AgentError("conflict", `agent ${name} is ${agent.state}`);
       if (!deps.agents.transition(name, [agent.state], "stopping", null, now())) throw new AgentError("conflict", `agent ${name} changed; read it again`);
       try {
-        await deps.launcher.stop(name, fleetRows().filter((r) => r.name !== name));
+        // The row is stopping now, so the rows written here already leave it out.
+        await deps.launcher.stop(name, fleetRows);
       } catch (e) {
         if (deps.agents.transition(name, ["stopping"], "failed", `stop failed: ${message(e)}`, now())) {
-          await deps.launcher.rewrite(fleetRows()).catch(() => undefined);
+          await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${name}: fleet rows not rewritten after a failed stop: ${message(e2)}`));
         }
         throw e;
       }

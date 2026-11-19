@@ -55,6 +55,9 @@ export class FleetAgentLauncher implements AgentLauncher {
     if (r.exitCode !== 0) throw new AgentError("unavailable", "fleet.conf could not be read");
     const [dir = "", socket = "", remote = ""] = r.stdout.split("\n");
     if (!PLAIN_PATH.test(dir)) throw new AgentError("unavailable", "FLEET_DIR in fleet.conf is not a plain absolute path");
+    // agent-fleet sources $FLEET_DIR/fleet.conf, so the include must go into that same file.
+    const [named, used] = await Promise.all([realpath(this.opts.confPath).catch(() => ""), realpath(join(dir, "fleet.conf")).catch(() => "")]);
+    if (!named || named !== used) throw new AgentError("unavailable", `FLEET_CONF is not $FLEET_DIR/fleet.conf (${join(dir, "fleet.conf")})`);
     return { dir, socket, remote: remote !== "" };
   }
 
@@ -99,7 +102,7 @@ export class FleetAgentLauncher implements AgentLauncher {
       const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
       for (const e of entries) {
         const path = join(root, e.name);
-        // Only folders resolveDir would accept.
+        // Real, visible folders with plain paths; resolveDir still checks the one picked.
         if (e.isDirectory() && !e.name.startsWith(".") && PLAIN_PATH.test(path)) out.push(path);
       }
     }
@@ -121,7 +124,7 @@ export class FleetAgentLauncher implements AgentLauncher {
     lines.push("esac; }", "");
     await atomicWrite(join(dir, MANAGED_FILE), lines.join("\n"));
     const conf = await Bun.file(this.opts.confPath).text();
-    if (!conf.split("\n").includes(INCLUDE_LINE)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
+    if (!conf.split("\n").some((l) => l.trim() === INCLUDE_LINE)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
   }
 
   // Marks cwd trusted in Claude Code's state file. Claude Code writes that file too, so the read and
@@ -153,16 +156,22 @@ export class FleetAgentLauncher implements AgentLauncher {
     }
   }
 
-  async start(agent: AgentSpec, all: FleetRow[]): Promise<void> {
+  async start(agent: AgentSpec, rows: () => FleetRow[]): Promise<void> {
     await this.serial(async () => {
       const { dir, remote } = await this.conf();
       if (remote) throw new AgentError("unavailable", "managed agents need a local fleet (REMOTE_SSH is set)");
+      // An older watchdog ignores agent_overrides and would start Claude Code in the fleet's default folder
+      // with the fleet's default arguments.
+      const watchdog = await Bun.file(join(dir, "watchdog.sh")).text().catch(() => "");
+      if (!watchdog.includes("agent_overrides")) {
+        throw new AgentError("unavailable", `${join(dir, "watchdog.sh")} does not support agent_overrides; run fleet sync with agent-fleet 0.5.0 or newer`);
+      }
       // Trust first: if Claude Code's state cannot be read, nothing else is written.
       await this.trust(agent.cwd);
       await writeFile(join(dir, `${agent.name}.txt`), agent.prompt.endsWith("\n") ? agent.prompt : agent.prompt + "\n", { mode: 0o600 });
       await chmod(join(dir, `${agent.name}.txt`), 0o600);
       if (!(await Bun.file(join(dir, "autonomy.txt")).exists())) await writeFile(join(dir, "autonomy.txt"), AUTONOMY, { mode: 0o644 });
-      await this.writeRows(dir, all);
+      await this.writeRows(dir, rows());
     });
     {
       const r = await this.run([this.opts.fleetBin, "start", agent.name], this.opts.timeoutMs ?? START_TIMEOUT_MS);
@@ -174,21 +183,21 @@ export class FleetAgentLauncher implements AgentLauncher {
     }
   }
 
-  rewrite(rows: FleetRow[]): Promise<void> {
+  rewrite(rows: () => FleetRow[]): Promise<void> {
     return this.serial(async () => {
       const { dir } = await this.conf();
-      await this.writeRows(dir, rows);
+      await this.writeRows(dir, rows());
     });
   }
 
-  stop(name: string, remaining: FleetRow[]): Promise<void> {
+  stop(name: string, rows: () => FleetRow[]): Promise<void> {
     return this.serial(async () => {
       const { dir, socket } = await this.conf();
       const r = await this.tmux(socket, ["kill-session", "-t", `=${name}`]);
       if (r.exitCode !== 0 && !/can't find session|no server running|session not found/.test(r.stderr)) {
         throw new AgentError("unavailable", `tmux kill-session exited ${r.exitCode}`);
       }
-      await this.writeRows(dir, remaining);
+      await this.writeRows(dir, rows().filter((r) => r.name !== name));
     });
   }
 }

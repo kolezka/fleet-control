@@ -40,11 +40,13 @@ export class Agents {
     return r.changes === 1;
   }
 
-  // Moves a row from one of the given states; false when it was in another state.
-  transition(name: string, from: AgentState[], to: AgentState, error: string | null, at: string): boolean {
+  // Moves a row from one of the given states; false when it was in another state. With `attempt` (the
+  // row's created_at) only that start of the agent moves, not a later one under the same name.
+  transition(name: string, from: AgentState[], to: AgentState, error: string | null, at: string, attempt?: string): boolean {
     const marks = from.map(() => "?").join(", ");
-    const r = this.db.query(`UPDATE agents SET state = ?, error = ?, updated_at = ? WHERE name = ? AND state IN (${marks})`)
-      .run(to, error, at, name, ...from);
+    const same = attempt === undefined ? "" : " AND created_at = ?";
+    const r = this.db.query(`UPDATE agents SET state = ?, error = ?, updated_at = ? WHERE name = ? AND state IN (${marks})${same}`)
+      .run(to, error, at, name, ...from, ...(attempt === undefined ? [] : [attempt]));
     return r.changes === 1;
   }
 }
