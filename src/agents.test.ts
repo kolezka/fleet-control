@@ -287,3 +287,19 @@ test("a failed rewrite after a failed start is reported, not swallowed", async (
   await launched;
   expect(warned).toEqual(["agent fc-one: fleet rows not rewritten after a failed start: disk full"]);
 });
+
+test("a start that finishes after its stop failed ends the session it made", async () => {
+  const store = new Store(":memory:");
+  const agents = new Agents(store.db);
+  const launcher = new FakeLauncher();
+  const uc = agentUseCases({ agents, launcher, models: ["haiku"], warn: () => undefined }, opCaller);
+  const { launched } = await uc.start(spec());
+  launcher.stopError = new Error("tmux kill-session exited 1");
+  await expect(uc.stop("fc-one")).rejects.toThrow("tmux kill-session exited 1");
+  expect(agents.get("fc-one")!.state).toBe("failed");
+  launcher.stopError = null;
+  launcher.finish!();
+  await launched;
+  expect(launcher.stopped.map((s) => s.name)).toEqual(["fc-one", "fc-one"]);
+  expect(launcher.open.has("fc-one")).toBe(false);
+});

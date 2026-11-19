@@ -181,7 +181,7 @@ A LaunchAgent for user `me` keeps the service running while `me` is logged in; a
   <key>WorkingDirectory</key><string>/Users/me/Development/fleet-control-service</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/Users/me/.bun/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>FLEET_CONF</key><string>/Users/me/.config/fleet-control/fleet.conf</string>
+    <key>FLEET_CONF</key><string>/Users/me/.local/share/fleet-control/test-fleet/fleet.conf</string>
     <key>READONLY_FLEET_BIN</key><string>/Users/me/Development/agent-fleet-dev/scripts/fleet</string>
     <key>FLEET_CONTROL_DB</key><string>/Users/me/Library/Application Support/fleet-control/state.db</string>
     <key>FLEET_CONTROL_HOST</key><string>127.0.0.1</string>

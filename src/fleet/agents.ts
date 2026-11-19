@@ -50,15 +50,16 @@ export class FleetAgentLauncher implements AgentLauncher {
     return next;
   }
 
-  private async conf(): Promise<{ dir: string; socket: string; remote: boolean }> {
+  private async conf(): Promise<{ dir: string; socket: string }> {
     const r = await this.run(["bash", "-c", '. "$FLEET_CONF" >/dev/null 2>&1 || exit 3; printf "%s\\n%s\\n%s\\n" "$FLEET_DIR" "${FLEET_TMUX_SOCKET-fleet-$FLEET}" "${REMOTE_SSH:-}"'], 10_000);
     if (r.exitCode !== 0) throw new AgentError("unavailable", "fleet.conf could not be read");
     const [dir = "", socket = "", remote = ""] = r.stdout.split("\n");
     if (!PLAIN_PATH.test(dir)) throw new AgentError("unavailable", "FLEET_DIR in fleet.conf is not a plain absolute path");
+    if (remote !== "") throw new AgentError("unavailable", "managed agents need a local fleet (REMOTE_SSH is set)");
     // agent-fleet sources $FLEET_DIR/fleet.conf, so the include must go into that same file.
     const [named, used] = await Promise.all([realpath(this.opts.confPath).catch(() => ""), realpath(join(dir, "fleet.conf")).catch(() => "")]);
     if (!named || named !== used) throw new AgentError("unavailable", `FLEET_CONF is not $FLEET_DIR/fleet.conf (${join(dir, "fleet.conf")})`);
-    return { dir, socket, remote: remote !== "" };
+    return { dir, socket };
   }
 
   private async run(argv: string[], timeoutMs: number, env: Record<string, string> = {}): Promise<Run> {
@@ -158,8 +159,7 @@ export class FleetAgentLauncher implements AgentLauncher {
 
   async start(agent: AgentSpec, rows: () => FleetRow[]): Promise<void> {
     await this.serial(async () => {
-      const { dir, remote } = await this.conf();
-      if (remote) throw new AgentError("unavailable", "managed agents need a local fleet (REMOTE_SSH is set)");
+      const { dir } = await this.conf();
       // An older watchdog ignores agent_overrides and would start Claude Code in the fleet's default folder
       // with the fleet's default arguments.
       const watchdog = await Bun.file(join(dir, "watchdog.sh")).text().catch(() => "");
