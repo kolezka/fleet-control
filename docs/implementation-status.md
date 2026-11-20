@@ -261,7 +261,7 @@ An operator can type into a session from the page, one writer per session, throu
 
 ## Stop from the page through the gateway (2026-11-20, branch `fix/page-stop-json`)
 
-A real browser check on .4 (release 239b084, scratch gateway) found that the page's Stop button failed: it sent a bodiless POST, and the gateway refuses any POST without `content-type: application/json` ("content-type must be application/json"), so Stop never reached the host. Fixture tests had missed it because the page fixture answered any request. Fix: the page sends `{}` as JSON. The page test fixture now answers a non-JSON POST with the gateway's 415, so every page POST is held to the gateway's rule; `src/gateway-agents.test.ts` sends Stop exactly as the page does. The fixture change fails on the old page code; restoring the old request fails it again.
+A real browser check on .4 (release 239b084, scratch gateway) found that the page's Stop button failed: it sent a bodiless POST, and the gateway refuses any POST without `content-type: application/json` ("content-type must be application/json"), so Stop never reached the host. Fixture tests had missed it because the page fixture answered any request. Fix: the page sends `{}` as JSON. The page test fixture now answers a non-JSON POST with the gateway's 415, so every page POST in that test file is held to the gateway's content-type rule (not its Origin or size checks); `src/gateway-agents.test.ts` sends Stop exactly as the page does. The fixture change fails on the old page code; restoring the old request fails it again. Review (deepseek-flash) approved.
 
 ## Orchestrator agents for phased runs (2026-11-20, branch `feat/agent-orchestrator`, not released)
 
