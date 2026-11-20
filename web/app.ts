@@ -666,7 +666,7 @@ for (const [id, key] of [["agentName", "name"], ["agentKind", "kind"], ["agentFo
     const form = agentView(h.info.id).form;
     const value = ($(id) as HTMLInputElement).value;
     // The kind comes from a picker filled with known kinds; anything else is ignored.
-    if (key === "kind") { if (value in KIND_LABEL) form.kind = value as AgentKind; }
+    if (key === "kind") { if (Object.hasOwn(KIND_LABEL, value)) form.kind = value as AgentKind; }
     else form[key] = value;
     renderAgents(h);
   });

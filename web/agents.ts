@@ -24,7 +24,7 @@ export function parseAgents(body: unknown): AgentList | null {
     kinds = {};
     for (const [k, m] of Object.entries(b.kinds as Record<string, unknown>)) {
       // A kind this panel does not know is left out, not shown as something it cannot start.
-      if (!(k in KIND_LABEL)) continue;
+      if (!Object.hasOwn(KIND_LABEL, k)) continue;
       if (!Array.isArray(m) || !m.every(str)) return null;
       if (m.length) kinds[k as AgentKind] = m;
     }
