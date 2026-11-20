@@ -440,7 +440,7 @@ type AgentView = { list: AgentList | null; status: "loading" | "ready" | "unknow
 const agentViews = new Map<string, AgentView>();
 function agentView(hostId: string): AgentView {
   let v = agentViews.get(hostId);
-  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", kind: "claude", cwd: "", model: "", prompt: "", confirm: "" } }; agentViews.set(hostId, v); }
+  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", kind: "claude", cwd: "", model: "", prompt: "", confirm: "", orchestrator: false } }; agentViews.set(hostId, v); }
   return v;
 }
 
@@ -453,7 +453,7 @@ function renderAgents(h: HostState | undefined) {
   box.hidden = false;
   const list = v.list;
   form.hidden = v.status === "absent";
-  const rows = (list?.agents ?? []).map(a => '<li><div class="exchangemeta"><strong>' + esc(a.name) + '</strong><time>' + esc(time(a.updatedAt)) + '</time></div><p>' + esc(agentStateText(a) + ' · ' + KIND_LABEL[a.kind] + ' ' + a.model + ' · ' + a.cwd) + '</p>'
+  const rows = (list?.agents ?? []).map(a => '<li><div class="exchangemeta"><strong>' + esc(a.name) + '</strong><time>' + esc(time(a.updatedAt)) + '</time></div><p>' + esc(agentStateText(a) + ' · ' + KIND_LABEL[a.kind] + ' ' + a.model + (a.orchestrator ? ' · orchestrator' : '') + ' · ' + a.cwd) + '</p>'
     + (canStop(a) ? '<button type="button" class="destructive" data-fk="stop-' + esc(a.name) + '" data-stop="' + esc(a.name) + '" data-host="' + esc(h.info.id) + '"' + (v.busy ? ' disabled' : '') + '>Stop ' + esc(a.name) + '</button>' : '') + '</li>').join('');
   setHtml($("agentRows"), rows);
   $("agentListStatus").textContent = v.status === "absent" ? `Managed agents are not configured on ${h.info.name}.`
@@ -474,7 +474,14 @@ function renderAgents(h: HostState | undefined) {
   kind.hidden = $("agentKindLabel").hidden = kinds.length < 2;
   setHtml(kind, kinds.map(k => '<option value="' + k + '">' + esc(KIND_LABEL[k]) + '</option>').join(''));
   kind.value = v.form.kind;
-  $("agentRisk").textContent = v.form.kind === "dsh"
+  // The option shows only where the host offers it, and only for Claude Code.
+  const canOrchestrate = !!list?.orchestrators && v.form.kind === "claude";
+  if (!canOrchestrate) v.form.orchestrator = false;
+  $("agentOrchestratorRow").hidden = $("agentOrchestratorLabel").hidden = !canOrchestrate;
+  ($("agentOrchestrator") as HTMLInputElement).checked = v.form.orchestrator;
+  $("agentRisk").textContent = v.form.orchestrator
+    ? "The agent runs unattended with permission prompts skipped, inside the chosen folder, with its own token for this host: it can register a run and ask you, never answer for you."
+    : v.form.kind === "dsh"
     ? "The agent runs unattended through DSH headless, allowed to write inside the chosen folder."
     : "The agent runs unattended with permission prompts skipped, inside the chosen folder.";
   setHtml(folder, folders.map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('') || '<option value="">No folders</option>');
@@ -520,7 +527,7 @@ async function startAgent(hostId: string) {
   v.busy = false;
   if (status === 202) {
     v.notice = `${host.name}: ${f.name} accepted, starting. Its terminal appears once the session is open.`;
-    v.form = { ...v.form, name: "", prompt: "", confirm: "" };
+    v.form = { ...v.form, name: "", prompt: "", confirm: "", orchestrator: false };
   } else if (outcome.ok || status === null || status >= 500) {
     v.notice = `${host.name} did not answer clearly. Unknown whether ${f.name} was started; check the list before starting again.`;
   } else v.notice = `${host.name}: ${f.name} not started: ${outcome.message}`;
@@ -673,6 +680,12 @@ for (const [id, key] of [["agentName", "name"], ["agentKind", "kind"], ["agentFo
     renderAgents(h);
   });
 }
+$("agentOrchestrator").addEventListener("change", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  agentView(h.info.id).form.orchestrator = ($("agentOrchestrator") as HTMLInputElement).checked;
+  renderAgents(h);
+});
 $("agentForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const h = selectedHostState(fleet);

@@ -28,7 +28,7 @@ const post = (path: string, body: unknown, origin: string | null = gateway.url.o
 
 test("start, list and stop go through the gateway with the host's checks intact", async () => {
   const listed = await (await fetch(url("agents"))).json() as { models: string[]; kinds: unknown; folders: string[]; agents: unknown[] };
-  expect(listed).toEqual({ agents: [], models: ["haiku"], kinds: { claude: ["haiku"] }, folders: ["/r/sandbox"] });
+  expect(listed).toEqual({ agents: [], models: ["haiku"], kinds: { claude: ["haiku"] }, orchestrators: false, folders: ["/r/sandbox"] });
 
   // The host's own validation answers through the gateway.
   const bad = await post("agents", { name: "fc-gw", cwd: "/r/sandbox", model: "haiku", prompt: "hi", confirm: "nope" });

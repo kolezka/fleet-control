@@ -321,7 +321,7 @@ test("agent form starts only after the name is typed again, and Stop posts to th
   await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
   const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
-  expect(JSON.parse(String(post.init!.body))).toEqual({ name: "fc-new", kind: "claude", cwd: "/r/other", model: "haiku", prompt: "Say hi", confirm: "fc-new" });
+  expect(JSON.parse(String(post.init!.body))).toEqual({ name: "fc-new", kind: "claude", cwd: "/r/other", model: "haiku", prompt: "Say hi", confirm: "fc-new", orchestrator: false });
   // An older host offers only Claude Code: no kind picker.
   expect(b.element("agentKind").hidden).toBe(true);
   expect(b.element("agentStatus").textContent).toContain("fc-new accepted, starting");
@@ -390,4 +390,37 @@ test("the sidebar links to the add-host page only when the gateway offers it", a
   expect(off.element("sidebar").innerHTML).not.toContain("./add-host");
   const on = await browser({ hosts: [host], enroll: true } as never, reply);
   expect(on.element("sidebar").innerHTML).toContain('<a class="footlink" href="./add-host">Add a host</a>');
+});
+
+test("the orchestrator option shows only where the host offers it and only for Claude Code, and is posted when ticked", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const reply = (offer: boolean) => (path: string, init?: RequestInit) => {
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 202, agent: { ...JSON.parse(String(init.body)), state: "starting" } };
+    if (path.endsWith("/agents")) return { agents: [{ name: "fc-run", kind: "claude", cwd: "/r/s", model: "haiku", state: "running", error: null, createdBy: "gw", updatedAt: "2026-11-20T16:00:00Z", alive: true, orchestrator: true }], models: ["haiku"], kinds: { claude: ["haiku"], dsh: ["deepseek-official/deepseek-flash"] }, folders: ["/r/s"], ...(offer ? { orchestrators: true } : {}) };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  };
+  const off = await browser([host], reply(false));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(off.element("agentOrchestratorRow").hidden).toBe(true);
+  const b = await browser([host], reply(true));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("agentRows").innerHTML).toContain("haiku · orchestrator · /r/s");
+  expect(b.element("agentOrchestratorRow").hidden).toBe(false);
+  const type = async (id: string, value: string) => { b.element(id).value = value; await b.listeners.get(id + ":input")!({}); };
+  for (const [id, v] of [["agentName", "fc-o2"], ["agentPrompt", "Run phases"], ["agentConfirm", "fc-o2"]] as const) await type(id, v);
+  b.element("agentOrchestrator").checked = true;
+  await b.listeners.get("agentOrchestrator:change")!({});
+  expect(b.element("agentRisk").textContent).toContain("never answer for you");
+  // DSH cannot be an orchestrator: the option hides and is cleared.
+  await type("agentKind", "dsh");
+  expect(b.element("agentOrchestratorRow").hidden).toBe(true);
+  await type("agentKind", "claude");
+  expect(b.element("agentOrchestrator").checked).toBe(false);
+  b.element("agentOrchestrator").checked = true;
+  await b.listeners.get("agentOrchestrator:change")!({});
+  expect(b.element("agentStart").disabled).toBe(false);
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
+  expect(JSON.parse(String(post.init!.body))).toMatchObject({ name: "fc-o2", kind: "claude", orchestrator: true });
 });

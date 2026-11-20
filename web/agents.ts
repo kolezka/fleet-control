@@ -5,17 +5,18 @@ export type AgentKind = "claude" | "dsh";
 export const KIND_LABEL: Record<AgentKind, string> = { claude: "Claude Code", dsh: "DSH" };
 export type AgentRow = {
   name: string; kind: AgentKind; cwd: string; model: string; state: "starting" | "running" | "failed" | "stopping" | "stopped";
-  error: string | null; createdBy: string; updatedAt: string; alive: boolean;
+  error: string | null; createdBy: string; updatedAt: string; alive: boolean; orchestrator: boolean;
 };
 // kinds: models per kind this host offers. A host from before DSH agents sends only models (Claude Code).
-export type AgentList = { agents: AgentRow[]; kinds: Partial<Record<AgentKind, string[]>>; folders: string[] };
-export type AgentForm = { name: string; kind: AgentKind; cwd: string; model: string; prompt: string; confirm: string };
+// orchestrators: the host can give a Claude Code agent its own token and this host's MCP, for a phased run.
+export type AgentList = { agents: AgentRow[]; kinds: Partial<Record<AgentKind, string[]>>; folders: string[]; orchestrators: boolean };
+export type AgentForm = { name: string; kind: AgentKind; cwd: string; model: string; prompt: string; confirm: string; orchestrator: boolean };
 
 const STATES = new Set(["starting", "running", "failed", "stopping", "stopped"]);
 const str = (v: unknown): v is string => typeof v === "string";
 
 export function parseAgents(body: unknown): AgentList | null {
-  const b = body as { agents?: unknown; models?: unknown; kinds?: unknown; folders?: unknown } | null;
+  const b = body as { agents?: unknown; models?: unknown; kinds?: unknown; folders?: unknown; orchestrators?: unknown } | null;
   if (!b || !Array.isArray(b.agents) || !Array.isArray(b.models) || !Array.isArray(b.folders)) return null;
   if (!b.models.every(str) || !b.folders.every(str)) return null;
   let kinds: AgentList["kinds"] = { claude: b.models as string[] };
@@ -35,9 +36,10 @@ export function parseAgents(body: unknown): AgentList | null {
     // Rows from before DSH agents have no kind; they are Claude Code agents.
     const kind = a.kind === undefined ? "claude" : a.kind;
     if (kind !== "claude" && kind !== "dsh") return null;
-    agents.push({ name: a.name, kind, cwd: a.cwd, model: a.model, state: a.state as AgentRow["state"], error: str(a.error) ? a.error : null, createdBy: str(a.createdBy) ? a.createdBy : "", updatedAt: a.updatedAt, alive: a.alive });
+    agents.push({ name: a.name, kind, cwd: a.cwd, model: a.model, state: a.state as AgentRow["state"], error: str(a.error) ? a.error : null, createdBy: str(a.createdBy) ? a.createdBy : "", updatedAt: a.updatedAt, alive: a.alive, orchestrator: a.orchestrator === true });
   }
-  return { agents, kinds, folders: b.folders as string[] };
+  // Only an explicit true offers orchestrators; older hosts send nothing.
+  return { agents, kinds, folders: b.folders as string[], orchestrators: b.orchestrators === true };
 }
 
 // Same rule as src/domain/agents.ts AGENT_NAME; the host checks again.
@@ -58,6 +60,8 @@ export function startGate(f: AgentForm, list: AgentList | null, busy: boolean): 
   if (!list.folders.includes(f.cwd)) return { ok: false, reason: "Choose a folder" };
   if (!kindsOf(list).includes(f.kind)) return { ok: false, reason: "Choose an agent kind" };
   if (!modelsFor(list, f.kind).includes(f.model)) return { ok: false, reason: "Choose a model" };
+  if (f.orchestrator && !list.orchestrators) return { ok: false, reason: "This host does not offer orchestrators" };
+  if (f.orchestrator && f.kind !== "claude") return { ok: false, reason: "Only Claude Code agents can be orchestrators" };
   if (!f.prompt.trim()) return { ok: false, reason: "Write the task" };
   if (new TextEncoder().encode(f.prompt).length > MAX_PROMPT_BYTES) return { ok: false, reason: "Task is longer than 16 KiB" };
   if (f.confirm !== f.name) return { ok: false, reason: `Type ${f.name} to confirm` };
