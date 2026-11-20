@@ -229,3 +229,48 @@ test("a failed start whose token cannot be revoked shows that on the row", async
     s.server.stop(true);
   }
 });
+
+test("an agent token left by an earlier run is revoked when the name stops again, even as a plain agent; a failed start's note never lands on a stopped row", async () => {
+  const s = await setup();
+  try {
+    // An earlier orchestrator's token survived (its revoke failed); the name now runs as a plain agent.
+    const leftover = newToken();
+    await writeFile(s.tokensFile, `${await readFile(s.tokensFile, "utf8")}${tokenLine("fc-orch", leftover, "agent")}\n`);
+    s.auth.replace(await Auth.fromFile(s.tokensFile));
+    expect((await s.rest(s.op, "/api/agents", spec({ orchestrator: false }))).status).toBe(202);
+    await settle();
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    expect((await s.mcp(leftover, "run_list", {})).status).toBe(401);
+
+    // A failed start whose revoke is slow: the operator stops the failed row meanwhile.
+    let release!: () => void;
+    const slow = new Promise<void>((r) => { release = r; });
+    s.launcher.start = async () => { throw new Error("claude UI not detected"); };
+    const revoke = s.tokens.revoke.bind(s.tokens);
+    let calls = 0;
+    s.tokens.revoke = async (n) => { if (++calls === 1) { await slow; throw new Error("tokens file is locked"); } return revoke(n); };
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect(s.agents.get("fc-orch")!.state).toBe("failed");
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    release();
+    await settle();
+    expect(s.agents.get("fc-orch")).toMatchObject({ state: "stopped", error: null });
+  } finally {
+    s.server.stop(true);
+  }
+});
+
+test("a stop whose revoke and kill both fail names both", async () => {
+  const s = await setup();
+  try {
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    s.tokens.revoke = async () => { throw new Error("tokens file is locked"); };
+    s.launcher.stop = async () => { throw new Error("tmux kill-session exited 1"); };
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBeGreaterThanOrEqual(400);
+    expect(s.agents.get("fc-orch")!.error).toContain("tmux kill-session exited 1; its token was not revoked either (tokens file is locked)");
+  } finally {
+    s.server.stop(true);
+  }
+});

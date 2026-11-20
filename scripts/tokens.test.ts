@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, newToken, parseTokens, tokenLine } from "../src/auth.ts";
-import { change, withLock } from "./tokens.ts";
+import { addHash, change, withLock } from "./tokens.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -142,4 +142,10 @@ test("fc- names are kept for managed agents: add or role with another role is re
   const agent = change("add", "fc-orch", text, undefined, "agent").text;
   expect(() => change("role", "fc-orch", agent, undefined, "operator")).toThrow("names starting with fc- are kept");
   expect(change("add", "fc_orch", text, undefined, "operator").text).toContain("fc_orch");
+});
+
+test("a hash added for a host (connect) cannot take an fc- name either", () => {
+  const text = `${tokenLine("op", newToken(), "operator")}\n`;
+  expect(() => addHash(text, "fc-orch", "a".repeat(64), "operator")).toThrow("names starting with fc- are kept for managed agents");
+  expect(addHash(text, "macbook", "a".repeat(64), "operator").changed).toBe(true);
 });

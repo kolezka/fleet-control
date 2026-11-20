@@ -27,8 +27,9 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
   const warn = deps.warn ?? ((m: string) => console.error(m));
   // Rows that still own a fleet entry, read when the launcher writes the file.
   const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, kind, cwd, model, orchestrator }) => ({ name, kind, cwd, model, orchestrator }));
-  // An orchestrator's token must not outlive its session. Revoking a name that has no token is a no-op.
-  const revoke = async (a: Pick<Agent, "name" | "orchestrator">) => { if (a.orchestrator) await deps.tokens?.revoke(a.name); };
+  // An agent token must not outlive its session, whatever the row says now: a plain restart of a name whose
+  // earlier token was not revoked must not keep it. Revoking a name without an agent line is a no-op.
+  const revoke = async (a: Pick<Agent, "name">) => { await deps.tokens?.revoke(a.name); };
 
   return {
     models: deps.models,
@@ -85,7 +86,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       // Records a token the host could not take back, so the page shows it and not only the log.
       const unrevoked = (e: unknown) => {
         const row = deps.agents.get(spec.name);
-        if (row?.createdAt === at) deps.agents.transition(spec.name, [row.state], row.state, `${row.error ?? "start failed"}; token not revoked: ${message(e)}`, now(), at);
+        if (row?.createdAt === at) deps.agents.transition(spec.name, ["failed"], "failed", `${row.error ?? "start failed"}; token not revoked: ${message(e)}`, now(), at);
         warn(`agent ${spec.name}: token not revoked after a failed start: ${message(e)}`);
       };
       const launched = launch().then(
@@ -116,8 +117,11 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         // The token goes first, so the agent loses the host before its session ends. If it cannot be taken
         // back the session still ends, and the row says the token is left so a second stop retries it.
         const revoked = await revoke(agent).then(() => null, (e: unknown) => e);
+        if (revoked !== null) warn(`agent ${name}: token not revoked: ${message(revoked)}`);
         // The row is stopping now, so the rows written here already leave it out.
-        await deps.launcher.stop(name, fleetRows);
+        await deps.launcher.stop(name, fleetRows).catch((e: unknown) => {
+          throw revoked === null ? e : new AgentError("unavailable", `${message(e)}; its token was not revoked either (${message(revoked)})`);
+        });
         if (revoked !== null) throw new AgentError("unavailable", `the session ended but its token was not revoked (${message(revoked)}); stop again to retry`);
       } catch (e) {
         if (deps.agents.transition(name, ["stopping"], "failed", `stop failed: ${message(e)}`, now())) {

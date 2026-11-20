@@ -302,10 +302,12 @@ test("every rewrite removes MCP configs of agents that keep no orchestrator row,
   const left = join(fleetDir, mcpConfigFile("fc-gone"));
   const kept = join(fleetDir, mcpConfigFile("fc-keep"));
   const other = join(fleetDir, "notes.mcp.json");
-  for (const f of [left, kept, other]) await writeFile(f, "{}", { mode: 0o600 });
-  // A failed start rewrites the rows without its agent, and so does a service start.
-  await l.rewrite(() => [{ name: "fc-keep", kind: "claude", cwd, model: "haiku", orchestrator: true }]);
+  const plain = join(fleetDir, mcpConfigFile("fc-plain"));
+  for (const f of [left, kept, other, plain]) await writeFile(f, "{}", { mode: 0o600 });
+  // A failed start rewrites the rows without its agent, and so does a service start. A plain agent keeps none.
+  await l.rewrite(() => [{ name: "fc-keep", kind: "claude", cwd, model: "haiku", orchestrator: true }, { name: "fc-plain", kind: "claude", cwd, model: "haiku", orchestrator: false }]);
   expect(await Bun.file(left).exists()).toBe(false);
+  expect(await Bun.file(plain).exists()).toBe(false);
   expect(await Bun.file(kept).exists()).toBe(true);
   expect(await Bun.file(other).exists()).toBe(true);
   await l.rewrite(() => []);
