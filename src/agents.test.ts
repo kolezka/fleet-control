@@ -49,7 +49,7 @@ function setup() {
   const agents = new Agents(store.db);
   const auth = new Auth(parseTokens([tokenLine("op", "op-token-0000000000000000000000000000000000", "operator"), tokenLine("ag", "ag-token", "agent"), tokenLine("vw", "vw-token", "viewer")].join("\n")));
   const fleet = { screen: async () => "", status: async () => ({ sessions: [], raw: "" }) } as never;
-  const server = serve({ fleet, store, agents: { agents, launcher, models: ["sonnet", "opus", "haiku"] } }, 0, { auth });
+  const server = serve({ fleet, store, agents: { agents, launcher, models: { claude: ["sonnet", "opus", "haiku"] } } }, 0, { auth });
   const call = (token: string, path: string, body?: unknown) => fetch(new URL(path, server.url), {
     method: body === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
@@ -69,7 +69,7 @@ test("an operator starts an agent; the reply comes before the launch ends and th
     expect(agent).toMatchObject({ name: "fc-one", model: "haiku", state: "starting", createdBy: "op", promptBytes: 10 });
     expect(agent.promptSha256).toBe(new Bun.CryptoHasher("sha256").update("Say READY.").digest("hex"));
     expect(launcher.started).toHaveLength(1);
-    expect(launcher.started[0]!.all).toEqual([{ name: "fc-one", cwd: agent.cwd as string, model: "haiku" }]);
+    expect(launcher.started[0]!.all).toEqual([{ name: "fc-one", kind: "claude", cwd: agent.cwd as string, model: "haiku" }]);
     launcher.finish!();
     await settle();
     const list = await (await call("vw-token", "/api/agents")).json() as { agents: { name: string; state: string; alive: boolean }[]; models: string[]; folders: string[] };
@@ -154,7 +154,7 @@ test("a browser start from another origin is refused", async () => {
 
 const opCaller = { name: "op", role: "operator" as const };
 const row = (name: string, state: "starting" | "running" | "failed" | "stopping" | "stopped") => ({
-  name, cwd: join(root, "sandbox"), model: "haiku", promptSha256: "0".repeat(64), promptBytes: 1,
+  name, kind: "claude" as const, cwd: join(root, "sandbox"), model: "haiku", promptSha256: "0".repeat(64), promptBytes: 1,
   createdBy: "op", createdAt: "2026-11-19T00:00:00.000Z", state, error: null, updatedAt: "2026-11-19T00:00:00.000Z",
 });
 
@@ -166,7 +166,7 @@ test("after a restart, starting and stopping rows are settled by whether their s
     agents.claim({ ...row(name, "starting"), state } as never);
   }
   launcher.open = new Set(["fc-a", "fc-c", "fc-e"]);
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"] });
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] } });
   expect((await uc.recover()).sort()).toEqual(["fc-a", "fc-b", "fc-c", "fc-d"]);
   const by = Object.fromEntries(agents.list().map((a) => [a.name, a]));
   expect(by["fc-a"]).toMatchObject({ state: "running", error: null });
@@ -184,7 +184,7 @@ test("a row left stopping can be stopped again", async () => {
   const agents = new Agents(store.db);
   const launcher = new FakeLauncher();
   agents.claim({ ...row("fc-s", "starting"), state: "stopping" } as never);
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] } }, opCaller);
   expect((await uc.stop("fc-s")).state).toBe("stopped");
   expect(launcher.stopped.map((s) => s.name)).toEqual(["fc-s"]);
 });
@@ -194,7 +194,7 @@ test("a failed start or stop takes the agent out of the fleet rows", async () =>
   const agents = new Agents(store.db);
   const launcher = new FakeLauncher();
   agents.claim({ ...row("fc-keep", "starting"), state: "running" } as never);
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] } }, opCaller);
   const { launched } = await uc.start(spec({ name: "fc-bad", confirm: "fc-bad" }));
   expect(launcher.started[0]!.all.map((r) => r.name)).toEqual(["fc-keep", "fc-bad"]);
   launcher.finish!(new Error("fleet start exited 1"));
@@ -211,7 +211,7 @@ test("an agent stopped while it was still starting is stopped again once its lau
   const store = new Store(":memory:");
   const agents = new Agents(store.db);
   const launcher = new FakeLauncher();
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] } }, opCaller);
   const { launched } = await uc.start(spec());
   expect((await uc.stop("fc-one")).state).toBe("stopped");
   // The launch completes after the stop: its session must not be left running.
@@ -225,7 +225,7 @@ test("an agent stopped while it was still starting is stopped again once its lau
 test("serve refuses managed agents without tokens", () => {
   const store = new Store(":memory:");
   const fleet = { screen: async () => "", status: async () => ({ sessions: [], raw: "" }) } as never;
-  expect(() => serve({ fleet, store, agents: { agents: new Agents(store.db), launcher: new FakeLauncher(), models: ["haiku"] } }, 0, {}))
+  expect(() => serve({ fleet, store, agents: { agents: new Agents(store.db), launcher: new FakeLauncher(), models: { claude: ["haiku"] } } }, 0, {}))
     .toThrow("managed agents need tokens");
 });
 
@@ -243,7 +243,7 @@ test("rows are read when the file is written, so a stop is not undone by a start
     start: (_a, rows) => write(rows), stop: (_n, rows) => write(rows), rewrite: (rows) => write(rows),
   };
   for (const name of ["fc-a", "fc-c"]) agents.claim({ ...row(name, "starting"), state: "running" } as never);
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"] }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] } }, opCaller);
   // The start is queued first, while fc-a and fc-c still run; both are stopped before its write runs.
   const { launched } = await uc.start(spec({ name: "fc-b", confirm: "fc-b", cwd: root }));
   const stopA = uc.stop("fc-a");
@@ -261,7 +261,7 @@ test("a late failure of an earlier start does not touch a newer start of the sam
   const agents = new Agents(store.db);
   const launcher = new FakeLauncher();
   let clock = 0;
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"], now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, clock++)) }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] }, now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, clock++)) }, opCaller);
   const first = await uc.start(spec());
   const finishFirst = launcher.finish!;
   // Stopped while starting, then started again before the first launch gave up.
@@ -281,7 +281,7 @@ test("a failed rewrite after a failed start is reported, not swallowed", async (
   const launcher = new FakeLauncher();
   launcher.rewrite = async () => { throw new Error("disk full"); };
   const warned: string[] = [];
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"], warn: (m) => warned.push(m) }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] }, warn: (m) => warned.push(m) }, opCaller);
   const { launched } = await uc.start(spec());
   launcher.finish!(new Error("fleet start exited 1"));
   await launched;
@@ -292,7 +292,7 @@ test("a start that finishes after its stop failed ends the session it made", asy
   const store = new Store(":memory:");
   const agents = new Agents(store.db);
   const launcher = new FakeLauncher();
-  const uc = agentUseCases({ agents, launcher, models: ["haiku"], warn: () => undefined }, opCaller);
+  const uc = agentUseCases({ agents, launcher, models: { claude: ["haiku"] }, warn: () => undefined }, opCaller);
   const { launched } = await uc.start(spec());
   launcher.stopError = new Error("tmux kill-session exited 1");
   await expect(uc.stop("fc-one")).rejects.toThrow("tmux kill-session exited 1");
@@ -302,4 +302,40 @@ test("a start that finishes after its stop failed ends the session it made", asy
   await launched;
   expect(launcher.stopped.map((s) => s.name)).toEqual(["fc-one", "fc-one"]);
   expect(launcher.open.has("fc-one")).toBe(false);
+});
+
+test("a DSH agent is started with a model from the DSH list; a host without DSH models refuses kind dsh", async () => {
+  const store = new Store(":memory:");
+  const launcher = new FakeLauncher();
+  const models = { claude: ["haiku"], dsh: ["deepseek-official/deepseek-flash"] };
+  const uc = agentUseCases({ agents: new Agents(store.db), launcher, models }, { name: "op", role: "operator" });
+  const deep = { name: "fc-deep", kind: "dsh", cwd: join(root, "sandbox"), model: "deepseek-official/deepseek-flash", prompt: "Say READY.", confirm: "fc-deep" };
+  // A Claude model for a DSH agent, and a DSH model for a Claude agent, are both refused.
+  await expect(uc.start({ ...deep, model: "haiku" })).rejects.toThrow("model must be one of deepseek-official/deepseek-flash");
+  await expect(uc.start({ ...deep, kind: "claude" })).rejects.toThrow("model must be one of haiku");
+  await expect(uc.start({ ...deep, kind: "codex" })).rejects.toThrow("kind must be one of claude, dsh");
+  const { agent, launched } = await uc.start(deep);
+  expect(agent.kind).toBe("dsh");
+  expect(launcher.started[0]!.agent.kind).toBe("dsh");
+  expect(launcher.started[0]!.all).toEqual([{ name: "fc-deep", kind: "dsh", cwd: agent.cwd, model: "deepseek-official/deepseek-flash" }]);
+  launcher.finish!();
+  await launched;
+  expect((await uc.list())[0]).toMatchObject({ name: "fc-deep", kind: "dsh", state: "running", alive: true });
+  // A start without a kind is a Claude Code start, as before DSH agents.
+  const plain = await uc.start({ name: "fc-plain", cwd: join(root, "sandbox"), model: "haiku", prompt: "x", confirm: "fc-plain" });
+  expect(plain.agent.kind).toBe("claude");
+
+  const claudeOnly = agentUseCases({ agents: new Agents(new Store(":memory:").db), launcher: new FakeLauncher(), models: { claude: ["haiku"] } }, { name: "op", role: "operator" });
+  await expect(claudeOnly.start({ ...deep, name: "fc-d2", confirm: "fc-d2" })).rejects.toThrow("kind must be one of claude");
+});
+
+test("a table made before DSH agents gains a kind column and its rows read as claude", () => {
+  const store = new Store(":memory:");
+  store.db.run(`CREATE TABLE agents (name TEXT PRIMARY KEY, cwd TEXT NOT NULL, model TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
+    prompt_bytes INTEGER NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('starting', 'running', 'failed', 'stopping', 'stopped')), error TEXT, updated_at TEXT NOT NULL)`);
+  store.db.run(`INSERT INTO agents VALUES ('fc-old', '/r/a', 'haiku', '0', 1, 'op', 't0', 'stopped', NULL, 't0')`);
+  const agents = new Agents(store.db);
+  expect(agents.get("fc-old")!.kind).toBe("claude");
+  expect(() => store.db.run("UPDATE agents SET kind = 'codex'")).toThrow();
 });

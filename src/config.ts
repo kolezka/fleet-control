@@ -1,4 +1,5 @@
 // Service options from the environment, shared by index.ts and the dev script.
+import { CLAUDE_MODEL, DSH_MODEL, type AgentModels } from "./domain/agents.ts";
 import { createPrivateKey, X509Certificate } from "node:crypto";
 import { isIP } from "node:net";
 import { Auth, AuthConfigError, isLoopback } from "./auth.ts";
@@ -140,13 +141,16 @@ export async function tlsFromEnv(
 
 // FLEET_CONTROL_AGENT_ROOTS="/Users/me/fleet-agents:/other" turns on managed agents; unset means off.
 // FLEET_CONTROL_AGENT_MODELS="sonnet,opus,haiku" narrows the model list (default those three).
-export function agentSettingsFromEnv(env: Record<string, string | undefined>): { roots: string[]; models: string[] } | undefined {
+export function agentSettingsFromEnv(env: Record<string, string | undefined>): { roots: string[]; models: AgentModels } | undefined {
   const raw = env.FLEET_CONTROL_AGENT_ROOTS?.trim();
   if (!raw) return undefined;
   const roots = raw.split(":").map((r) => r.trim()).filter(Boolean);
   for (const r of roots) if (!/^\/[A-Za-z0-9._\/-]+$/.test(r) || r === "/") throw new Error(`FLEET_CONTROL_AGENT_ROOTS: ${r} is not a plain absolute folder`);
   const models = (env.FLEET_CONTROL_AGENT_MODELS ?? "sonnet,opus,haiku").split(",").map((m) => m.trim()).filter(Boolean);
-  for (const m of models) if (!/^[a-z0-9][a-z0-9.-]{0,63}$/.test(m)) throw new Error(`FLEET_CONTROL_AGENT_MODELS: ${m} is not a model alias`);
+  for (const m of models) if (!CLAUDE_MODEL.test(m)) throw new Error(`FLEET_CONTROL_AGENT_MODELS: ${m} is not a model alias`);
   if (models.length === 0) throw new Error("FLEET_CONTROL_AGENT_MODELS is empty");
-  return { roots, models };
+  // DSH agents are offered only where they are listed: provider/model pairs, as in DSH's allowedModels.
+  const dsh = (env.FLEET_CONTROL_AGENT_DSH_MODELS ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+  for (const m of dsh) if (!DSH_MODEL.test(m)) throw new Error(`FLEET_CONTROL_AGENT_DSH_MODELS: ${m} is not provider/model`);
+  return { roots, models: dsh.length ? { claude: models, dsh } : { claude: models } };
 }

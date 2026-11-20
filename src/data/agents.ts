@@ -6,6 +6,7 @@ export class Agents {
   constructor(readonly db: Database) {
     db.run(`CREATE TABLE IF NOT EXISTS agents (
       name TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'claude' CHECK (kind IN ('claude', 'dsh')),
       cwd TEXT NOT NULL,
       model TEXT NOT NULL,
       prompt_sha256 TEXT NOT NULL,
@@ -16,9 +17,12 @@ export class Agents {
       error TEXT,
       updated_at TEXT NOT NULL
     )`);
+    // Tables made before DSH agents have no kind column; their rows are Claude Code agents.
+    const cols = db.query<{ name: string }, []>("PRAGMA table_info(agents)").all();
+    if (!cols.some((c) => c.name === "kind")) db.run("ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'claude' CHECK (kind IN ('claude', 'dsh'))");
   }
 
-  private static readonly columns = `name, cwd, model, prompt_sha256 AS promptSha256, prompt_bytes AS promptBytes,
+  private static readonly columns = `name, kind, cwd, model, prompt_sha256 AS promptSha256, prompt_bytes AS promptBytes,
     created_by AS createdBy, created_at AS createdAt, state, error, updated_at AS updatedAt`;
 
   list(): Agent[] {
@@ -31,9 +35,9 @@ export class Agents {
 
   // Inserts a new row or replaces a stopped or failed one, in one statement, so two starts cannot both win.
   claim(a: Agent): boolean {
-    const r = this.db.query(`INSERT INTO agents (name, cwd, model, prompt_sha256, prompt_bytes, created_by, created_at, state, error, updated_at)
-      VALUES ($name, $cwd, $model, $promptSha256, $promptBytes, $createdBy, $createdAt, $state, $error, $updatedAt)
-      ON CONFLICT(name) DO UPDATE SET cwd = excluded.cwd, model = excluded.model, prompt_sha256 = excluded.prompt_sha256,
+    const r = this.db.query(`INSERT INTO agents (name, kind, cwd, model, prompt_sha256, prompt_bytes, created_by, created_at, state, error, updated_at)
+      VALUES ($name, $kind, $cwd, $model, $promptSha256, $promptBytes, $createdBy, $createdAt, $state, $error, $updatedAt)
+      ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, cwd = excluded.cwd, model = excluded.model, prompt_sha256 = excluded.prompt_sha256,
         prompt_bytes = excluded.prompt_bytes, created_by = excluded.created_by, created_at = excluded.created_at,
         state = excluded.state, error = excluded.error, updated_at = excluded.updated_at
       WHERE agents.state IN ('failed', 'stopped')`).run(a);

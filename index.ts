@@ -51,7 +51,8 @@ const deps = {
     : undefined,
 };
 if (deps.agents) {
-  console.log(`managed agents in ${agentSettings!.roots.join(", ")} (models ${agentSettings!.models.join(", ")})`);
+  const offered = Object.entries(agentSettings!.models).map(([k, m]) => `${k}: ${m.join(", ")}`).join("; ");
+  console.log(`managed agents in ${agentSettings!.roots.join(", ")} (${offered})`);
   // A restart cut off any start or stop in progress; settle those rows before serving.
   try {
     const settled = await agentUseCases(deps.agents).recover();

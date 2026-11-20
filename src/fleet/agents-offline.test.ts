@@ -4,7 +4,7 @@ import { afterAll, expect, test } from "bun:test";
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AUTONOMY, FleetAgentLauncher, MANAGED_FILE } from "./agents.ts";
+import { AUTONOMY, FleetAgentLauncher, MANAGED_FILE, dshPatchFile } from "./agents.ts";
 
 const base = await mkdtemp(join(tmpdir(), "fc-agents-"));
 const socket = `fc-agents-test-${process.pid}`;
@@ -22,7 +22,7 @@ await symlink(join(base, "outside"), join(root, "link-out"));
 const confPath = join(fleetDir, "fleet.conf");
 await writeFile(confPath, `FLEET=t\nFLEET_DIR=${fleetDir}\nFLEET_TMUX_SOCKET=${socket}\nAGENTS=("probe-shell|Probe|probe.txt")\n`);
 // The fleet's synced watchdog; the launcher checks it supports agent_overrides.
-await writeFile(join(fleetDir, "watchdog.sh"), "agent_cwd() { ( declare -F agent_overrides >/dev/null && agent_overrides \"$1\" ); }\n");
+await writeFile(join(fleetDir, "watchdog.sh"), "agent_cwd() { ( declare -F agent_overrides >/dev/null && agent_overrides \"$1\" ); }\nagent_kind() { :; }\n");
 const claudeState = join(base, "claude.json");
 await writeFile(claudeState, JSON.stringify({ projects: { "/keep": { hasTrustDialogAccepted: false, x: 1 } }, other: true }));
 
@@ -34,7 +34,7 @@ await writeFile(fleetBin, `#!/usr/bin/env bash
 . "$FLEET_CONF"
 [ -n "\${SLOW_START:-}" ] && sleep "$SLOW_START"
 declare -F agent_overrides >/dev/null && agent_overrides "$2"
-{ printf 'args=%s\\n' "$*"; printf 'AGENT_CWD=%s\\n' "\${AGENT_CWD:-}"; printf 'CLAUDE_ARGS=%s\\n' "\${CLAUDE_ARGS:-}"; printf 'AGENTS=%s\\n' "\${AGENTS[*]}"; } >> "${log}"
+{ printf 'args=%s\\n' "$*"; printf 'AGENT_CWD=%s\\n' "\${AGENT_CWD:-}"; printf 'AGENT_KIND=%s\\n' "\${AGENT_KIND:-}"; printf 'DSH_ARGS=%s\\n' "\${DSH_ARGS:-}"; printf 'CLAUDE_ARGS=%s\\n' "\${CLAUDE_ARGS:-}"; printf 'AGENTS=%s\\n' "\${AGENTS[*]}"; } >> "${log}"
 [ "\${FAIL_START:-}" = 1 ] && { echo "fc-x: start FAILED: claude UI not detected after 90 s" >&2; exit 1; }
 tmux -L "$FLEET_TMUX_SOCKET" -f /dev/null new-session -d -s "$2" "sleep 300"
 echo "$2: started"
@@ -55,7 +55,7 @@ test("resolveDir accepts only real folders inside a root and follows symlinks be
 test("start writes the prompt, hard limits, managed rows and trust, then runs fleet start; agent_overrides gives each agent its values", async () => {
   const l = launcher();
   const cwd = await l.resolveDir(join(root, "sandbox"));
-  await l.start({ name: "fc-one", cwd, model: "haiku", prompt: "Say READY." }, () => [{ name: "fc-one", cwd, model: "haiku" }]);
+  await l.start({ name: "fc-one", kind: "claude", cwd, model: "haiku", prompt: "Say READY." }, () => [{ name: "fc-one", kind: "claude", cwd, model: "haiku" }]);
   expect(await readFile(join(fleetDir, "fc-one.txt"), "utf8")).toBe("Say READY.\n");
   expect((await stat(join(fleetDir, "fc-one.txt"))).mode & 0o777).toBe(0o600);
   expect(await readFile(join(fleetDir, "autonomy.txt"), "utf8")).toBe(AUTONOMY);
@@ -76,7 +76,7 @@ test("start writes the prompt, hard limits, managed rows and trust, then runs fl
   // A second start leaves the include line single and keeps a hand-edited autonomy.txt.
   await writeFile(join(fleetDir, "autonomy.txt"), "own limits\n");
   const other = await l.resolveDir(join(root, "other"));
-  await l.start({ name: "fc-two", cwd: other, model: "opus", prompt: "x" }, () => [{ name: "fc-one", cwd, model: "haiku" }, { name: "fc-two", cwd: other, model: "opus" }]);
+  await l.start({ name: "fc-two", kind: "claude", cwd: other, model: "opus", prompt: "x" }, () => [{ name: "fc-one", kind: "claude", cwd, model: "haiku" }, { name: "fc-two", kind: "claude", cwd: other, model: "opus" }]);
   expect((await readFile(confPath, "utf8")).split(MANAGED_FILE).length - 1).toBe(2);
   expect(await readFile(join(fleetDir, "autonomy.txt"), "utf8")).toBe("own limits\n");
   // Sourcing alone sets no folder or arguments; agent_overrides sets them per session, as the
@@ -90,19 +90,19 @@ test("start writes the prompt, hard limits, managed rows and trust, then runs fl
 
   // Stop ends only the named session and drops its row.
   Bun.spawnSync(["tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "probe-shell", "sleep 300"]);
-  await l.stop("fc-one", () => [{ name: "fc-two", cwd: other, model: "opus" }]);
+  await l.stop("fc-one", () => [{ name: "fc-two", kind: "claude", cwd: other, model: "opus" }]);
   const after = Bun.spawnSync(["tmux", "-L", socket, "ls", "-F", "#{session_name}"]).stdout.toString().trim().split("\n").sort();
   expect(after).toEqual(["fc-two", "probe-shell"]);
   expect(await l.running()).toEqual(new Set(["fc-two"]));
   expect(await readFile(join(fleetDir, MANAGED_FILE), "utf8")).not.toContain("fc-one");
   // Stopping a session that is already gone is not an error.
-  await l.stop("fc-one", () => [{ name: "fc-two", cwd: other, model: "opus" }]);
+  await l.stop("fc-one", () => [{ name: "fc-two", kind: "claude", cwd: other, model: "opus" }]);
 });
 
 test("a failed fleet start is reported with its last error line", async () => {
   const l = launcher({ FAIL_START: "1" });
   const cwd = await l.resolveDir(join(root, "sandbox"));
-  await expect(l.start({ name: "fc-x", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-x", cwd, model: "haiku" }]))
+  await expect(l.start({ name: "fc-x", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-x", kind: "claude", cwd, model: "haiku" }]))
     .rejects.toThrow("fleet start exited 1: fc-x: start FAILED: claude UI not detected after 90 s");
 });
 
@@ -112,7 +112,7 @@ test("a fleet that runs over ssh is refused before anything is written", async (
   await writeFile(remoteConf, `FLEET=r\nFLEET_DIR=${join(base, "remote-dir")}\nREMOTE_SSH="ssh host"\nAGENTS=()\n`);
   const l = new FleetAgentLauncher({ fleetBin, confPath: remoteConf, roots: [root], claudeState });
   const cwd = await l.resolveDir(join(root, "sandbox"));
-  await expect(l.start({ name: "fc-r", cwd, model: "haiku", prompt: "x" }, () => [])).rejects.toThrow("REMOTE_SSH");
+  await expect(l.start({ name: "fc-r", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [])).rejects.toThrow("REMOTE_SSH");
   expect(await Bun.file(join(base, "remote-dir", "fc-r.txt")).exists()).toBe(false);
 });
 
@@ -132,7 +132,7 @@ test("an unreadable Claude Code state file stops the start before any file is wr
     await writeFile(bad, text);
     const l = new FleetAgentLauncher({ fleetBin, confPath, roots: [root], claudeState: bad });
     const cwd = await l.resolveDir(join(root, "sandbox"));
-    await expect(l.start({ name: "fc-bad", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-bad", cwd, model: "haiku" }])).rejects.toThrow("could not be read");
+    await expect(l.start({ name: "fc-bad", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-bad", kind: "claude", cwd, model: "haiku" }])).rejects.toThrow("could not be read");
     expect(await Bun.file(join(fleetDir, "fc-bad.txt")).exists()).toBe(false);
     expect(await readFile(join(fleetDir, MANAGED_FILE), "utf8")).not.toContain("fc-bad");
     expect(await readFile(bad, "utf8")).toBe(text);
@@ -146,14 +146,14 @@ test("trust writes through a symlinked state file, keeps the link, and skips the
   await symlink(real, link);
   const l = new FleetAgentLauncher({ fleetBin, confPath, roots: [root], claudeState: link });
   const cwd = await l.resolveDir(join(root, "other"));
-  await l.start({ name: "fc-link", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-link", cwd, model: "haiku" }]);
+  await l.start({ name: "fc-link", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-link", kind: "claude", cwd, model: "haiku" }]);
   expect((await lstat(link)).isSymbolicLink()).toBe(true);
   expect(JSON.parse(await readFile(real, "utf8")).projects[cwd]).toEqual({ hasTrustDialogAccepted: true });
   // Already trusted: the file is not rewritten (a compact layout stays compact).
   await writeFile(real, JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }));
   const before = await readFile(real, "utf8");
   await l.stop("fc-link", () => []);
-  await l.start({ name: "fc-link", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-link", cwd, model: "haiku" }]);
+  await l.start({ name: "fc-link", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-link", kind: "claude", cwd, model: "haiku" }]);
   expect(await readFile(real, "utf8")).toBe(before);
   expect(await Bun.file(`${real}.fleet-control.lock`).exists()).toBe(false);
   await l.stop("fc-link", () => []);
@@ -162,10 +162,10 @@ test("trust writes through a symlinked state file, keeps the link, and skips the
 test("a stop does not wait for another agent's start that is still running", async () => {
   const l = launcher({ SLOW_START: "3" });
   const cwd = await l.resolveDir(join(root, "sandbox"));
-  const starting = l.start({ name: "fc-slow", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-slow", cwd, model: "haiku" }]);
+  const starting = l.start({ name: "fc-slow", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-slow", kind: "claude", cwd, model: "haiku" }]);
   await Bun.sleep(300);
   const t0 = Date.now();
-  await l.stop("fc-gone", () => [{ name: "fc-slow", cwd, model: "haiku" }]);
+  await l.stop("fc-gone", () => [{ name: "fc-slow", kind: "claude", cwd, model: "haiku" }]);
   expect(Date.now() - t0).toBeLessThan(2000);
   await starting;
   await l.stop("fc-slow", () => []);
@@ -189,7 +189,7 @@ test("a fleet whose watchdog does not know agent_overrides is refused before any
   await writeFile(join(oldDir, "watchdog.sh"), 'launch "$s" "${AGENT_CWD:-$HOME}"\n');
   const l = new FleetAgentLauncher({ fleetBin, confPath: oldConf, roots: [root], claudeState });
   const cwd = await l.resolveDir(join(root, "sandbox"));
-  await expect(l.start({ name: "fc-old", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-old", cwd, model: "haiku" }]))
+  await expect(l.start({ name: "fc-old", kind: "claude", cwd, model: "haiku", prompt: "x" }, () => [{ name: "fc-old", kind: "claude", cwd, model: "haiku" }]))
     .rejects.toThrow("does not support agent_overrides");
   expect(await Bun.file(join(oldDir, "fc-old.txt")).exists()).toBe(false);
   expect(await Bun.file(join(oldDir, MANAGED_FILE)).exists()).toBe(false);
@@ -214,4 +214,48 @@ test("an include line with trailing spaces or CRLF is not added twice", async ()
 test("the pinned agent-fleet watchdog passes the launcher's agent_overrides check", async () => {
   const pinned = await readFile(join(import.meta.dir, "..", "..", "vendor", "agent-fleet", "scripts", "watchdog.sh"), "utf8");
   expect(pinned).toContain("agent_overrides");
+});
+
+test("a DSH agent gets kind dsh, its own patch file and no Claude Code trust; the next agent keeps its own kind", async () => {
+  const l = launcher();
+  // A folder no earlier test trusted, so a trust entry written for it would show.
+  await mkdir(join(root, "deep"), { recursive: true });
+  const cwd = await l.resolveDir(join(root, "deep"));
+  const before = await readFile(claudeState, "utf8");
+  await writeFile(log, "");
+  const rows = () => [{ name: "fc-deep", kind: "dsh" as const, cwd, model: "deepseek-official/deepseek-flash" }, { name: "fc-plain", kind: "claude" as const, cwd, model: "haiku" }];
+  await l.start({ name: "fc-deep", kind: "dsh", cwd, model: "deepseek-official/deepseek-flash", prompt: "Say READY." }, rows);
+  const patch = join(fleetDir, dshPatchFile("fc-deep"));
+  expect(await readFile(patch, "utf8")).toBe([
+    "# Written by Fleet Control for one managed DSH agent.", "- id: credentials", "  disabled: false",
+    "- id: agent-default-model", '  name: "@deepseek-ai/dsh-agent-default-model"', "  config:",
+    "    provider: deepseek-official", "    model: deepseek-flash", "",
+  ].join("\n"));
+  expect((await stat(patch)).mode & 0o777).toBe(0o600);
+  // No key is written anywhere by Fleet Control: the patch only turns DSH's own store on.
+  expect(await readFile(patch, "utf8")).not.toMatch(/key|token|secret/i);
+  const calls = await readFile(log, "utf8");
+  expect(calls).toContain("AGENT_KIND=dsh");
+  expect(calls).toContain(`DSH_ARGS=--patch ${patch} --permission-mode workspace-write`);
+  expect(calls).toContain(`AGENT_CWD=${cwd}`);
+  // DSH needs no Claude Code trust entry.
+  expect(await readFile(claudeState, "utf8")).toBe(before);
+  // The Claude row in the same file still says claude, so a value set for the DSH agent cannot carry over.
+  const managed = await readFile(join(fleetDir, MANAGED_FILE), "utf8");
+  expect(managed).toContain("fc-plain) AGENT_CWD=" + cwd + '; AGENT_KIND=claude; CLAUDE_ARGS="--dangerously-skip-permissions --model haiku" ;;');
+  await l.stop("fc-deep", () => []);
+});
+
+test("a DSH start on a watchdog without a per-agent kind is refused before anything is written", async () => {
+  const oldDir = join(base, "kindless-fleet");
+  await mkdir(oldDir, { recursive: true });
+  const oldConf = join(oldDir, "fleet.conf");
+  await writeFile(oldConf, `FLEET=k\nFLEET_DIR=${oldDir}\nFLEET_TMUX_SOCKET=${socket}\nAGENTS=()\n`);
+  // agent-fleet 0.5.0: agent_overrides for folder and Claude arguments, kind fleet-wide only.
+  await writeFile(join(oldDir, "watchdog.sh"), "agent_cwd() { ( declare -F agent_overrides >/dev/null && agent_overrides \"$1\" ); }\n");
+  const l = new FleetAgentLauncher({ fleetBin, confPath: oldConf, roots: [root], claudeState });
+  const cwd = await l.resolveDir(join(root, "sandbox"));
+  await expect(l.start({ name: "fc-k", kind: "dsh", cwd, model: "deepseek-official/deepseek-flash", prompt: "x" }, () => [{ name: "fc-k", kind: "dsh", cwd, model: "deepseek-official/deepseek-flash" }]))
+    .rejects.toThrow("does not support a per-agent kind");
+  for (const f of ["fc-k.txt", dshPatchFile("fc-k"), MANAGED_FILE]) expect(await Bun.file(join(oldDir, f)).exists()).toBe(false);
 });

@@ -246,6 +246,13 @@ The owner chose option 1a: the host service only. The service on `.4` now runs `
 - **Browser (headless Chromium on `.4`, same day):** after signing in on `/login` the page listed `mac-mini` with `probe-shell`, the supervisor panel showed the stored run and request, and the `probe-shell` pane read "Read-only · live" with one read-only tmux client; after the browser closed, 0 clients were left. The log showed one `AbortError` from the page while an earlier browser session closed, nothing else. With only a bearer header and no sign-in the pane showed "Disconnected (1006)", because the browser does not send that header with the WebSocket; a test setup limit, not a service fault.
 - **Not shown by this:** the MacBook as a client, a real fleet.
 
+## Managed DSH agents (2026-11-20, branch `feat/dsh-agents`, not released)
+
+- Agents have a kind, `claude` or `dsh`. `FLEET_CONTROL_AGENT_DSH_MODELS` lists DSH `provider/model` pairs; only hosts that set it offer DSH, and the panel shows a kind picker only when a host offers both. The owner chose DSH agents on .4 only, with the same models DSH's web panel allows.
+- A DSH agent's row in `fleet-control-agents.conf` sets `AGENT_KIND=dsh` and `DSH_ARGS="--patch <fleet dir>/<name>.dsh.yml --permission-mode workspace-write"`; Claude rows now set `AGENT_KIND=claude` too, so nothing carries over between agents. The patch file (0600) enables DSH's credentials store and sets the model; keys stay in DSH's store.
+- Needs agent-fleet with per-agent `AGENT_KIND` (PR kolezka/agent-fleet#13, 0.6.0); the launcher checks the synced `watchdog.sh` for `agent_kind()` and refuses a DSH start otherwise. Old `agents` tables gain a `kind` column (default `claude`); `GET /api/agents` keeps `models` (Claude Code) and adds `kinds`.
+- Tests: src/fleet/agents-offline.test.ts (DSH rows, patch file, no trust entry, refusal on an older watchdog), src/agents.test.ts (models per kind, kind refused where not offered, old table migration), src/config-agents-offline.test.ts, web/app.test.ts (kind picker, model list per kind, posted kind). Not yet run against a real DSH.
+
 ## Managed Claude Code agents (2026-11-19, PR #190, released as `65f608c` on .4 and .15)
 
 With `FLEET_CONTROL_AGENT_ROOTS` set, an operator starts and stops Claude Code agents from the supervisor panel or `POST /api/agents` and `POST /api/agents/<name>/stop` (also through the gateway). The owner chose unattended agents (`--dangerously-skip-permissions`) limited to allowed folders (`~/fleet-agents` on both hosts), models `sonnet`, `opus`, `haiku`, an `autonomy.txt` with hard limits, the operator role and typing the name again to confirm.
