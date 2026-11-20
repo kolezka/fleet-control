@@ -53,6 +53,15 @@ Choose an authenticated private-network or secured HTTPS route before exposing t
 
 Never copy credentials into these docs, run reports, screenshots or browser code. The browser receives client authorization, not the workstation's model-provider keys or SSH private keys.
 
+## Adding a host from the MacBook gateway
+
+Start the gateway with `FLEET_CONTROL_ENROLL=1` and open `/add-host` (also linked in the sidebar). Fill in the host's Tailscale address (`https://<name>.<tailnet>.ts.net:<port>`), the gateway's name on that host and the service folder, then press "Make token and command". Run the shown command on the host (or let the gateway run it over SSH) and press Check.
+
+- **Connect** is for a host whose service already runs. The command runs `bun scripts/enroll.ts connect` in the service folder; it adds one hash line with the `operator` role and sends SIGHUP. Nothing restarts.
+- **Fresh install** clones the code to a new folder, checks out the chosen ref, installs it, makes an empty fleet and starts a new service. Make the Tailscale certificate first (`sudo tailscale cert --cert-file <cert> --key-file <key> <name>`, then `chown` both to the service user); the command refuses without it.
+
+The token stays in `token-<id>` next to the gateway config. The host only gets its hash.
+
 ## First-run and recovery gates
 
 Before live use:

@@ -15,7 +15,7 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   const calls: { path: string; init?: RequestInit }[] = [];
   const fetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
-    const value = path === "./api/hosts" ? { hosts } : respond(path, init);
+    const value = path === "./api/hosts" ? (Array.isArray(hosts) ? { hosts } : hosts) : respond(path, init);
     const status = (value as { __status?: number } | null)?.__status ?? 200;
     return { status, ok: status < 300, json: async () => value };
   };
@@ -381,4 +381,13 @@ test("a host offering DSH shows a kind picker; picking DSH swaps the model list 
   // Back to Claude Code: the DSH model is not kept.
   await type("agentKind", "claude");
   expect(b.element("agentModel").value).toBe("haiku");
+});
+
+test("the sidebar links to the add-host page only when the gateway offers it", async () => {
+  const host = { id: "mini", name: "Mini", apiBase: "/api/hosts/mini" };
+  const reply = (path: string) => (path.endsWith("/sessions") ? { sessions: [] } : path.endsWith("/agents") ? { agents: [], models: [] } : { requests: [], commands: [] });
+  const off = await browser([host], reply);
+  expect(off.element("sidebar").innerHTML).not.toContain("./add-host");
+  const on = await browser({ hosts: [host], enroll: true } as never, reply);
+  expect(on.element("sidebar").innerHTML).toContain('<a class="footlink" href="./add-host">Add a host</a>');
 });

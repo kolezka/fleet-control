@@ -58,6 +58,7 @@ let mode: "gateway" | "direct" | "" = "";
 let peers: Peer[] = [];
 let hostListError = "";
 let installer = false;
+let enroll = false;
 let inspectorOpen = true;
 const apply = (f: Fleet) => { fleet = f; };
 
@@ -104,7 +105,7 @@ function renderNav() {
   // A single host service only links to other hosts' own services; it never reads their sessions.
   const peerLinks = peers.map((p) => `<section class="hostgroup peer" aria-label="${esc(p.name)}"><a class="hostbutton" href="${esc(p.url)}" target="_blank" rel="noopener">${HOST_ICON}<span class="hostidentity"><strong>${esc(p.name)}</strong><small>Own service · open</small></span></a></section>`).join("");
   const foot = mode === "gateway"
-    ? `${installer ? '<a class="footlink" href="./install">Install on this machine</a>' : ""}<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
+    ? `${enroll ? '<a class="footlink" href="./add-host">Add a host</a>' : ""}${installer ? '<a class="footlink" href="./install">Install on this machine</a>' : ""}<span>Each host keeps its own state</span><span>This browser is a read-only client</span>`
     : `<span>Service runs on this host</span><span>This browser is a read-only client</span>`;
   setHtml($("sidebar"), `<div class="sidebarhead"><span>Hosts</span><span>${fleet.order.length + peers.length}</span></div>${groups}${peerLinks}<div class="sidebarfoot">${foot}</div>`);
 }
@@ -616,6 +617,7 @@ async function loadHostList() {
     hostListError = list.hosts.length ? "" : "The gateway lists no hosts.";
     mode = list.mode;
     installer = body.installer === true;
+    enroll = body.enroll === true;
     peers = list.peers;
     apply(setHosts(fleet, list.hosts));
     render();

@@ -32,3 +32,13 @@
 /* The apply panel is part of the task here, so on narrow windows it stacks instead of hiding. */
 @media(max-width:600px){.installpage .sidebarfoot{display:grid}}
 @media(max-width:900px){.installpage .workarea{display:flex;flex-direction:column;overflow:auto}.installpage .installmain{overflow:visible;flex-shrink:0}.installpage .inspector{position:static;width:auto;flex-shrink:0;overflow:visible;border-left:0;border-top:1px solid var(--line);padding-left:24px}}
+/* Add-host page: hosts being added sit in the right panel with their command and actions. */
+.pendinglist{list-style:none;margin:0;padding:0;display:grid;gap:18px}
+.pending{display:grid;gap:8px;border-bottom:1px solid var(--line);padding-bottom:16px}
+.pending h3{font-size:12px;display:grid;gap:2px}
+.pending h3 small{font-weight:400;overflow-wrap:anywhere}
+.pending pre.command{margin:0;padding:8px 10px;background:var(--terminal);border:1px solid var(--line);border-radius:4px;font:10px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+.pending .formactions button.primary{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.pending .formactions button.destructive{color:var(--bad)}
+.pending .note{font-size:11px;overflow-wrap:anywhere}
+#hostForm .formactions button.primary{background:var(--ink);color:var(--surface);border-color:var(--ink)}

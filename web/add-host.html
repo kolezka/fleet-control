@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fleet Control: add a host</title>
+<link rel="stylesheet" href="./deck.css">
+<link rel="stylesheet" href="./live.css">
+<link rel="stylesheet" href="./install.css">
+</head>
+<body>
+<div class="shell installpage" id="app">
+  <header class="titlebar">
+    <div class="identity">
+      <h1>Fleet Control</h1>
+      <div class="hostcontext"><strong>Add a host</strong><small>The gateway keeps the token; the host gets only its hash</small></div>
+    </div>
+  </header>
+  <div class="body">
+    <nav class="sidebar" aria-label="How to add the host">
+      <div class="sidebarhead"><span>How</span><span>2</span></div>
+      <section class="hostgroup"><button type="button" class="hostbutton" id="mode-connect" data-mode="connect" aria-pressed="true"><span class="hosticon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 20h8m-4-3v3"/></svg></span><span class="hostidentity"><strong>Connect</strong><small>A host service already runs there</small></span></button></section>
+      <section class="hostgroup"><button type="button" class="hostbutton" id="mode-fresh" data-mode="fresh" aria-pressed="false"><span class="hosticon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M12 8v6m-3-3h6M8 20h8m-4-3v3"/></svg></span><span class="hostidentity"><strong>Fresh install</strong><small>Clone the code, make a new service</small></span></button></section>
+      <div class="sidebarfoot"><a class="footlink" href="./">Back to terminals</a><span>Hosts reach this gateway over Tailscale</span></div>
+    </nav>
+    <main class="main" id="main">
+      <div class="alert" id="alert" role="alert" hidden></div>
+      <div class="workarea">
+        <section class="installmain" aria-label="Host details">
+          <form id="hostForm" class="installform" novalidate>
+            <h2 id="modeTitle">Connect a running host service</h2>
+            <p class="phase-note" id="modeNote"></p>
+            <div class="field"><label for="hostName">Name</label><input id="hostName" maxlength="80" autocomplete="off" placeholder="Mac mini"></div>
+            <div class="field"><label for="hostId">Host id</label><input id="hostId" maxlength="32" autocomplete="off" spellcheck="false" placeholder="mac-mini"><small>Lowercase letters, digits, - and _. Used in this gateway only.</small></div>
+            <div class="field"><label for="hostUrl">Address</label><input id="hostUrl" autocomplete="off" spellcheck="false" placeholder="https://mac-mini.tailnet.ts.net:4871"><small>https with the port. The certificate must be valid for this name.</small></div>
+            <div class="field"><label for="principal">Gateway name on that host</label><input id="principal" maxlength="64" autocomplete="off" spellcheck="false" placeholder="macbook-gateway"><small>The host lists this name in its tokens file with the operator role.</small></div>
+            <div class="field"><label for="dir" id="dirLabel">Service folder on that host</label><input id="dir" autocomplete="off" spellcheck="false" placeholder="~/Development/fleet-control-service"><small id="dirNote">Absolute, or under the home folder as ~/...</small></div>
+            <div id="freshFields" hidden>
+              <div class="field"><label for="ref">Git ref</label><input id="ref" autocomplete="off" spellcheck="false" placeholder="main"></div>
+              <div class="field"><label for="port">Service port</label><input id="port" inputmode="numeric" autocomplete="off" placeholder="4871"><small>Must match the port in the address.</small></div>
+              <div class="field"><label for="label">Service name</label><input id="label" autocomplete="off" spellcheck="false" placeholder="pl.raqz.fleet-control"><small>launchd label or systemd unit name. An existing one is refused.</small></div>
+              <div class="field"><label for="fleet">Fleet name</label><input id="fleet" autocomplete="off" spellcheck="false" placeholder="main"><small>Its own tmux socket, fleet-&lt;name&gt;. Starts with no agents.</small></div>
+              <div class="field"><label for="tlsCert">Certificate on that host</label><input id="tlsCert" autocomplete="off" spellcheck="false" placeholder="~/.config/fleet-control/tailnet-tls/cert.pem"></div>
+              <div class="field"><label for="tlsKey">Key on that host</label><input id="tlsKey" autocomplete="off" spellcheck="false" placeholder="~/.config/fleet-control/tailnet-tls/key.pem"><small>Make them with sudo tailscale cert, readable by the service user.</small></div>
+            </div>
+            <div class="field"><label for="ssh">SSH target (optional)</label><input id="ssh" autocomplete="off" spellcheck="false" placeholder="me@local-arch"><small>Lets this gateway run the command for you, with your SSH keys and known hosts.</small></div>
+            <div class="field"><label for="sshPort">SSH port (optional)</label><input id="sshPort" inputmode="numeric" autocomplete="off" placeholder="22"></div>
+            <div class="formactions"><button type="submit" id="begin" class="primary" disabled>Make token and command</button><span id="formStatus" role="status"></span></div>
+          </form>
+        </section>
+        <aside class="inspector coordination" aria-label="Hosts being added">
+          <header class="coordinationhead"><h2>Being added</h2><small id="pendingCount">None</small></header>
+          <div class="coordinationbody">
+            <ol class="pendinglist" id="pending" aria-live="polite"></ol>
+            <section class="applynote"><h3>What happens</h3><ul><li>The token stays on this machine, in a 0600 file next to the gateway config.</li><li>The command adds only the token's hash on the host. Pasting it twice changes nothing.</li><li>Check adds the host only after it answers with this name and the operator role.</li><li>Cancel removes the token here. If the command already ran, revoke the name on the host too.</li></ul></section>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <footer class="statusbar"><span id="status">Add a host</span><span>Single operator over Tailscale</span></footer>
+</div>
+<script type="module" src="./add-host.ts"></script>
+</body>
+</html>
