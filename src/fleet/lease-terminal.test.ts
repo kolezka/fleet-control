@@ -8,27 +8,33 @@ function fake(answers: (argv: string[]) => Partial<Run>) {
   return { calls, runner };
 }
 
-test("instance: id, creation time, active pane pid, and shell or app from who holds the pane's foreground; a new agent window is a new instance", async () => {
+test("instance: id, creation time, active pane pid, and shell or app from the pane's foreground and children; a new agent window is a new instance", async () => {
   let pane = "900";
-  let fg = "901";
+  let table = "  900     1   901\n  901   900   901\n";
   // tmux filters by the exact name; the stand-in answers only for "probe", as tmux would.
   const f = fake((a) => a.includes("list-sessions")
     ? { stdout: a.includes("#{==:#{session_name},probe}") ? `$3:1795194451:${pane}\n` : "" }
-    : a[0] === "/bin/ps" ? { stdout: ` ${fg}\n` } : {});
-  const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner);
+    : a[0] === "/bin/ps" ? { stdout: table } : {});
+  const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner, "/bin/ps");
+  // A job-control shell ran the agent in its own group.
   expect(await t.instance("probe")).toBe("$3:1795194451:900:app");
-  // The agent exits and the pane's own shell has the foreground again.
-  fg = "900";
+  // The agent exits: the pane's shell has the foreground again and no child.
+  table = "  900     1   900\n";
   expect(await t.instance("probe")).toBe("$3:1795194451:900:shell");
+  // A pane started with a command (no job control): the foreground stays the pane's group, but it has a child.
+  table = "  900     1   900\n  902   900   900\n";
+  expect(await t.instance("probe")).toBe("$3:1795194451:900:app");
   // agent-fleet restarts an agent in a new window; tmux then reports that window's pane.
-  pane = "950"; fg = "960";
+  pane = "950"; table = "  950     1   960\n  960   950   960\n";
   expect(await t.instance("probe")).toBe("$3:1795194451:950:app");
   expect(await t.instance("gone")).toBeNull();
   expect(f.calls[0]).toContain("#{==:#{session_name},probe}");
-  expect(f.calls.filter((a) => a[0] === "/bin/ps")).toEqual([["/bin/ps", "-o", "tpgid=", "-p", "900"], ["/bin/ps", "-o", "tpgid=", "-p", "900"], ["/bin/ps", "-o", "tpgid=", "-p", "950"]]);
-  // ps that fails or answers nonsense is an error, never a guess.
-  fg = "x";
+  expect(f.calls.filter((a) => a[0] === "/bin/ps").every((a) => a.join(" ") === "/bin/ps -A -o pid=,ppid=,tpgid=")).toBe(true);
+  // ps that fails, or does not list the pane, is an error, never a guess.
+  table = "  1  0  1\n";
   await expect(t.instance("probe")).rejects.toThrow("could not read the foreground of probe's pane 950");
+  const failing = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake((a) => a.includes("list-sessions") ? { stdout: "$3:1:900\n" } : { exitCode: 1, stdout: "  900 1 900\n" }).runner, "/bin/ps");
+  await expect(failing.instance("probe")).rejects.toThrow("could not read the foreground of probe's pane 900");
 });
 
 test("no tmux server means no session; any other tmux failure throws instead of ending a lease", async () => {
@@ -82,7 +88,7 @@ async function until<T>(read: () => Promise<T>, ok: (v: T) => boolean, ms = 8000
   }
 }
 
-test("real tmux: an agent behind a wrapper script reads as app, its exit to the prompt as shell, and only the exact session name matches", async () => {
+test("real tmux: an agent behind a wrapper script reads as app, its exit to the prompt as shell, a command-started pane as app, and only the exact session name matches", { timeout: 30_000 }, async () => {
   const socket = `fc-lt-${process.pid}`;
   const tmuxBin = Bun.which("tmux", { PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/bin` });
   if (!tmuxBin) { console.warn("SKIP: no tmux"); return; }
@@ -108,6 +114,9 @@ test("real tmux: an agent behind a wrapper script reads as app, its exit to the 
     expect(after).toBe(running!.replace(/:app$/, ":shell"));
     expect(await t.instance("agent-2")).toMatch(/:shell$/);
     expect(await t.instance("agen")).toBeNull();
+    // A pane started with a command has no job control; while its program runs it is not a shell prompt.
+    tm("new-session", "-d", "-s", "cmd", "bash -c 'sleep 30; exec bash'");
+    expect(await until(() => t.instance("cmd"), (v) => v?.endsWith(":app") === true)).toMatch(/:app$/);
   } finally {
     tm("kill-server");
     await (await import("node:fs/promises")).rm(dir, { recursive: true, force: true });
