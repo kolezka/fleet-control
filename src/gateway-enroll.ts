@@ -2,6 +2,7 @@
 // the identity check against the new host and the optional SSH run. The rules live in
 // application/enrollment.ts; this file only touches disk, network and processes.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -9,6 +10,11 @@ import { newToken } from "./auth.ts";
 import { enrollUseCases, type EnrollDeps, type EnrollUseCases } from "./application/enrollment.ts";
 import { EnrollError, HOST_ID } from "./domain/enrollment.ts";
 import { GatewayConfigError, parseGatewayConfig, type EnrollHandler, type GatewayConfig } from "./client-gateway.ts";
+
+// A token file from an earlier attempt. Only this error names a file in the answer.
+class TokenFileExists extends Error {
+  constructor(readonly file: string) { super(`${file} already exists`); }
+}
 
 // Adds one host to a running gateway: the in-memory list and credentials, then the config file.
 export function gatewayHostAdder(configPath: string, config: GatewayConfig) {
@@ -20,13 +26,15 @@ export function gatewayHostAdder(configPath: string, config: GatewayConfig) {
     const parsed = parseGatewayConfig(next, dirname(configPath));
     if (config.hosts.some((h) => h.id === host.id)) throw new GatewayConfigError(`host id ${host.id} is already in use`);
     const mode = (await stat(configPath)).mode & 0o777;
-    const tmp = `${configPath}.tmp-${process.pid}`;
+    const tmp = `${configPath}.tmp-${randomUUID()}`;
     const fd = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     try { await fd.writeFile(`${JSON.stringify(next, null, 2)}\n`); await fd.sync(); } finally { await fd.close(); }
     await chmod(tmp, mode);
-    await rename(tmp, configPath);
     const added = parsed.find((h) => h.id === host.id)!;
+    // The credential check can refuse; do it before the file changes so file and memory agree.
     config.credentials.add(host.id, token);
+    try { await rename(tmp, configPath); }
+    catch (e) { config.credentials.remove(host.id); await rm(tmp, { force: true }); throw e; }
     config.hosts.push({ id: added.id, name: added.name, origin: added.origin });
   };
 }
@@ -39,7 +47,9 @@ export function enrollDeps(configPath: string, config: GatewayConfig, opts: { ti
     writeToken: async (id, token) => {
       const file = join(dir, `token-${id}`);
       // wx: never overwrite a token another host still uses.
-      const fd = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      const fd = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600).catch((e: NodeJS.ErrnoException) => {
+        throw e.code === "EEXIST" || e.code === "ELOOP" ? new TokenFileExists(file) : e;
+      });
       try { await fd.writeFile(`${token}\n`); await fd.sync(); } finally { await fd.close(); }
       return file;
     },
@@ -94,7 +104,8 @@ export function enrollHandler(use: EnrollUseCases, log: (line: string) => void =
       return { status: 200, body: await use.cancel(id!) };
     } catch (e) {
       if (e instanceof EnrollError) return { status: 400, body: { error: { kind: "invalid", message: e.message } } };
-      if (e instanceof GatewayConfigError || (e as NodeJS.ErrnoException).code === "EEXIST") return { status: 409, body: { error: { kind: "conflict", message: e instanceof GatewayConfigError ? e.message : "a token file for this host id already exists next to the config" } } };
+      if (e instanceof GatewayConfigError) return { status: 409, body: { error: { kind: "conflict", message: e.message } } };
+      if (e instanceof TokenFileExists) return { status: 409, body: { error: { kind: "conflict", message: `${e.file} already exists. Another host may use it; if none does, remove it and try again.` } } };
       log(`adding a host failed: ${e instanceof Error ? e.message : String(e)}`);
       return { status: 500, body: { error: { kind: "failed", message: "adding the host failed; details are in the gateway log" } } };
     }

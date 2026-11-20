@@ -52,6 +52,10 @@ export class Credentials {
     if (!TOKEN.test(token) || [...this.#tokens.values()].includes(token)) throw new GatewayConfigError(`host "${id}": token is malformed or shared`);
     this.#tokens.set(id, token);
   }
+  // Undoes add when the config file could not be written.
+  remove(id: string) {
+    this.#tokens.delete(id);
+  }
   toJSON() {
     return {};
   }

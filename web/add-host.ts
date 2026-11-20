@@ -8,7 +8,7 @@ const TIMEOUT_MS = 15000;
 const SSH_TIMEOUT_MS = 11 * 60_000;
 const FIELDS = ["hostName", "hostId", "hostUrl", "principal", "dir", "ref", "port", "label", "fleet", "tlsCert", "tlsKey", "ssh", "sshPort"];
 const titles: Record<Mode, [string, string, string, string]> = {
-  connect: ["Connect a running host service", "Use this for a host whose service already runs. The command adds the gateway's token hash to that service's tokens file and asks it to reread the file. Nothing restarts.", "Service folder on that host", "The folder the running service starts in, absolute or ~/..."],
+  connect: ["Connect a running host service", "Use this for a host whose service already runs. The command adds the gateway's token hash to that service's tokens file and asks it to reread the file. Nothing restarts. The host must run a release that has scripts/enroll.ts; on an older one the command says so and changes nothing.", "Service folder on that host", "The folder the running service starts in, absolute or ~/..."],
   fresh: ["Install a new host service", "Use this for a machine without Fleet Control. The command clones the code, installs it, makes an empty fleet and starts a new service on its own port. Existing services, folders and sessions are refused, never changed.", "New code folder on that host", "Must not exist yet. Absolute, or ~/..."],
 };
 

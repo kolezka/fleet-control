@@ -35,6 +35,7 @@ export const SSH_TARGET = /^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}@[a-zA-Z0-9](?:[a-zA
 export const HASH = /^[0-9a-f]{64}$/;
 // A path on the other host: absolute, or under its home as ~/... . No quotes, no shell syntax.
 export const HOST_PATH = /^(?:\/|~\/)[A-Za-z0-9._\/ -]{0,250}$/;
+export const MISSING_SCRIPT = "This service folder has no scripts/enroll.ts. Update the host to a release that has it, then run this again.";
 export const REPO_URL = "https://github.com/kolezka/fleet-control.git";
 
 const fail = (m: string): never => { throw new EnrollError(m); };
@@ -66,7 +67,7 @@ export function checkEnrollRequest(input: unknown): EnrollRequest {
     out.fleet = field(r.fleet, FLEET_NAME, "fleet name");
     out.tlsCert = path(r.tlsCert, "certificate path");
     out.tlsKey = path(r.tlsKey, "key path");
-    if (new URL(url).port !== String(out.port)) fail("the URL port must be the service port");
+    if ((new URL(url).port || "443") !== String(out.port)) fail("the URL port must be the service port");
   } else {
     for (const k of ["ref", "port", "label", "fleet", "tlsCert", "tlsKey"]) if (r[k] !== undefined) fail(`${k} is only for a fresh install`);
   }
@@ -78,17 +79,18 @@ export function checkEnrollRequest(input: unknown): EnrollRequest {
   return out;
 }
 
-// The gateway only calls verified https hosts by name, at an origin with an explicit port.
+// The gateway only calls verified https hosts by name. No port means 443, as in the browser.
 export function checkHostUrl(v: unknown): string {
   if (typeof v !== "string") fail("url must be a string");
   let u: URL;
   try { u = new URL(v as string); } catch { return fail("url is not a valid URL"); }
-  if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash || u.pathname !== "/" || !u.port) fail("url must be https://name:port with nothing after the port");
+  if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash || u.pathname !== "/") fail("url must be https://name or https://name:port with nothing after it");
   return u.origin;
 }
 
-// POSIX single-quote; ~/ stays outside the quotes so the host's shell expands it.
+// POSIX single-quote; ~ and ~/ stay outside the quotes so the host's shell expands them.
 export function shellWord(s: string): string {
+  if (s === "~") return `"$HOME"`;
   if (s.startsWith("~/")) return `"$HOME"/${shellWord(s.slice(2))}`;
   return /^[A-Za-z0-9._\/=:@%+-]+$/.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`;
 }
@@ -99,7 +101,9 @@ export function pasteCommand(req: EnrollRequest, hash: string): string {
   const dir = shellWord(req.dir);
   const common = ["--principal", req.principal, "--hash", hash, "--role", "operator"];
   if (req.mode === "connect") {
-    return `cd ${dir} && bun scripts/enroll.ts connect ${common.map(shellWord).join(" ")}`;
+    // Older releases have no enroll script. Say so instead of a Bun stack trace, and never use
+    // exit: a pasted exit would close the operator's own terminal.
+    return `cd ${dir} && if [ -f scripts/enroll.ts ]; then bun scripts/enroll.ts connect ${common.map(shellWord).join(" ")}; else echo "${MISSING_SCRIPT}" >&2; false; fi`;
   }
   const args = [...common, "--port", String(req.port), "--label", req.label!, "--fleet", req.fleet!, "--tailnet-name", new URL(req.url).hostname, "--tls-cert", req.tlsCert!, "--tls-key", req.tlsKey!];
   return [

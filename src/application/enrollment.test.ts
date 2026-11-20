@@ -4,6 +4,7 @@ import { checkEnrollRequest, EnrollError, enrolledAs, pasteCommand, shellWord } 
 import { enrollUseCases, type EnrollDeps } from "./enrollment.ts";
 
 const TOKEN = "T".repeat(43);
+const MISSING = "This service folder has no scripts/enroll.ts. Update the host to a release that has it, then run this again.";
 const HASH = createHash("sha256").update(TOKEN).digest("hex");
 const connect = { id: "mini", name: "Mac mini", url: "https://mini.tail.ts.net:4871", mode: "connect", principal: "macbook-gateway", dir: "~/Development/fleet-control-service" };
 const fresh = { ...connect, id: "arch", url: "https://arch.tail.ts.net:4872", mode: "fresh", dir: "~/fc scratch", ref: "main", port: 4872, label: "fc-scratch", fleet: "scratch", tlsCert: "~/.config/fleet-control/tailnet-tls/cert.pem", tlsKey: "~/.config/fleet-control/tailnet-tls/key.pem" };
@@ -40,7 +41,6 @@ test("the request is checked field by field; unknown and wrong-mode fields are r
     [{ ...connect, extra: 1 }, /unknown field extra/],
     [{ ...connect, id: "Mini" }, /host id/],
     [{ ...connect, url: "http://mini.tail.ts.net:4871" }, /https/],
-    [{ ...connect, url: "https://mini.tail.ts.net" }, /https/],
     [{ ...connect, url: "https://u:p@mini.tail.ts.net:4871" }, /https/],
     [{ ...connect, url: "https://mini.tail.ts.net:4871/api" }, /https/],
     [{ ...connect, dir: "relative/path" }, /folder/],
@@ -63,7 +63,7 @@ test("the request is checked field by field; unknown and wrong-mode fields are r
 
 test("the paste command carries the hash, never the token, and quotes every value", () => {
   const c = pasteCommand(checkEnrollRequest(connect), HASH);
-  expect(c).toBe(`cd "$HOME"/Development/fleet-control-service && bun scripts/enroll.ts connect --principal macbook-gateway --hash ${HASH} --role operator`);
+  expect(c).toBe(`cd "$HOME"/Development/fleet-control-service && if [ -f scripts/enroll.ts ]; then bun scripts/enroll.ts connect --principal macbook-gateway --hash ${HASH} --role operator; else echo "${MISSING}" >&2; false; fi`);
   const f = pasteCommand(checkEnrollRequest(fresh), HASH);
   expect(f).toStartWith(`git clone --quiet https://github.com/kolezka/fleet-control.git "$HOME"/'fc scratch' && cd "$HOME"/'fc scratch' && git checkout --quiet main && `);
   expect(f).toContain("--tailnet-name arch.tail.ts.net --tls-cert \"$HOME\"/.config/fleet-control/tailnet-tls/cert.pem");
@@ -112,6 +112,23 @@ test("an id in use is refused before a token is made; cancel removes the token f
   expect(await use.cancel("mini")).toEqual({ cancelled: "mini" });
   expect(f.files.size).toBe(0);
   expect(use.list()).toEqual([]);
+});
+
+test("review fixes: home folder, a host on 443, the release check in the connect command", () => {
+  // "~/" must mean the home folder, never a literal folder named ~.
+  const home = pasteCommand(checkEnrollRequest({ ...connect, dir: "~/" }), HASH);
+  expect(home).toStartWith(`cd "$HOME" && `);
+  expect(home).not.toContain("'~'");
+  expect(shellWord("~")).toBe(`"$HOME"`);
+  // https without a port is 443 and can be added; an explicit :443 means the same.
+  expect(checkEnrollRequest({ ...connect, url: "https://mini.tail.ts.net" }).url).toBe("https://mini.tail.ts.net");
+  expect(checkEnrollRequest({ ...connect, url: "https://mini.tail.ts.net:443" }).url).toBe("https://mini.tail.ts.net");
+  expect(checkEnrollRequest({ ...fresh, url: "https://arch.tail.ts.net", port: 443 }).port).toBe(443);
+  // A host on a release without the enroll script gets a clear message, not a Bun stack trace.
+  // It must not use exit: a pasted exit would close the operator's own terminal.
+  expect(home).toContain(`if [ -f scripts/enroll.ts ]; then bun scripts/enroll.ts connect `);
+  expect(home).toEndWith(`; else echo "${MISSING}" >&2; false; fi`);
+  expect(home).not.toContain("exit");
 });
 
 test("an unreachable host is a reason, not an error, and adds nothing", async () => {

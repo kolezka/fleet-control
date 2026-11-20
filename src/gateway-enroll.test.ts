@@ -81,7 +81,10 @@ test("connect end to end: token kept here, hash pasted there, host added only af
   expect(config.hosts.map((h) => h.id)).toEqual(["old"]);
 
   // What the pasted command does on the host: add the hash, then SIGHUP (here: the reload it triggers).
-  const argv = pending.command.split(" connect ")[1].split(" ");
+  // The values are plain words (name, hex hash, role), so the shell would split them the same way.
+  const m = /^cd \/srv\/fleet-control-service && if \[ -f scripts\/enroll\.ts \]; then bun scripts\/enroll\.ts connect ([a-z0-9 -]+); else /.exec(pending.command);
+  expect(m).not.toBeNull();
+  const argv = m![1]!.split(" ");
   const args = parseArgs(argv, ["principal", "hash", "role"]);
   expect(connect(args, { tokens: hostTokens, pid: 1 }, () => void reloadTokens(auth, hostTokens, (l) => reloads.push(l)))).toMatch(/^Added macbook-gateway \(operator\)/);
   await Bun.sleep(50);
@@ -122,5 +125,7 @@ test("a token file left from an earlier attempt is never overwritten", async () 
   chmodSync(stale, 0o600);
   const r = await post("", { ...request, id: "stale" });
   expect(r.status).toBe(409);
+  // The answer names the file, so the operator knows what to check and remove.
+  expect((await r.json()).error.message).toBe(`${stale} already exists. Another host may use it; if none does, remove it and try again.`);
   expect(readFileSync(stale, "utf8")).toBe("keep-me-0000000000000000\n");
 });
