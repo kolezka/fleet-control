@@ -171,3 +171,61 @@ test("orchestrators are refused where the host has no token store, and for DSH a
     s.server.stop(true);
   }
 });
+
+test("a hand-made token under an agent's name is never replaced or removed, and the start that would is refused", async () => {
+  const s = await setup();
+  try {
+    const mine = newToken();
+    await writeFile(s.tokensFile, `${await readFile(s.tokensFile, "utf8")}${tokenLine("fc-orch", mine, "operator")}\n`);
+    s.auth.replace(await Auth.fromFile(s.tokensFile));
+    const before = await readFile(s.tokensFile, "utf8");
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect(s.agents.get("fc-orch")).toMatchObject({ state: "failed" });
+    expect(s.agents.get("fc-orch")!.error).toContain("fc-orch is a token for role operator, not a managed agent");
+    expect(s.launcher.given.has("fc-orch")).toBe(false);
+    // Neither the failed start nor a service start nor a direct revoke touches the line.
+    await agentUseCases({ agents: s.agents, launcher: s.launcher, models: { claude: ["haiku"] }, tokens: s.tokens }).recover();
+    await s.tokens.revoke("fc-orch");
+    expect(await readFile(s.tokensFile, "utf8")).toBe(before);
+    expect((await s.rest(mine, "/api/whoami")).status).toBe(200);
+  } finally {
+    s.server.stop(true);
+  }
+});
+
+test("a stop whose token cannot be revoked still ends the session and says the token is left", async () => {
+  const s = await setup();
+  try {
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect(s.launcher.open.has("fc-orch")).toBe(true);
+    const revoke = s.tokens.revoke.bind(s.tokens);
+    s.tokens.revoke = async () => { throw new Error("tokens file is locked"); };
+    const r = await s.rest(s.op, "/api/agents/fc-orch/stop", {});
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(s.launcher.open.has("fc-orch")).toBe(false);
+    expect(s.agents.get("fc-orch")!.state).toBe("failed");
+    expect(s.agents.get("fc-orch")!.error).toContain("token was not revoked (tokens file is locked); stop again to retry");
+    // A second stop takes the token back.
+    s.tokens.revoke = revoke;
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    expect(await readFile(s.tokensFile, "utf8")).not.toContain("fc-orch");
+  } finally {
+    s.server.stop(true);
+  }
+});
+
+test("a failed start whose token cannot be revoked shows that on the row", async () => {
+  const s = await setup();
+  try {
+    s.launcher.start = async () => { throw new Error("claude UI not detected"); };
+    s.tokens.revoke = async () => { throw new Error("tokens file is locked"); };
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect(s.agents.get("fc-orch")).toMatchObject({ state: "failed" });
+    expect(s.agents.get("fc-orch")!.error).toContain("claude UI not detected; token not revoked: tokens file is locked");
+  } finally {
+    s.server.stop(true);
+  }
+});

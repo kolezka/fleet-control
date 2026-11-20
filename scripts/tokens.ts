@@ -26,9 +26,15 @@ const lineRole = (raw: string): Role | undefined => checkRole(raw.trim().split(/
 
 // Pure: returns the new file text. Comments and order are kept; the result must parse.
 // `role` is the role for add (none writes an old-style agent line) and the new role for "role".
+// Managed agents' names (fc-...) carry only agent tokens; the service replaces and removes them on its own.
+const MANAGED_NAME = /^fc-[a-z0-9][a-z0-9-]{0,30}$/;
+
 export function change(action: Change["action"], name: string, text: string, token = newToken(), role?: string): Change {
   tokenLine(name, token); // validates the name
   const wanted = checkRole(role);
+  if ((action === "add" || action === "role") && MANAGED_NAME.test(name) && wanted !== undefined && wanted !== "agent") {
+    throw new AuthConfigError(`${name}: names starting with fc- are kept for managed agents and take only the agent role`);
+  }
   if (action === "role" && !wanted) throw new AuthConfigError(`role must be one of ${ROLES.join(", ")}`);
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const at = lines.findIndex((l) => lineName(l) === name);

@@ -82,6 +82,12 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         const token = spec.orchestrator ? await deps.tokens!.issue(spec.name) : undefined;
         await deps.launcher.start({ ...spec, cwd }, fleetRows, token);
       };
+      // Records a token the host could not take back, so the page shows it and not only the log.
+      const unrevoked = (e: unknown) => {
+        const row = deps.agents.get(spec.name);
+        if (row?.createdAt === at) deps.agents.transition(spec.name, [row.state], row.state, `${row.error ?? "start failed"}; token not revoked: ${message(e)}`, now(), at);
+        warn(`agent ${spec.name}: token not revoked after a failed start: ${message(e)}`);
+      };
       const launched = launch().then(
         async () => {
           if (deps.agents.transition(spec.name, ["starting"], "running", null, now(), at)) return;
@@ -93,7 +99,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         async (e) => {
           if (deps.agents.transition(spec.name, ["starting"], "failed", message(e), now(), at)) {
             await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${spec.name}: fleet rows not rewritten after a failed start: ${message(e2)}`));
-            await revoke(agent).catch((e2) => warn(`agent ${spec.name}: token not revoked after a failed start: ${message(e2)}`));
+            await revoke(agent).catch(unrevoked);
           }
         },
       );
@@ -107,10 +113,12 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if (!stoppable(agent.state)) throw new AgentError("conflict", `agent ${name} is ${agent.state}`);
       if (!deps.agents.transition(name, [agent.state], "stopping", null, now())) throw new AgentError("conflict", `agent ${name} changed; read it again`);
       try {
-        // The token goes first, so the agent loses the host before its session ends.
-        await revoke(agent);
+        // The token goes first, so the agent loses the host before its session ends. If it cannot be taken
+        // back the session still ends, and the row says the token is left so a second stop retries it.
+        const revoked = await revoke(agent).then(() => null, (e: unknown) => e);
         // The row is stopping now, so the rows written here already leave it out.
         await deps.launcher.stop(name, fleetRows);
+        if (revoked !== null) throw new AgentError("unavailable", `the session ended but its token was not revoked (${message(revoked)}); stop again to retry`);
       } catch (e) {
         if (deps.agents.transition(name, ["stopping"], "failed", `stop failed: ${message(e)}`, now())) {
           await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${name}: fleet rows not rewritten after a failed stop: ${message(e2)}`));

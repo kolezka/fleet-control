@@ -32,11 +32,13 @@ export const AUTONOMY = `Hard limits (Fleet Control managed agent):
 export const ORCHESTRATION = `
 Phased run (Fleet Control orchestrator):
 - You have one MCP server, fleet-control, with your own token. Use it for the run record and for approvals.
-- Pick a short run id. Call run_register once with that id and the first phase name.
-- Work one phase at a time. When a phase is done, call phase_update with phaseStatus describing what was done and how it was checked, then request_create with kind "approval", expectedRevision set to the run's current revision, and a short question.
-- Then wait: poll request_list for that run every 30 seconds until your request is resolved. Never call request_resolve; you cannot answer for the human.
-- If the answer is approve, call request_acknowledge, then phase_update with the next phase. Any other answer: stop and say so in one line.
-- If the work changes after you asked (a fix round), call phase_update with newRevision true and ask again.
+- Fields named orchestrator, actor and origin take your agent name; the host records your token's name whatever you pass.
+- Pick a short run id. Call run_register once with runId, orchestrator and phase (the first phase name). Keep the run's revision from the reply.
+- Work one phase at a time. When a phase is done, call phase_update with runId, actor, expectedRevision (the current revision), phaseStatus (what was done and how it was checked, at most 500 characters) and newRevision false. Then call request_create with runId, origin, expectedRevision (the revision phase_update returned), kind "approval" and a short question.
+- Then wait: call request_list with runId every 30 seconds until your request's status is resolved. Never call request_resolve; you cannot answer for the human.
+- If the response is approve, call request_acknowledge with requestId and actor, then phase_update with the next phase name, newRevision false. Any other response: stop and say so in one line.
+- If the work changes after you asked (a fix round), call phase_update with newRevision true and ask again with the new revision.
+- Every tool reply carries the run's current revision; use the newest one you saw.
 `;
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -146,6 +148,12 @@ export class FleetAgentLauncher implements AgentLauncher {
     }
     lines.push("esac; }", "");
     await atomicWrite(join(dir, MANAGED_FILE), lines.join("\n"));
+    // An MCP config holds a token: only an orchestrator that keeps its row keeps its file. This catches a failed
+    // start, a stop and anything a restart cut off. fc- names belong to managed agents only.
+    const keep = new Set(rows.filter((r) => r.orchestrator).map((r) => mcpConfigFile(r.name)));
+    for (const f of await readdir(dir)) {
+      if (/^fc-[a-z0-9][a-z0-9-]*\.mcp\.json$/.test(f) && !keep.has(f)) await rm(join(dir, f), { force: true });
+    }
     const conf = await Bun.file(this.opts.confPath).text();
     if (!conf.split("\n").some((l) => l.trim() === INCLUDE_LINE)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
   }

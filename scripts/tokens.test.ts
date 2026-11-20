@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Auth, parseTokens, tokenLine } from "../src/auth.ts";
+import { Auth, newToken, parseTokens, tokenLine } from "../src/auth.ts";
 import { change, withLock } from "./tokens.ts";
 
 const dirs: string[] = [];
@@ -133,4 +133,13 @@ test("roles: add with a role, rotate keeps it, role changes it, list shows it, a
   expect(run(["role", "web", "admin", file]).exitCode).toBe(1);
   const listed = run(["list", file]).stdout.toString();
   expect(listed).toBe("web operator\nmac agent\ngw viewer\n");
+});
+
+test("fc- names are kept for managed agents: add or role with another role is refused, agent is allowed", () => {
+  const text = `${tokenLine("op", newToken(), "operator")}\n`;
+  expect(() => change("add", "fc-orch", text, undefined, "operator")).toThrow("names starting with fc- are kept for managed agents");
+  expect(() => change("add", "fc-orch", text, undefined, "viewer")).toThrow("names starting with fc- are kept");
+  const agent = change("add", "fc-orch", text, undefined, "agent").text;
+  expect(() => change("role", "fc-orch", agent, undefined, "operator")).toThrow("names starting with fc- are kept");
+  expect(change("add", "fc_orch", text, undefined, "operator").text).toContain("fc_orch");
 });

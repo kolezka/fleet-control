@@ -295,3 +295,35 @@ test("an orchestrator gets a 0600 MCP config with its token and only that MCP se
   expect(await readFile(join(fleetDir, "fc-orch.txt"), "utf8")).toBe("x\n");
   await l.stop("fc-orch", () => []);
 });
+
+test("every rewrite removes MCP configs of agents that keep no orchestrator row, and nothing else", async () => {
+  const l = new FleetAgentLauncher({ fleetBin, confPath, roots: [root], claudeState, mcpUrl: "https://h.example:4871/mcp" });
+  const cwd = await l.resolveDir(join(root, "sandbox"));
+  const left = join(fleetDir, mcpConfigFile("fc-gone"));
+  const kept = join(fleetDir, mcpConfigFile("fc-keep"));
+  const other = join(fleetDir, "notes.mcp.json");
+  for (const f of [left, kept, other]) await writeFile(f, "{}", { mode: 0o600 });
+  // A failed start rewrites the rows without its agent, and so does a service start.
+  await l.rewrite(() => [{ name: "fc-keep", kind: "claude", cwd, model: "haiku", orchestrator: true }]);
+  expect(await Bun.file(left).exists()).toBe(false);
+  expect(await Bun.file(kept).exists()).toBe(true);
+  expect(await Bun.file(other).exists()).toBe(true);
+  await l.rewrite(() => []);
+  expect(await Bun.file(kept).exists()).toBe(false);
+  await rm(other);
+});
+
+test("the orchestrator brief names every required field of the MCP tools it tells the agent to call", () => {
+  const required: Record<string, string[]> = {
+    run_register: ["runId", "orchestrator", "phase"],
+    phase_update: ["runId", "actor", "expectedRevision", "phaseStatus", "newRevision"],
+    request_create: ["runId", "origin", "expectedRevision", "kind", "question"],
+    request_acknowledge: ["requestId", "actor"],
+  };
+  for (const [tool, fields] of Object.entries(required)) {
+    const line = ORCHESTRATION.split("\n").find((l) => new RegExp(`${tool}( once)? with`).test(l));
+    expect(line, tool).toBeDefined();
+    for (const f of fields) expect(line, `${tool} ${f}`).toContain(f);
+  }
+  expect(ORCHESTRATION).toContain("newRevision false");
+});
