@@ -8,6 +8,8 @@ export type Run = { exitCode: number; stdout: string; stderr: string };
 // Session names must be this plain: it is what keeps them safe inside tmux's format filter below.
 const PLAIN = /^[A-Za-z0-9._-]+$/;
 const TIMEOUT_MS = 10_000;
+// Shells a pane can sit at a prompt in. A pane whose own process is anything else runs that program.
+const SHELL = /^(sh|bash|zsh|fish|dash|ksh|mksh|tcsh|csh|nu|xonsh|pwsh)$/;
 
 async function run(argv: string[], stdin?: Uint8Array): Promise<Run> {
   const p = Bun.spawn(argv, { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, TMUX: undefined } });
@@ -53,10 +55,12 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
     (e) => { raw = undefined; throw e; },
   ));
   return {
-    // The session's id, creation time and the pid of its active pane, then "shell" or "app": "shell" when the
-    // pane's own first process holds the terminal's foreground and has no child (a shell at its prompt), "app"
-    // otherwise: something it started holds the foreground (the agent, also behind a wrapper script), or it
-    // runs a child without job control (a pane started with a command such as `bash -c "claude; exec bash"`). agent-fleet starts every agent, also a
+    // The session's id, creation time and the pid of its active pane, then "shell" or "app". "shell" means a
+    // shell at its prompt: the pane's own process is a shell, holds the terminal's foreground, and has no
+    // child in its own process group. Otherwise "app": something it started holds the foreground (the agent,
+    // also behind a wrapper script), a pane started with a command runs it without job control (`bash -c
+    // "claude; exec bash"`: the child stays in the pane's group), or the pane's own process is the program.
+    // Background jobs of a shell at its prompt have their own group, so they do not count. agent-fleet starts every agent, also a
     // restart, in a new window, so a restarted agent has a new pane pid. A command typed into the same pane
     // does not change it; an agent that exits leaves the pane at the prompt, which ends the lease.
     async instance(session) {
@@ -72,18 +76,21 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
       if (lines.length === 0) return null;
       const m = lines.length === 1 ? /^\$\d+:\d+:(\d+)$/.exec(lines[0]!) : null;
       if (!m) throw new Error(`tmux could not describe ${session}: ${lines.join(" ").slice(0, 80)}`);
-      // One ps call: the pane process's terminal foreground group and whether it has children.
+      // One ps call: the pane process's foreground group and name, and its children in its own group.
       const pane = m[1]!;
-      const ps = await runner([psBin, "-A", "-o", "pid=,ppid=,tpgid="]);
+      const ps = await runner([psBin, "-A", "-o", "pid=,ppid=,pgid=,tpgid=,comm="]);
       let tpgid: string | undefined;
-      let children = 0;
+      let comm = "";
+      let groupChildren = 0;
       for (const row of ps.stdout.split("\n")) {
-        const [pid, ppid, tp] = row.trim().split(/\s+/);
-        if (pid === pane) tpgid = tp;
-        if (ppid === pane) children++;
+        const [pid, ppid, pgid, tp, ...name] = row.trim().split(/\s+/);
+        if (pid === pane) { tpgid = tp; comm = name.join(" "); }
+        if (ppid === pane && pgid === pane) groupChildren++;
       }
       if (ps.exitCode !== 0 || tpgid === undefined || !/^-?\d+$/.test(tpgid)) throw new Error(`could not read the foreground of ${session}'s pane ${pane}`);
-      return `${lines[0]}:${tpgid === pane && children === 0 ? "shell" : "app"}`;
+      // Login shells show as "-zsh"; some systems print a path.
+      const shell = SHELL.test(comm.replace(/^-/, "").split("/").pop() ?? "");
+      return `${lines[0]}:${shell && tpgid === pane && groupChildren === 0 ? "shell" : "app"}`;
     },
     async type(session, bytes) {
       const buffer = `fcinput-${process.pid}-${crypto.randomUUID()}`;
