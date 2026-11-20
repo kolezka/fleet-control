@@ -274,3 +274,50 @@ test("a stop whose revoke and kill both fail names both", async () => {
     s.server.stop(true);
   }
 });
+
+test("a service start reads the tokens file once and revokes only stopped names that still have an agent line", async () => {
+  const s = await setup();
+  try {
+    for (const name of ["fc-a", "fc-b", "fc-c"]) {
+      expect((await s.rest(s.op, "/api/agents", spec({ name, confirm: name }))).status).toBe(202);
+      await settle();
+      expect((await s.rest(s.op, "/api/agents/" + name + "/stop", {})).status).toBe(200);
+    }
+    // One line left behind for fc-b, as a cut-off stop would leave it.
+    const leftover = newToken();
+    await writeFile(s.tokensFile, `${await readFile(s.tokensFile, "utf8")}${tokenLine("fc-b", leftover, "agent")}\n`);
+    s.auth.replace(await Auth.fromFile(s.tokensFile));
+    const revoked: string[] = [];
+    let reads = 0;
+    const tokens = { issue: s.tokens.issue.bind(s.tokens), held: async () => { reads++; return s.tokens.held(); }, revoke: async (n: string) => { revoked.push(n); return s.tokens.revoke(n); } };
+    await agentUseCases({ agents: s.agents, launcher: s.launcher, models: { claude: ["haiku"] }, tokens }).recover();
+    expect(reads).toBe(1);
+    expect(revoked).toEqual(["fc-b"]);
+    expect((await s.rest(leftover, "/api/whoami")).status).toBe(401);
+  } finally {
+    s.server.stop(true);
+  }
+});
+
+test("a stop that lands before the start issued its token still leaves no token once the start finishes", async () => {
+  const s = await setup();
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const issue = s.tokens.issue.bind(s.tokens);
+    let token = "";
+    s.tokens.issue = async (n) => { await gate; token = await issue(n); return token; };
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    release();
+    await settle();
+    await settle();
+    expect(token).toHaveLength(43);
+    expect((await s.rest(token, "/api/whoami")).status).toBe(401);
+    expect(await readFile(s.tokensFile, "utf8")).not.toContain("fc-orch ");
+    expect(s.launcher.open.has("fc-orch")).toBe(false);
+  } finally {
+    s.server.stop(true);
+  }
+});

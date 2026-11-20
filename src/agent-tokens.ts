@@ -40,6 +40,11 @@ export class FileAgentTokens implements AgentTokens {
     return token;
   }
 
+  async held(): Promise<Set<string>> {
+    const text = readFileSync(this.file, "utf8");
+    return new Set([...parseTokens(text)].filter(([n, e]) => AGENT_NAME.test(n) && e.role === "agent").map(([n]) => n));
+  }
+
   async revoke(name: string): Promise<void> {
     // Only an agent line: a hand-made line with another role under this name is left alone.
     await this.edit(name, (text, role) => (role === "agent" ? change("revoke", name, text).text : null));

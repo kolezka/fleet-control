@@ -90,6 +90,8 @@ export type FleetRow = Pick<Agent, "name" | "kind" | "cwd" | "model" | "orchestr
 export interface AgentTokens {
   issue(name: string): Promise<string>;
   revoke(name: string): Promise<void>;
+  // Names that have an agent line now, read once without the lock (for the service-start sweep).
+  held(): Promise<Set<string>>;
 }
 
 // What the host needs from the machine to run agents. src/fleet/agents.ts implements it over agent-fleet.

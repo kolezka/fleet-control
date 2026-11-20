@@ -52,8 +52,10 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         if (next && deps.agents.transition(a.name, [a.state], next.state, next.error, now())) changed.push(a.name);
       }
       // A token left by a stop or failed start that a restart cut off.
+      // Only names that have a line: one read, so a held lock costs a wait per leftover token, not per row.
+      const held = deps.tokens ? await deps.tokens.held().catch((e) => { warn(`agent tokens not read: ${message(e)}`); return new Set<string>(); }) : new Set<string>();
       for (const a of deps.agents.list()) {
-        if (!keepsFleetRow(a.state)) await revoke(a).catch((e) => warn(`agent ${a.name}: token not revoked: ${message(e)}`));
+        if (!keepsFleetRow(a.state) && held.has(a.name)) await revoke(a).catch((e) => warn(`agent ${a.name}: token not revoked: ${message(e)}`));
       }
       await deps.launcher.rewrite(fleetRows);
       return changed;
@@ -95,6 +97,8 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
           // Stopped (or its stop failed) while it was starting: the stop may have run before the session
           // existed. End the session this launch made, unless a newer start owns the name now.
           if (deps.agents.get(spec.name)?.createdAt !== at) return;
+          // That stop ran before this launch issued its token, so take the token back here too.
+          await revoke(agent).catch((e) => warn(`agent ${spec.name}: token not revoked after a late start: ${message(e)}`));
           await deps.launcher.stop(spec.name, fleetRows).catch((e) => warn(`agent ${spec.name}: stop after a late start failed: ${message(e)}`));
         },
         async (e) => {
