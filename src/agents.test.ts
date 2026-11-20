@@ -69,7 +69,7 @@ test("an operator starts an agent; the reply comes before the launch ends and th
     expect(agent).toMatchObject({ name: "fc-one", model: "haiku", state: "starting", createdBy: "op", promptBytes: 10 });
     expect(agent.promptSha256).toBe(new Bun.CryptoHasher("sha256").update("Say READY.").digest("hex"));
     expect(launcher.started).toHaveLength(1);
-    expect(launcher.started[0]!.all).toEqual([{ name: "fc-one", kind: "claude", cwd: agent.cwd as string, model: "haiku" }]);
+    expect(launcher.started[0]!.all).toEqual([{ name: "fc-one", kind: "claude", cwd: agent.cwd as string, model: "haiku", orchestrator: false }]);
     launcher.finish!();
     await settle();
     const list = await (await call("vw-token", "/api/agents")).json() as { agents: { name: string; state: string; alive: boolean }[]; models: string[]; folders: string[] };
@@ -317,7 +317,7 @@ test("a DSH agent is started with a model from the DSH list; a host without DSH 
   const { agent, launched } = await uc.start(deep);
   expect(agent.kind).toBe("dsh");
   expect(launcher.started[0]!.agent.kind).toBe("dsh");
-  expect(launcher.started[0]!.all).toEqual([{ name: "fc-deep", kind: "dsh", cwd: agent.cwd, model: "deepseek-official/deepseek-flash" }]);
+  expect(launcher.started[0]!.all).toEqual([{ name: "fc-deep", kind: "dsh", cwd: agent.cwd, model: "deepseek-official/deepseek-flash", orchestrator: false }]);
   launcher.finish!();
   await launched;
   expect((await uc.list())[0]).toMatchObject({ name: "fc-deep", kind: "dsh", state: "running", alive: true });

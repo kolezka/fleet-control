@@ -257,7 +257,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           const agents = agentsFor(who);
           if (!agents) return noAgents();
           // models: the Claude Code list, as before DSH agents; kinds: models per kind offered here.
-          try { return Response.json({ agents: await agents.list(), models: agents.models.claude ?? [], kinds: agents.models, folders: await agents.folders() }); } catch (e) { return commandError(e); }
+          try { return Response.json({ agents: await agents.list(), models: agents.models.claude ?? [], kinds: agents.models, orchestrators: agents.orchestrators, folders: await agents.folders() }); } catch (e) { return commandError(e); }
         }),
         POST: guard(async (req, _s, who) => {
           const agents = agentsFor(who);
