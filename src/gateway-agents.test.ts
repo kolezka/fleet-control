@@ -54,3 +54,15 @@ test("the gateway refuses agent writes without Origin and anything outside the a
   expect((await fetch(url("agents/fc-gw/stop"))).status).toBe(405);
   expect(calls.filter((c) => c.includes("fc-x"))).toEqual([]);
 });
+
+test("Stop sent exactly as the page sends it goes through the gateway", async () => {
+  expect((await post("agents", { name: "fc-gw", cwd: "/r/sandbox", model: "haiku", prompt: "hi", confirm: "fc-gw" })).status).toBe(202);
+  await Bun.sleep(10);
+  // web/app.ts stopAgent: POST with a JSON content type and an empty object body.
+  const r = await fetch(url("agents/fc-gw/stop"), { method: "POST", headers: { origin: gateway.url.origin, "content-type": "application/json" }, body: "{}" });
+  expect(r.status).toBe(200);
+  expect(calls.at(-1)).toBe("stop fc-gw");
+  // A bodiless POST without a content type is what the page used to send: refused before the host.
+  const bare = await fetch(url("agents/fc-gw/stop"), { method: "POST", headers: { origin: gateway.url.origin } });
+  expect(bare.status).toBe(415);
+});

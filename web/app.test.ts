@@ -18,6 +18,10 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   const calls: { path: string; init?: RequestInit }[] = [];
   const fetch = async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
+    // The gateway refuses any POST that is not JSON (src/client-gateway.ts); answer the page the same way.
+    if (init?.method === "POST" && new Headers(init.headers).get("content-type") !== "application/json") {
+      return { status: 415, ok: false, json: async () => ({ error: { code: "unsupported_media_type", message: "content-type must be application/json" } }) };
+    }
     const value = path === "./api/hosts" ? (Array.isArray(hosts) ? { hosts } : hosts) : respond(path, init);
     const status = (value as { __status?: number } | null)?.__status ?? 200;
     return { status, ok: status < 300, json: async () => value };

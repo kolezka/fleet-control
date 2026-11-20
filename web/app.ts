@@ -599,7 +599,7 @@ async function stopAgent(hostId: string, name: string) {
   v.busy = true;
   v.notice = `Stopping ${name} on ${host.name}`;
   renderAgents(selectedHostState(fleet));
-  const { status, outcome } = await hostCall(host, `/agents/${encodeURIComponent(name)}/stop`, { method: "POST" }, WRITE_TIMEOUT_MS);
+  const { status, outcome } = await hostCall(host, `/agents/${encodeURIComponent(name)}/stop`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, WRITE_TIMEOUT_MS);
   v.busy = false;
   const state = outcome.ok ? (outcome.data as { agent?: { state?: string } }).agent?.state : undefined;
   v.notice = outcome.ok ? `${host.name}: ${name} ${state === "stopped" ? "stopped, session closed" : `is ${state ?? "in an unknown state"}`}.`
