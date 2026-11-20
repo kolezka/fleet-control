@@ -144,7 +144,10 @@ export function freshPlan(a: Args, ctx: { code: string; bun: string; home: strin
   } else if (ctx.platform === "linux") {
     unit = join(ctx.home, ".config/systemd/user", `${a.label}.service`);
     const q = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
-    files.push({ path: unit, mode: 0o644, content: `[Unit]\nDescription=Fleet Control host service ${a.label} (added from the gateway)\nAfter=network-online.target tailscaled.service\n\n[Service]\nType=simple\nWorkingDirectory=${q(ctx.code)}\n${Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}`).join("\n")}\nUnsetEnvironment=NO_COLOR\nExecStart=${q(ctx.bun)} index.ts\nRestart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n` });
+    // WorkingDirectory= takes a bare path (quotes make it "not absolute"); only % needs escaping.
+    if (/[\x00-\x1f\x7f]/.test(ctx.code)) fail("the code folder has control characters");
+    const bare = (s: string) => s.replaceAll("%", "%%");
+    files.push({ path: unit, mode: 0o644, content: `[Unit]\nDescription=Fleet Control host service ${a.label} (added from the gateway)\nAfter=network-online.target tailscaled.service\n\n[Service]\nType=simple\nWorkingDirectory=${bare(ctx.code)}\n${Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}`).join("\n")}\nUnsetEnvironment=NO_COLOR\nExecStart=${q(ctx.bun)} index.ts\nRestart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n` });
     commands.push(["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", `${a.label}.service`]);
   } else return fail("only macOS launchd and Linux systemd --user services are supported");
   return { files, dirs: [data, conf], commands, unit, certs: [env.FLEET_CONTROL_TAILNET_TLS_CERT!, env.FLEET_CONTROL_TAILNET_TLS_KEY!] };
@@ -197,7 +200,8 @@ if (import.meta.main) {
       }
       for (const c of p.commands) {
         const r = run(c[0]!, c.slice(1));
-        if (!r.ok) fail(`${c.join(" ")} failed: ${r.err.trim() || r.out.trim()}`);
+        // Files are written by now, so this is not a clean refusal: name what is left.
+        if (!r.ok) throw new Error(`${c.join(" ")} failed: ${r.err.trim() || r.out.trim()}\nLeft on this machine: ${[...p.dirs, p.unit].join(", ")}. Stop and remove them before another attempt.`);
       }
       const up = await waitUp(Number(a.port));
       console.log(up ? `Service ${a.label} runs on port ${a.port}. Now press Check in the gateway.` : `Service ${a.label} was installed but does not answer on 127.0.0.1:${a.port}; see its log.`);

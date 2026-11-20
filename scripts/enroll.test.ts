@@ -73,7 +73,10 @@ test("a fresh Linux plan: own data and config folders, one-line 0600 tokens, emp
   expect(file("/home/me/.local/share/fleet-control/fc-scratch/fleet.conf").content).toBe("FLEET=scratch\nFLEET_DIR=/home/me/.local/share/fleet-control/fc-scratch\nAGENTS=()\n");
   expect(file("/home/me/.config/fleet-control/fc-scratch/tokens")).toEqual({ path: "/home/me/.config/fleet-control/fc-scratch/tokens", content: `macbook-gateway ${HASH} operator\n`, mode: 0o600 });
   const unit = file(p.unit).content;
-  expect(unit).toContain('WorkingDirectory="/home/me/fc scratch"');
+  // systemd takes WorkingDirectory= as a bare path: quotes make it "not absolute" and the unit fails.
+  expect(unit).toContain("\nWorkingDirectory=/home/me/fc scratch\n");
+  expect(freshPlan(freshArgs, { ...ctx, code: "/srv/100%" }).files.find((f) => f.path.endsWith(".service"))!.content).toContain("\nWorkingDirectory=/srv/100%%\n");
+  expect(() => freshPlan(freshArgs, { ...ctx, code: "/srv/a\nb" })).toThrow(/control characters/);
   for (const line of ['"FLEET_CONTROL_HOST=127.0.0.1"', '"PORT=4872"', '"FLEET_CONTROL_TAILNET_HOST=100.64.0.5"', '"FLEET_CONTROL_TAILNET_NAME=local-arch.tail.ts.net"', '"FLEET_CONTROL_TAILNET_TLS_CERT=/home/me/tls/cert.pem"', '"FLEET_CONTROL_TAILNET_TLS_KEY=/abs/key.pem"', '"FLEET_CONTROL_TOKENS=/home/me/.config/fleet-control/fc-scratch/tokens"', '"FLEET_CONTROL_DB=/home/me/.local/share/fleet-control/fc-scratch/state.db"']) {
     expect(unit).toContain(`Environment=${line}`);
   }
