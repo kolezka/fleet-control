@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { tmuxLeaseTerminal, type Run } from "./lease-terminal.ts";
+import { SHELL, tmuxLeaseTerminal, type Run } from "./lease-terminal.ts";
 
 // A stand-in for tmux and pgrep that records every call and answers from a table.
 function fake(answers: (argv: string[]) => Partial<Run>) {
@@ -139,4 +139,9 @@ test("real tmux: an agent behind a wrapper script reads as app, its exit to the 
     tm("kill-server");
     await (await import("node:fs/promises")).rm(dir, { recursive: true, force: true });
   }
+});
+
+test("the shell list: these names sit at a prompt, anything else is a program", () => {
+  for (const n of ["sh", "ash", "bash", "rbash", "zsh", "fish", "dash", "ksh", "ksh93", "mksh", "oksh", "pdksh", "yash", "busybox", "tcsh", "csh", "nu", "xonsh", "pwsh"]) expect(SHELL.test(n), n).toBe(true);
+  for (const n of ["claude", "node", "sleep", "bun", "zshx", "bash5", ""]) expect(SHELL.test(n), n).toBe(false);
 });

@@ -9,7 +9,7 @@ export type Run = { exitCode: number; stdout: string; stderr: string };
 const PLAIN = /^[A-Za-z0-9._-]+$/;
 const TIMEOUT_MS = 10_000;
 // Shells a pane can sit at a prompt in. A pane whose own process is anything else runs that program.
-const SHELL = /^(sh|bash|zsh|fish|dash|ksh|mksh|tcsh|csh|nu|xonsh|pwsh)$/;
+export const SHELL = /^(sh|ash|bash|rbash|zsh|fish|dash|ksh|ksh93|mksh|oksh|pdksh|yash|busybox|tcsh|csh|nu|xonsh|pwsh)$/;
 
 async function run(argv: string[], stdin?: Uint8Array): Promise<Run> {
   const p = Bun.spawn(argv, { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, TMUX: undefined } });
@@ -79,18 +79,16 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
       // One ps call: the pane process's foreground group and name, and its children in its own group.
       const pane = m[1]!;
       const ps = await runner([psBin, "-A", "-o", "pid=,ppid=,pgid=,tpgid=,comm="]);
-      let tpgid: string | undefined;
-      let comm = "";
-      let groupChildren = 0;
-      for (const row of ps.stdout.split("\n")) {
-        const [pid, ppid, pgid, tp, ...name] = row.trim().split(/\s+/);
-        if (pid === pane) { tpgid = tp; comm = name.join(" "); }
-        if (ppid === pane && pgid === pane) groupChildren++;
-      }
-      if (ps.exitCode !== 0 || tpgid === undefined || !/^-?\d+$/.test(tpgid)) throw new Error(`could not read the foreground of ${session}'s pane ${pane}`);
+      const rows = ps.stdout.split("\n").map((row) => row.trim().split(/\s+/));
+      const own = rows.find((r) => r[0] === pane);
+      const [, , group, tpgid] = own ?? [];
+      if (ps.exitCode !== 0 || !own || !/^\d+$/.test(group ?? "") || !/^-?\d+$/.test(tpgid ?? "")) throw new Error(`could not read the foreground of ${session}'s pane ${pane}`);
+      const comm = own.slice(4).join(" ");
+      // The pane's own process group, read rather than assumed to be its pid.
+      const groupChildren = rows.filter((r) => r[1] === pane && r[2] === group).length;
       // Login shells show as "-zsh"; some systems print a path.
       const shell = SHELL.test(comm.replace(/^-/, "").split("/").pop() ?? "");
-      return `${lines[0]}:${shell && tpgid === pane && groupChildren === 0 ? "shell" : "app"}`;
+      return `${lines[0]}:${shell && tpgid === group && groupChildren === 0 ? "shell" : "app"}`;
     },
     async type(session, bytes) {
       const buffer = `fcinput-${process.pid}-${crypto.randomUUID()}`;
