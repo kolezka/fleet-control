@@ -8,7 +8,7 @@ import { Store } from "../data/store.ts";
 import { createTestFleet, type TestFleet } from "../fleet/fixture.ts";
 import { fleetSocket, tmuxLeaseTerminal } from "../fleet/lease-terminal.ts";
 import { resolveFleetBin } from "../fleet/path.ts";
-import { serve } from "../server.ts";
+import { serve, ViewerSlots } from "../server.ts";
 import { Credentials, startGateway } from "../client-gateway.ts";
 import { supportsReadOnlyAttach } from "./viewer.ts";
 
@@ -23,7 +23,7 @@ const until = async (cond: () => Promise<boolean> | boolean, ms = 5000) => {
 };
 
 describe.skipIf(!usable)("terminal input lease on a private tmux server", () => {
-  let fleet: TestFleet, server: ReturnType<typeof serve>, store: Store;
+  let fleet: TestFleet, server: ReturnType<typeof serve>, second: ReturnType<typeof serve>, store: Store;
   const alice = newToken(), viewer = newToken();
   beforeAll(async () => {
     fleet = await createTestFleet(fleetBin);
@@ -34,10 +34,16 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
     await writeFile(tokens, `${tokenLine("alice", alice, "operator")}\n${tokenLine("watcher", viewer, "viewer")}\n`);
     store = new Store(":memory:");
     const input = leaseUseCases({ leases: new Leases(store.db), terminal: tmuxLeaseTerminal(await fleetSocket(fleet.confPath)) });
-    server = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store, terminal: { fleetBin, confPath: fleet.confPath }, input }, 0, { auth: await Auth.fromFile(tokens) });
+    // As index.ts does with a tailnet listener: two listeners share one set of deps and one ViewerSlots.
+    const deps = { fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store, terminal: { fleetBin, confPath: fleet.confPath }, input };
+    const auth = await Auth.fromFile(tokens);
+    const viewerSlots = new ViewerSlots();
+    server = serve(deps, 0, { auth, viewerSlots });
+    second = serve(deps, 0, { auth, viewerSlots });
   });
   afterAll(async () => {
     server?.stop(true);
+    second?.stop(true);
     await fleet?.cleanup();
   });
 
@@ -154,5 +160,20 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
     expect(await until(async () => (await openLeases()) === 0)).toBe(true);
     const r = await fetch(`${server.url}api/leases`, { headers: { authorization: `Bearer ${viewer}` } });
     expect(r.status).toBe(403);
+  });
+
+  test("a lease taken on one listener survives the other listener's sweep (LAN and tailnet in one service)", async () => {
+    const a = open(alice);
+    const id = await a.id();
+    expect((await lease(alice, { socket: id })).status).toBe(201);
+    // Both sweepers run every second; three seconds covers several rounds of the other one.
+    await Bun.sleep(3000);
+    expect(await openLeases()).toBe(1);
+    expect(a.texts.some((t) => t.type === "lease" && t.state === "ended")).toBe(false);
+    a.ws.send(new Uint8Array([0x6b, 0x0d]));
+    expect(await until(async () => (await pane()).includes("B=6b0d"))).toBe(true);
+    a.ws.close();
+    await a.closed;
+    expect(await until(async () => (await openLeases()) === 0, 1500)).toBe(true);
   });
 });

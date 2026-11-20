@@ -122,6 +122,9 @@ export const MAX_VIEWERS = 16;
 // The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
 export class ViewerSlots {
   open = 0;
+  // Ids of the terminal sockets open now on any listener of this process. A lease is granted on one listener
+  // and swept by every listener's sweeper, so "is this socket still open" must see them all.
+  readonly socketIds = new Set<string>();
   constructor(readonly max = MAX_VIEWERS) {
     if (!Number.isSafeInteger(max) || max < 1) throw new Error("maxViewers must be a positive integer");
   }
@@ -171,12 +174,13 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const slots = opts.viewerSlots ?? new ViewerSlots(opts.maxViewers ?? MAX_VIEWERS);
   // Open terminal sockets, so a token reload can close the ones whose token was revoked or rotated.
   const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void; sendText(text: string): number }>();
+  // This listener's sockets only: a lease granted here belongs to one of them.
   const socketById = (id: string) => [...sockets].find((ws) => ws.data.id === id);
   const tell = (ws: { sendText(text: string): number } | undefined, msg: object) => { try { ws?.sendText(JSON.stringify(msg)); } catch { /* closed */ } };
   // A lease that ends for any reason tells its socket, which goes back to read-only.
   const unlisten = input?.onEnd((lease, reason) => tell(socketById(lease.socketId), { type: "lease", state: "ended", session: lease.session, reason }));
   // Expiry and a restarted session end a lease even while nobody types.
-  const sweeper = input ? setInterval(() => { input.sweep((id) => { const ws = socketById(id); return Boolean(ws && !ws.data.closed); }).catch((e) => console.error(`lease sweep failed: ${e instanceof Error ? e.message : e}`)); }, 1000) : undefined;
+  const sweeper = input ? setInterval(() => { input.sweep((id) => slots.socketIds.has(id)).catch((e) => console.error(`lease sweep failed: ${e instanceof Error ? e.message : e}`)); }, 1000) : undefined;
   const unsubscribe = auth?.onReplace(() => {
     for (const ws of sockets) if (ws.data.principal && !auth.current(ws.data.principal)) ws.close(1008, "token revoked");
   });
@@ -424,6 +428,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       async open(ws) {
         if (ws.data.busy) return ws.close(1013, BUSY_REASON);
         sockets.add(ws);
+        slots.socketIds.add(ws.data.id);
         // Text frames are control messages; terminal output is always binary.
         if (input) tell(ws, { type: "socket", id: ws.data.id, session: ws.data.session });
         try {
@@ -458,6 +463,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         if (ws.data.busy) return;
         if (!ws.data.closed) slots.open--;
         sockets.delete(ws);
+        slots.socketIds.delete(ws.data.id);
         ws.data.closed = true;
         input?.socketClosed(ws.data.id);
         ws.data.viewer?.close();

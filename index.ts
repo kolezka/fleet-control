@@ -43,8 +43,15 @@ if (agentSettings && !options.auth) {
   process.exit(1);
 }
 // FLEET_CONTROL_INPUT=1 lets an operator token type into a session through an input lease.
+// A setup error (no tmux, a remote fleet) stops the start with a plain line, not a stack.
+const leaseTerminal = async () => {
+  try { return tmuxLeaseTerminal(await fleetSocket(confPath)); } catch (e) {
+    console.error(`FLEET_CONTROL_INPUT: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+};
 const input = process.env.FLEET_CONTROL_INPUT === "1"
-  ? leaseUseCases({ leases: new Leases(store.db), terminal: tmuxLeaseTerminal(await fleetSocket(confPath)) })
+  ? leaseUseCases({ leases: new Leases(store.db), terminal: await leaseTerminal() })
   : undefined;
 if (input && !options.auth) {
   console.error("FLEET_CONTROL_INPUT needs FLEET_CONTROL_TOKENS");

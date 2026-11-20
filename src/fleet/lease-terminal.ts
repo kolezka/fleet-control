@@ -36,8 +36,8 @@ export function findTmux(path = process.env.PATH ?? ""): string {
   return found;
 }
 
-// `runner` is replaceable for tests that stand in for tmux and pgrep.
-export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: (argv: string[], stdin?: Uint8Array) => Promise<Run> = run, pgrepBin = Bun.which("pgrep") ?? "/usr/bin/pgrep"): LeaseTerminal {
+// `runner` is replaceable for tests that stand in for tmux.
+export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: (argv: string[], stdin?: Uint8Array) => Promise<Run> = run): LeaseTerminal {
   const tmux = (...args: string[]) => [tmuxBin, ...(socket ? ["-L", socket, "-f", "/dev/null"] : []), ...args];
   // "=name:" matches the session name exactly, never a prefix of another session.
   const target = (session: string) => {
@@ -46,27 +46,28 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
   };
   // Newer tmux escapes control bytes in a paste unless given -S; older tmux has no -S and does not escape.
   let raw: Promise<string[]> | undefined;
-  const pasteRaw = () => (raw ??= runner([tmuxBin, "list-commands", "paste-buffer"]).then((r) => (r.exitCode === 0 && /-[a-zA-Z]*S/.test(r.stdout) ? ["-S"] : [])));
+  // Asked once; a probe that failed is asked again next time instead of failing every later paste.
+  const pasteRaw = () => (raw ??= runner([tmuxBin, "list-commands", "paste-buffer"]).then(
+    (r) => (r.exitCode === 0 && /-[a-zA-Z]*S/.test(r.stdout) ? ["-S"] : []),
+    (e) => { raw = undefined; throw e; },
+  ));
   return {
+    // One tmux call: the session's id, creation time and the pid of its active pane. agent-fleet starts every
+    // agent, also a restart, in a new window, so a restarted agent has a new pane pid. A command typed into
+    // the same pane (by the lease holder) does not change it.
     async instance(session) {
-      const t = target(session);
-      const r = await runner(tmux("list-sessions", "-F", "#{session_name}"));
+      target(session);
+      const r = await runner(tmux("list-sessions", "-F", "#{session_name} #{session_id}:#{session_created}:#{pane_pid}"));
       // No server at all means no session; anything else that failed means tmux could not be asked.
       if (r.exitCode !== 0) {
         if (/no server running|error connecting to/.test(r.stderr)) return null;
         throw new Error(`tmux could not be asked: ${r.stderr.trim().slice(0, 200) || `exit ${r.exitCode}`}`);
       }
-      if (!r.stdout.split("\n").includes(session)) return null;
-      const d = await runner(tmux("display-message", "-p", "-t", t, "#{session_id}:#{session_created}:#{pane_pid}"));
-      const v = d.stdout.trim();
-      if (d.exitCode !== 0 || !/^\$\d+:\d+:\d+$/.test(v)) throw new Error(`tmux could not describe ${session}: ${d.stderr.trim().slice(0, 200) || v.slice(0, 80)}`);
-      // agent-fleet types the agent command into the pane's shell, so the pane pid outlives an agent
-      // restart in that pane. The oldest child of the shell is the program running there now.
-      const pane = v.split(":")[2]!;
-      const c = await runner([pgrepBin, "-o", "-P", pane]);
-      const child = c.exitCode === 0 ? c.stdout.trim() : c.exitCode === 1 ? "-" : null;
-      if (child === null || (child !== "-" && !/^\d+$/.test(child))) throw new Error(`pgrep failed for pane ${pane}`);
-      return `${v}:${child}`;
+      const line = r.stdout.split("\n").find((l) => l.startsWith(`${session} `));
+      if (!line) return null;
+      const v = line.slice(session.length + 1).trim();
+      if (!/^\$\d+:\d+:\d+$/.test(v)) throw new Error(`tmux could not describe ${session}: ${v.slice(0, 80)}`);
+      return v;
     },
     async type(session, bytes) {
       const buffer = `fcinput-${process.pid}-${crypto.randomUUID()}`;

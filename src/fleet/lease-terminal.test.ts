@@ -8,22 +8,17 @@ function fake(answers: (argv: string[]) => Partial<Run>) {
   return { calls, runner };
 }
 
-test("instance names the pane and the program running in it, so an agent restarted in the same pane is a new instance", async () => {
-  let child = "4242";
-  const f = fake((a) => a.includes("list-sessions") ? { stdout: "probe\nother\n" }
-    : a.includes("display-message") ? { stdout: "$3:1795194451:900\n" }
-    : a[0] === "/usr/bin/pgrep" ? (child ? { stdout: `${child}\n` } : { exitCode: 1 }) : {});
-  const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner, "/usr/bin/pgrep");
-  expect(await t.instance("probe")).toBe("$3:1795194451:900:4242");
-  expect(f.calls.find((a) => a[0] === "/usr/bin/pgrep")).toEqual(["/usr/bin/pgrep", "-o", "-P", "900"]);
-  child = "5151";
-  expect(await t.instance("probe")).toBe("$3:1795194451:900:5151");
-  child = "";
-  expect(await t.instance("probe")).toBe("$3:1795194451:900:-");
-  // An absent session is null without asking for its pane.
-  const before = f.calls.length;
+test("instance is one list-sessions call: id, creation time and active pane pid; a new agent window is a new instance", async () => {
+  let pane = "900";
+  const f = fake((a) => a.includes("list-sessions") ? { stdout: `probe-2 $9:1:1\nprobe $3:1795194451:${pane}\nother $4:1:2\n` } : {});
+  const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner);
+  expect(await t.instance("probe")).toBe("$3:1795194451:900");
+  // agent-fleet restarts an agent in a new window; tmux then reports that window's pane.
+  pane = "950";
+  expect(await t.instance("probe")).toBe("$3:1795194451:950");
   expect(await t.instance("gone")).toBeNull();
-  expect(f.calls.slice(before).some((a) => a.includes("display-message"))).toBe(false);
+  expect(f.calls.every((a) => a.includes("list-sessions"))).toBe(true);
+  expect(f.calls).toHaveLength(3);
 });
 
 test("no tmux server means no session; any other tmux failure throws instead of ending a lease", async () => {
@@ -33,10 +28,19 @@ test("no tmux server means no session; any other tmux failure throws instead of 
   expect(await down.instance("probe")).toBeNull();
   const killed = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({ exitCode: 137, stderr: "" })).runner);
   await expect(killed.instance("probe")).rejects.toThrow("tmux could not be asked: exit 137");
-  const odd = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake((a) => a.includes("list-sessions") ? { stdout: "probe\n" } : { stdout: "garbage" }).runner);
+  const odd = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({ stdout: "probe garbage\n" })).runner);
   await expect(odd.instance("probe")).rejects.toThrow("tmux could not describe probe");
-  const pg = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake((a) => a.includes("list-sessions") ? { stdout: "probe\n" } : a.includes("display-message") ? { stdout: "$1:2:3" } : { exitCode: 3 }).runner, "/usr/bin/pgrep");
-  await expect(pg.instance("probe")).rejects.toThrow("pgrep failed for pane 3");
+});
+
+test("a failed -S probe is asked again on the next paste instead of failing every paste", async () => {
+  let fail = true;
+  const runner = async (argv: string[]) => {
+    if (argv.includes("list-commands") && fail) { fail = false; throw new Error("spawn failed"); }
+    return { exitCode: 0, stdout: argv.includes("list-commands") ? "paste-buffer [-dprS]" : "", stderr: "" };
+  };
+  const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", runner);
+  await expect(t.type("probe", new Uint8Array([1]))).rejects.toThrow("spawn failed");
+  await t.type("probe", new Uint8Array([1]));
 });
 
 test("a paste adds -S only where tmux has it, asks once, and targets the session exactly", async () => {
