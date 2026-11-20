@@ -5,10 +5,9 @@
 import type { LeaseTerminal } from "../application/leases.ts";
 
 export type Run = { exitCode: number; stdout: string; stderr: string };
+// Session names must be this plain: it is what keeps them safe inside tmux's format filter below.
 const PLAIN = /^[A-Za-z0-9._-]+$/;
 const TIMEOUT_MS = 10_000;
-// A pane running one of these is at a shell prompt: its agent, if it had one, has exited.
-const SHELLS = /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh)$/;
 
 async function run(argv: string[], stdin?: Uint8Array): Promise<Run> {
   const p = Bun.spawn(argv, { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, TMUX: undefined } });
@@ -39,7 +38,7 @@ export function findTmux(path = process.env.PATH ?? ""): string {
 }
 
 // `runner` is replaceable for tests that stand in for tmux.
-export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: (argv: string[], stdin?: Uint8Array) => Promise<Run> = run): LeaseTerminal {
+export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: (argv: string[], stdin?: Uint8Array) => Promise<Run> = run, psBin = "/bin/ps"): LeaseTerminal {
   const tmux = (...args: string[]) => [tmuxBin, ...(socket ? ["-L", socket, "-f", "/dev/null"] : []), ...args];
   // "=name:" matches the session name exactly, never a prefix of another session.
   const target = (session: string) => {
@@ -54,14 +53,15 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
     (e) => { raw = undefined; throw e; },
   ));
   return {
-    // One tmux call: the session's id, creation time and the pid of its active pane, then "shell" or "app"
-    // for what runs in that pane now. agent-fleet starts every agent, also a restart, in a new window, so a
-    // restarted agent has a new pane pid. A command typed into the same pane does not change it; an agent
-    // that exits leaves the pane at a shell prompt, which leaseDead treats as the end of the lease.
+    // The session's id, creation time and the pid of its active pane, then "shell" or "app": "shell" when the
+    // pane's own first process holds the terminal's foreground (a shell at its prompt), "app" when something
+    // it started does (the agent, also behind a wrapper script). agent-fleet starts every agent, also a
+    // restart, in a new window, so a restarted agent has a new pane pid. A command typed into the same pane
+    // does not change it; an agent that exits leaves the pane at the prompt, which ends the lease.
     async instance(session) {
       target(session);
       // The filter matches the name whole (tmux prints a tab as "_", so names are not parsed from the output).
-      const r = await runner(tmux("list-sessions", "-f", `#{==:#{session_name},${session}}`, "-F", "#{session_id}:#{session_created}:#{pane_pid} #{pane_current_command}"));
+      const r = await runner(tmux("list-sessions", "-f", `#{==:#{session_name},${session}}`, "-F", "#{session_id}:#{session_created}:#{pane_pid}"));
       // No server at all means no session; anything else that failed means tmux could not be asked.
       if (r.exitCode !== 0) {
         if (/no server running|error connecting to/.test(r.stderr)) return null;
@@ -69,9 +69,13 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
       }
       const lines = r.stdout.split("\n").filter((l) => l !== "");
       if (lines.length === 0) return null;
-      const m = lines.length === 1 ? /^(\$\d+:\d+:\d+) (.*)$/.exec(lines[0]!) : null;
+      const m = lines.length === 1 ? /^\$\d+:\d+:(\d+)$/.exec(lines[0]!) : null;
       if (!m) throw new Error(`tmux could not describe ${session}: ${lines.join(" ").slice(0, 80)}`);
-      return `${m[1]}:${SHELLS.test(m[2]!.trim()) ? "shell" : "app"}`;
+      // The terminal's foreground process group, as seen from the pane's first process.
+      const fg = await runner([psBin, "-o", "tpgid=", "-p", m[1]!]);
+      const tpgid = fg.stdout.trim();
+      if (fg.exitCode !== 0 || !/^-?\d+$/.test(tpgid)) throw new Error(`could not read the foreground of ${session}'s pane ${m[1]}`);
+      return `${lines[0]}:${tpgid === m[1] ? "shell" : "app"}`;
     },
     async type(session, bytes) {
       const buffer = `fcinput-${process.pid}-${crypto.randomUUID()}`;

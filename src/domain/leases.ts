@@ -4,7 +4,9 @@
 export type Lease = {
   id: string;
   session: string;
-  instance: string; // `#{session_id}:#{session_created}:#{pane_pid}` (active pane) at grant time
+  // `#{session_id}:#{session_created}:#{pane_pid}` (active pane) and `:shell` or `:app` (who has the pane's
+  // foreground) at grant time. Rows from before the suffix have none and are compared without it.
+  instance: string;
   holder: string; // principal name
   socketId: string; // the one terminal socket allowed to write
   grantedAt: string;

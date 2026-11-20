@@ -8,23 +8,27 @@ function fake(answers: (argv: string[]) => Partial<Run>) {
   return { calls, runner };
 }
 
-test("instance is one list-sessions call: id, creation time, active pane pid and shell or app; a new agent window is a new instance", async () => {
+test("instance: id, creation time, active pane pid, and shell or app from who holds the pane's foreground; a new agent window is a new instance", async () => {
   let pane = "900";
-  let command = "claude";
+  let fg = "901";
   // tmux filters by the exact name; the stand-in answers only for "probe", as tmux would.
-  const f = fake((a) => a.includes("list-sessions") ? { stdout: a.includes("#{==:#{session_name},probe}") ? `$3:1795194451:${pane} ${command}\n` : "" } : {});
+  const f = fake((a) => a.includes("list-sessions")
+    ? { stdout: a.includes("#{==:#{session_name},probe}") ? `$3:1795194451:${pane}\n` : "" }
+    : a[0] === "/bin/ps" ? { stdout: ` ${fg}\n` } : {});
   const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner);
   expect(await t.instance("probe")).toBe("$3:1795194451:900:app");
-  // The agent exits and the pane shows its shell (login shells appear as -zsh).
-  command = "-zsh";
+  // The agent exits and the pane's own shell has the foreground again.
+  fg = "900";
   expect(await t.instance("probe")).toBe("$3:1795194451:900:shell");
   // agent-fleet restarts an agent in a new window; tmux then reports that window's pane.
-  pane = "950"; command = "node";
+  pane = "950"; fg = "960";
   expect(await t.instance("probe")).toBe("$3:1795194451:950:app");
   expect(await t.instance("gone")).toBeNull();
-  expect(f.calls.every((a) => a.includes("list-sessions"))).toBe(true);
   expect(f.calls[0]).toContain("#{==:#{session_name},probe}");
-  expect(f.calls).toHaveLength(4);
+  expect(f.calls.filter((a) => a[0] === "/bin/ps")).toEqual([["/bin/ps", "-o", "tpgid=", "-p", "900"], ["/bin/ps", "-o", "tpgid=", "-p", "900"], ["/bin/ps", "-o", "tpgid=", "-p", "950"]]);
+  // ps that fails or answers nonsense is an error, never a guess.
+  fg = "x";
+  await expect(t.instance("probe")).rejects.toThrow("could not read the foreground of probe's pane 950");
 });
 
 test("no tmux server means no session; any other tmux failure throws instead of ending a lease", async () => {
@@ -68,28 +72,44 @@ test("a paste adds -S only where tmux has it, asks once, and targets the session
   await expect(t.type("probe; kill-server", new Uint8Array([1]))).rejects.toThrow("bad session name");
 });
 
-test("real tmux: a pane whose program exits to a shell reads as shell, and only the exact session name matches", async () => {
+// Waits for a tmux answer to change instead of sleeping a fixed time.
+async function until<T>(read: () => Promise<T>, ok: (v: T) => boolean, ms = 8000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await read();
+    if (ok(v) || Date.now() > end) return v;
+    await Bun.sleep(100);
+  }
+}
+
+test("real tmux: an agent behind a wrapper script reads as app, its exit to the prompt as shell, and only the exact session name matches", async () => {
   const socket = `fc-lt-${process.pid}`;
   const tmuxBin = Bun.which("tmux", { PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/bin` });
   if (!tmuxBin) { console.warn("SKIP: no tmux"); return; }
   const tm = (...a: string[]) => Bun.spawnSync([tmuxBin, "-L", socket, "-f", "/dev/null", ...a]);
+  const dir = await (await import("node:fs/promises")).mkdtemp(`${(await import("node:os")).tmpdir()}/fc-lt-`);
+  const wrapper = `${dir}/agent.sh`;
+  // A wrapper that keeps bash in the foreground and runs the "agent" as its child, without exec.
+  await Bun.write(wrapper, "#!/bin/bash\nsleep 3\ntrue\n");
+  (await import("node:fs")).chmodSync(wrapper, 0o755);
+  const t = tmuxLeaseTerminal(socket, tmuxBin);
   try {
-    // As agent-fleet does it: a shell pane, the agent command typed into it. Here the "agent" ends after 2 s.
-    tm("new-session", "-d", "-s", "agent", "sh");
-    await Bun.sleep(300);
-    tm("send-keys", "-t", "=agent:", "sleep 2", "Enter");
-    await Bun.sleep(500);
+    // Only "agent x" exists: asking for "agent" must not find it.
     tm("new-session", "-d", "-s", "agent x", "sleep 30");
+    expect(await t.instance("agent")).toBeNull();
+    // As agent-fleet does it: a shell pane, the agent command typed into it.
+    tm("new-session", "-d", "-s", "agent", "sh");
     tm("new-session", "-d", "-s", "agent-2", "sh");
-    const t = tmuxLeaseTerminal(socket, tmuxBin);
-    const first = await t.instance("agent");
-    expect(first).toMatch(/^\$\d+:\d+:\d+:app$/);
-    await Bun.sleep(2200);
-    const after = await t.instance("agent");
-    expect(after).toBe(first!.replace(/:app$/, ":shell"));
+    expect(await until(() => t.instance("agent"), (v) => v !== null)).toMatch(/^\$\d+:\d+:\d+:shell$/);
+    tm("send-keys", "-t", "=agent:", wrapper, "Enter");
+    const running = await until(() => t.instance("agent"), (v) => v?.endsWith(":app") === true);
+    expect(running).toMatch(/^\$\d+:\d+:\d+:app$/);
+    const after = await until(() => t.instance("agent"), (v) => v?.endsWith(":shell") === true);
+    expect(after).toBe(running!.replace(/:app$/, ":shell"));
     expect(await t.instance("agent-2")).toMatch(/:shell$/);
     expect(await t.instance("agen")).toBeNull();
   } finally {
     tm("kill-server");
+    await (await import("node:fs/promises")).rm(dir, { recursive: true, force: true });
   }
 });
