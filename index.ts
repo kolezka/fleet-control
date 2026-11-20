@@ -13,6 +13,9 @@ import { Requests } from "./src/data/requests.ts";
 import { observerForConf } from "./src/observe/claude.ts";
 import { serve, ViewerSlots } from "./src/server.ts";
 import { Store } from "./src/data/store.ts";
+import { Leases } from "./src/data/leases.ts";
+import { leaseUseCases } from "./src/application/leases.ts";
+import { fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -39,13 +42,30 @@ if (agentSettings && !options.auth) {
   console.error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
   process.exit(1);
 }
+// FLEET_CONTROL_INPUT=1 lets an operator token type into a session through an input lease.
+const input = process.env.FLEET_CONTROL_INPUT === "1"
+  ? leaseUseCases({ leases: new Leases(store.db), terminal: tmuxLeaseTerminal(await fleetSocket(confPath)) })
+  : undefined;
+if (input && !options.auth) {
+  console.error("FLEET_CONTROL_INPUT needs FLEET_CONTROL_TOKENS");
+  process.exit(1);
+}
+// While a session has a live input lease its queued commands wait, and go out when the lease ends.
+const deliverer = new Deliverer(commands, fleetSender(fleetBin, confPath), undefined, async (session) => (input ? (await input.holds(session)) !== null : false));
+input?.onEnd((lease) => { deliverer.deliverQueued(lease.session).catch((e) => console.error(`held deliveries failed: ${e instanceof Error ? e.message : e}`)); });
+// A restart dropped every socket, so no lease from before it can still have its writer.
+if (input) {
+  const ended = input.endAfterRestart();
+  if (ended.length) console.log(`input leases ended by the restart: ${ended.join(", ")}`);
+}
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
 const deps = {
   fleet: new FleetCli({ fleetBin, confPath }),
   store,
   observer,
   terminal: { fleetBin, confPath },
-  control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
+  control: { commands, deliverer, requests: new Requests(store.db) },
+  input,
   agents: agentSettings
     ? { agents: new Agents(store.db), launcher: new FleetAgentLauncher({ fleetBin, confPath, roots: agentSettings.roots }), models: agentSettings.models }
     : undefined,

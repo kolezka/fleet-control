@@ -2,8 +2,9 @@
 // Live Terminal Deck: hosts with nested sessions on the left, the selected host's read-only panes in the
 // centre, the selected host's supervisor panel on the right. Every host is read and written through its
 // own base path (`/api` for a single host service, `/api/hosts/<id>` through a gateway) and has its own
-// state in web/host-state.ts. There is deliberately no keyboard path from a pane to the session.
+// state in web/host-state.ts. Keys reach a session only while this pane's socket holds the host's input lease (web/lease.ts).
 import { init, Terminal } from "ghostty-web";
+import { CONFIRM_MS, leaseButton, leaseStatus, mayType, noLease, onControlFrame, onLeaseAnswer, onLeaseClick, type LeaseView } from "./lease.ts";
 import {
   type Command, type CommandIntent, type Fleet, type HostInfo, type HostState, type Model, type Outcome, type Peer, type ReadKind, type Req, type Session,
   beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand, isCommand,
@@ -126,6 +127,49 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
   let stopped = false;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const art = el.closest(".terminal")!;
+  const button = art.querySelector(".typebtn") as HTMLButtonElement | null;
+  let lease: LeaseView = noLease;
+  let viewerStatus = "Connecting";
+  let lapse: ReturnType<typeof setTimeout> | undefined;
+  let tick: ReturnType<typeof setInterval> | undefined;
+  const enc = new TextEncoder();
+  // Every lease change goes through here: button, status line, and whether the terminal takes keys.
+  const show = (next: LeaseView) => {
+    lease = next;
+    const b = leaseButton(lease, s.name);
+    if (button) {
+      button.hidden = b.hidden;
+      button.textContent = b.label;
+      button.disabled = b.disabled;
+      button.classList.toggle("danger", b.danger);
+    }
+    art.classList.toggle("typing", mayType(lease));
+    if (term) term.options.disableStdin = !mayType(lease);
+    if (mayType(lease)) term?.focus();
+    clearInterval(tick);
+    if (mayType(lease)) tick = setInterval(() => show(lease), 30_000);
+    status.textContent = leaseStatus(lease, new Date()) ?? viewerStatus;
+  };
+  const setStatus = (t: string) => { viewerStatus = t; status.textContent = leaseStatus(lease, new Date()) ?? t; };
+  const ask = async () => {
+    clearTimeout(lapse);
+    const step = onLeaseClick(lease);
+    show(step.view);
+    if (step.view.state === "confirm") lapse = setTimeout(() => { if (lease.state === "confirm") show({ ...lease, state: "off" }); }, CONFIRM_MS);
+    const r = step.request;
+    if (!r) return;
+    const url = `${host.apiBase}/sessions/${encodeURIComponent(s.name)}/lease`;
+    try {
+      const res = await fetch(url, r.method === "POST" ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(r.body) } : { method: "DELETE" });
+      let body: unknown = null;
+      try { body = await res.json(); } catch { /* no body */ }
+      show(onLeaseAnswer(lease, r.method, res.status, body));
+    } catch {
+      show(onLeaseAnswer(lease, r.method, 0, null));
+    }
+  };
+  if (button) button.onclick = () => { void ask(); };
 
   const connect = () => {
     // A host service also takes the session as a query, which a prefix proxy can route on one path.
@@ -139,9 +183,15 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
     let pending = "";
     let fresh = true;
     // A host over its viewer cap accepts the socket and closes it at once, so "live" waits for output.
-    sock.onopen = () => { status.textContent = "Read-only · connected, waiting for output"; };
+    show(noLease);
+    sock.onopen = () => { setStatus("Read-only · connected, waiting for output"); };
     sock.onmessage = (e) => {
-      if (sock === ws && !stopped) status.textContent = "Read-only · live";
+      // Text frames are the host's lease messages; terminal output is always binary.
+      if (typeof e.data === "string") {
+        if (sock === ws && !stopped) show(onControlFrame(lease, e.data));
+        return;
+      }
+      if (sock === ws && !stopped) setStatus(mayType(lease) ? "Typing · live" : "Read-only · live");
       let text = dec.decode(e.data as ArrayBuffer, { stream: true });
       if (fresh) {
         pending += text;
@@ -151,11 +201,13 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
         term?.dispose();
         el.replaceChildren();
         term = new Terminal({
-          cols: hint ? Number(hint[1]) : 80, rows: hint ? Number(hint[2]) : 24, disableStdin: true, cursorBlink: false, fontSize: 12,
+          cols: hint ? Number(hint[1]) : 80, rows: hint ? Number(hint[2]) : 24, disableStdin: !mayType(lease), cursorBlink: false, fontSize: 12,
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
           theme: { background: css("--terminal"), foreground: css("--ink"), cursor: css("--muted") },
         });
         term.open(el);
+        // Keys go out as binary frames: the gateway and the host treat a text frame from the page as a violation.
+        term.onData((d) => { if (mayType(lease) && sock === ws && sock.readyState === WebSocket.OPEN) sock.send(enc.encode(d)); });
         fresh = false;
         attempt = 0;
         text = pending;
@@ -167,21 +219,23 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
     };
     sock.onclose = (e) => {
       if (stopped || sock !== ws) return;
+      // A lease belongs to one socket; a reconnect starts read-only.
+      show(noLease);
       // 1000: the viewer ended normally (session gone). 1008: the server refused us. Neither is retried.
       if (e.code === 1000 || e.code === 1008) {
-        status.textContent = terminalClosedText(e.code, e.reason);
+        setStatus(terminalClosedText(e.code, e.reason));
         return;
       }
       // 1013: the host is at its viewer cap. Retried slowly, since a slot frees when another viewer closes.
       if (e.code === 1013) {
         attempt = RETRY_MS.length - 1;
         timer = setTimeout(connect, RETRY_MS[attempt]!);
-        status.textContent = `${terminalClosedText(e.code, e.reason)} · retry in ${Math.round(RETRY_MS[attempt]! / 1000)} s`;
+        setStatus(`${terminalClosedText(e.code, e.reason)} · retry in ${Math.round(RETRY_MS[attempt]! / 1000)} s`);
         return;
       }
       const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]!;
       attempt++;
-      status.textContent = `Disconnected (${e.code}) · state unknown · retry in ${Math.round(wait / 1000)} s`;
+      setStatus(`Disconnected (${e.code}) · state unknown · retry in ${Math.round(wait / 1000)} s`);
       timer = setTimeout(connect, wait);
     };
   };
@@ -190,6 +244,8 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
     stop() {
       stopped = true;
       clearTimeout(timer);
+      clearTimeout(lapse);
+      clearInterval(tick);
       ws?.close();
       term?.dispose();
     },
@@ -224,7 +280,7 @@ function renderPanes(h: HostState | undefined) {
           : `<div class="empty"><span>No running sessions</span><small>fleet status reports no running session on ${esc(h.info.name)}.</small></div>`;
     } else {
       box.innerHTML = running.map((s) =>
-        `<article class="terminal" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span class="modelinfo"></span><span>tmux via fleet attach --read-only</span></footer></article>`,
+        `<article class="terminal" data-pane="${esc(s.name)}"><header class="termhead"><strong><span class="dot good"></span>${esc(s.name)}</strong><small class="termstate">Connecting</small></header><div class="xterm-host"></div><footer class="termfooter"><span class="modelinfo"></span><button type="button" class="typebtn" hidden></button></footer></article>`,
       ).join("");
       for (const s of running) panes.set(s.name, openPane(s, box.querySelector(`[data-pane="${CSS.escape(s.name)}"] .xterm-host`) as HTMLElement, h.info));
     }

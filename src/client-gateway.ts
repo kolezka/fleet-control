@@ -230,6 +230,8 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "terminal") return { kind: "ws", upstream: `/api/sessions/${b}/terminal`, query: { cols: NUM, rows: NUM } };
+  if (seg.length === 3 && a === "sessions" && ok(b) && c === "lease") return http(`/api/sessions/${b}/lease`, ["POST", "DELETE"], { reason: /^[^\x00-\x1f\x7f]{1,200}$/ });
+  if (seg.length === 1 && a === "leases") return http("/api/leases", ["GET"]);
   if (seg.length === 1 && a === "commands") return http("/api/commands", ["GET", "POST"], { ...PAGE_QUERY, latest: NUM });
   if (seg.length === 3 && a === "commands" && ok(b) && c === "cooperative") return http(`/api/commands/${b}/cooperative`, ["GET"]);
   if (seg.length === 2 && a === "commands" && ok(b)) return http(`/api/commands/${b}`, ["GET"]);
@@ -554,7 +556,8 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
     port: opts.port ?? 4870,
     // The static page holds no secret. Every /api call below is Host- and Origin-checked.
     websocket: {
-      maxPayloadLength: 1024,
+      // Room for one 4 KiB input message; the host refuses anything bigger and anything without a lease.
+      maxPayloadLength: 4096,
       backpressureLimit: 1024 * 1024,
       closeOnBackpressureLimit: true,
       open(ws) {
@@ -564,9 +567,13 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
         relay.queued = 0;
         if (relay.upClosed) ws.close(closeCode(relay.upClosed.code), relay.upClosed.reason);
       },
-      // The terminal is read-only: input would be typing into an agent. Never forwarded.
-      message(ws) {
-        teardown(ws.data, 1008, "read-only terminal: client messages are not accepted");
+      // Keys go to the host, which types them only for the socket holding the input lease and closes any other.
+      // Text frames are never input, so they still end the socket here.
+      message(ws, message) {
+        const relay = ws.data;
+        if (typeof message === "string") return teardown(relay, 1008, "read-only terminal: client messages are not accepted");
+        if (relay.up.readyState !== WebSocket.OPEN) return teardown(relay, 1011, "host connection lost");
+        relay.up.send(message);
       },
       close(ws) {
         ws.data.client = null;

@@ -22,7 +22,16 @@ const defaultIO: DeliveryIO = {
 export class Deliverer {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private commands: Commands, private send: Sender, private io: DeliveryIO = defaultIO) {}
+  // `held` says whether a session has a live input lease. A queued command for it then stays queued,
+  // so a paste never lands in the middle of what a person is typing; `deliverQueued` sends it later.
+  constructor(private commands: Commands, private send: Sender, private io: DeliveryIO = defaultIO, private held: (session: string) => Promise<boolean> = async () => false) {}
+
+  // Sends every queued command for one session, oldest first. Called when its input lease ends.
+  async deliverQueued(session: string): Promise<Command[]> {
+    const out: Command[] = [];
+    for (const c of this.commands.list("queued")) if (c.target === session) out.push(await this.deliver(c.id));
+    return out;
+  }
 
   // This queue serializes only this instance, not other processes or senders.
   deliver(id: string): Promise<Command> {
@@ -34,6 +43,7 @@ export class Deliverer {
   private async deliverNow(id: string): Promise<Command> {
     const c = this.commands.get(id);
     if (c.status !== "queued") return c;
+    if (await this.held(c.target)) return c;
     this.commands.transition(id, "delivering", "service", `fleet send to ${c.target}`);
     let dir: string;
     try {
