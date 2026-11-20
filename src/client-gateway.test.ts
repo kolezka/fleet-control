@@ -327,6 +327,15 @@ describe("routing and credential isolation", () => {
     if (chunked) expect(chunked.status).toBe(413);
     expect(a.seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
+
+  test("a lease DELETE goes through without a content type, as the page sends it; a DELETE with a body is refused", async () => {
+    const r = await fetch(`${base()}/api/hosts/a/sessions/probe/lease?reason=done`, { method: "DELETE", headers: { origin: page() } });
+    expect(r.status).not.toBe(415);
+    expect(a.seen.filter((s) => s.method === "DELETE").map((s) => s.path)).toEqual(["/api/sessions/probe/lease?reason=done"]);
+    const withBody = await fetch(`${base()}/api/hosts/a/sessions/probe/lease`, { method: "DELETE", headers: { origin: page(), "content-type": "application/json" }, body: "{}" });
+    expect(withBody.status).toBe(400);
+    expect(a.seen.filter((s) => s.method === "DELETE")).toHaveLength(1);
+  });
 });
 
 // --- failure isolation -------------------------------------------------------------------------
@@ -534,7 +543,7 @@ describe("terminal relay", () => {
     c.ws.close();
   });
 
-  test("browser messages close with 1008 and are never forwarded", async () => {
+  test("browser text messages close with 1008 and are never forwarded", async () => {
     const c = openWs(path);
     await c.opened;
     await until(() => c.frames.length >= 2);
@@ -544,6 +553,21 @@ describe("terminal relay", () => {
     await until(() => a.sockets.length === 1);
     await Bun.sleep(100);
     expect(a.sockets[0]!.received).toEqual([]);
+  });
+
+  // The host decides: it types only for the socket holding the input lease and closes any other.
+  test("browser key bytes go to the host unchanged and only to that host", async () => {
+    const c = openWs(path);
+    await c.opened;
+    await until(() => c.frames.length >= 2);
+    c.ws.send(new Uint8Array([0x61, 0x03, 0x1b, 0x5b, 0x41, 0x0d]));
+    await until(() => a.sockets[0]?.received.length === 1);
+    expect([...new Uint8Array(a.sockets[0]!.received[0] as ArrayBuffer | Uint8Array)]).toEqual([0x61, 0x03, 0x1b, 0x5b, 0x41, 0x0d]);
+    expect(b.sockets).toHaveLength(0);
+    // 4 KiB fits one message; more is refused before it reaches the host.
+    c.ws.send(new Uint8Array(4097));
+    expect((await c.closedP).code).toBe(1009);
+    expect(a.sockets[0]!.received).toHaveLength(1);
   });
 
   test("upstream close tears down the browser socket", async () => {

@@ -4,11 +4,14 @@ import * as state from "./host-state.ts";
 // Execute the browser module against a small DOM/fetch fixture, without terminal or network access.
 async function browser(hosts: unknown[], respond: (path: string, init?: RequestInit) => unknown, intervals: (() => void)[] = [], timers: { fn: () => void; ms: number }[] | null = null) {
   const sockets: { url: string; closed: boolean }[] = [];
-  class FakeSocket { url: string; closed = false; onopen: any; onmessage: any; onclose: any; constructor(u: URL) { this.url = String(u); sockets.push(this); } close() { this.closed = true; } }
+  class FakeSocket { static OPEN = 1; url: string; closed = false; readyState = 1; sent: unknown[] = []; onopen: any; onmessage: any; onclose: any; constructor(u: URL) { this.url = String(u); sockets.push(this); } close() { this.closed = true; } send(d: unknown) { this.sent.push(d); } }
+  // A terminal stand-in that records its options and lets a test press keys.
+  const terms: { options: { disableStdin?: boolean }; press(d: string): void }[] = [];
+  class FakeTerminal { options: any; keys: ((d: string) => void)[] = []; constructor(o: any) { this.options = { ...o }; terms.push(this); } open() {} write() {} focus() {} dispose() {} onData(f: (d: string) => void) { this.keys.push(f); } press(d: string) { for (const f of this.keys) f(d); } }
   const elements = new Map<string, any>();
   const listeners = new Map<string, (event: any) => unknown>();
   const element = (id: string): any => {
-    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, setAttribute() {}, contains: () => false, querySelector: () => element(id + ":child"), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
+    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, focus() {}, setAttribute() {}, contains: () => false, querySelector: (sel: string) => element(id + (sel === ".typebtn" ? ":typebtn" : ":child")), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
     return elements.get(id);
   };
   const document = { hidden: false, getElementById: element, documentElement: element("root"), activeElement: null, addEventListener: (kind: string, fn: any) => listeners.set(kind, fn) };
@@ -20,23 +23,25 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
     return { status, ok: status < 300, json: async () => value };
   };
   let source = await Bun.file(new URL("./app.ts", import.meta.url)).text();
-  source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = class {};");
+  source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = FakeTerminal;");
+  source = source.replace(/import {([\s\S]*?)} from ".\/lease.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = leaseModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/host-state.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = state;");
   source = source.replace(/import {([\s\S]*?)} from ".\/agents.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = agentsModule;");
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
   const agentsModule = await import("./agents.ts");
-  const run = new Function("state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const leaseModule = await import("./lease.ts");
+  const run = new Function("FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
   const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
   const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
-  const app = await run(state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
+  const app = await run(FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
     await new Promise(resolve => setTimeout(resolve, 0));
   };
-  return { app, element, calls, click, listeners, document, sockets };
+  return { app, element, calls, click, listeners, document, sockets, terms };
 }
 
 test("a tab hidden for a minute closes its terminal sockets and reopens them when shown", async () => {
@@ -390,6 +395,48 @@ test("the sidebar links to the add-host page only when the gateway offers it", a
   expect(off.element("sidebar").innerHTML).not.toContain("./add-host");
   const on = await browser({ hosts: [host], enroll: true } as never, reply);
   expect(on.element("sidebar").innerHTML).toContain('<a class="footlink" href="./add-host">Add a host</a>');
+});
+
+test("a pane types only after a confirmed lease the host granted, sends keys as binary, and goes read-only on any end", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/lease") && init?.method === "POST") return { __status: 201, lease: { expiresAt: new Date(Date.now() + 300_000).toISOString() } };
+    if (path.endsWith("/lease")) return { ended: true };
+    return path.endsWith("/sessions") ? { sessions: [{ name: "probe", host: null, role: null, registered: true, running: true, model: { state: "not_applicable" } }] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const button = b.element("terminals:child:parent:typebtn");
+  const sock = b.sockets[0] as any;
+  sock.onopen();
+  expect(button.hidden).toBe(true);
+  sock.onmessage({ data: JSON.stringify({ type: "socket", id: "sock-1", session: "probe" }) });
+  // Output with a size hint builds the terminal, read-only.
+  sock.onmessage({ data: new TextEncoder().encode("\x1b]777;fleet-size;80;24\x07" + "x".repeat(70)).buffer });
+  expect(button.hidden).toBe(false);
+  const term = b.terms.at(-1)!;
+  expect(term.options.disableStdin).toBe(true);
+  term.press("ls\r");
+  expect(sock.sent).toEqual([]);
+
+  // First click only asks for confirmation; nothing is sent to the host.
+  button.onclick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.filter(c => c.path.endsWith("/lease"))).toEqual([]);
+  expect(button.textContent).toBe("Confirm: type into probe for 5 min");
+  button.onclick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const asked = b.calls.filter(c => c.path.endsWith("/lease"));
+  expect(asked.map(c => [c.path, c.init?.method, c.init?.body])).toEqual([["/api/hosts/a/sessions/probe/lease", "POST", JSON.stringify({ socket: "sock-1", minutes: 5 })]]);
+  expect(term.options.disableStdin).toBe(false);
+  term.press("ls\r");
+  expect(sock.sent.map((d: Uint8Array) => [...d])).toEqual([[0x6c, 0x73, 0x0d]]);
+
+  // The host ends the lease: keys stop at once.
+  sock.onmessage({ data: JSON.stringify({ type: "lease", state: "ended", reason: "lease expired" }) });
+  expect(term.options.disableStdin).toBe(true);
+  term.press("rm\r");
+  expect(sock.sent).toHaveLength(1);
+  expect(button.textContent).toBe("Type…");
 });
 
 test("the orchestrator option shows only where the host offers it and only for Claude Code, and is posted when ticked", async () => {

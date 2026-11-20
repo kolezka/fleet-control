@@ -15,6 +15,8 @@ import { RequestError } from "./domain/requests.ts";
 import { RoleError } from "./domain/roles.ts";
 import { AgentError } from "./domain/agents.ts";
 import { agentUseCases, type AgentDeps } from "./application/agents.ts";
+import type { LeaseUseCases } from "./application/leases.ts";
+import { LeaseError, MAX_INPUT_BYTES } from "./domain/leases.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -62,10 +64,12 @@ type TerminalDeps = { fleetBin: string; confPath: string };
 const commandStatus: Record<CommandError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400 };
 const requestStatus: Record<RequestError["kind"], number> = { not_found: 404, conflict: 409, invalid: 400, forbidden: 403 };
 const agentStatus: Record<AgentError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, unavailable: 503 };
+const leaseStatus: Record<LeaseError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, gone: 410 };
 function commandError(e: unknown): Response {
   if (e instanceof AgentError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: agentStatus[e.kind] });
   if (e instanceof RoleError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: 403 });
   if (e instanceof RequestError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: requestStatus[e.kind] });
+  if (e instanceof LeaseError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: leaseStatus[e.kind] });
   if (e instanceof CommandError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: commandStatus[e.kind] });
   return Response.json({ error: { kind: "internal", message: "internal error" } }, { status: 500 });
 }
@@ -89,7 +93,8 @@ function originAllowed(req: Request): boolean {
   const origin = req.headers.get("origin");
   return origin === null || origin === new URL(req.url).origin;
 }
-type SocketData = { session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: Principal; busy?: boolean };
+// `id` names the socket for an input lease; the page learns it from the first text frame.
+type SocketData = { id: string; session: string; cols: number; rows: number; viewer?: Viewer; closed?: boolean; principal?: Principal; busy?: boolean; typing?: Promise<void> };
 
 // Browsers send Origin on WebSocket upgrades; only pages served by this service may open a terminal.
 function sameOrigin(req: Request): boolean {
@@ -97,7 +102,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -117,6 +122,9 @@ export const MAX_VIEWERS = 16;
 // The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
 export class ViewerSlots {
   open = 0;
+  // Ids of the terminal sockets open now on any listener of this process. A lease is granted on one listener
+  // and swept by every listener's sweeper, so "is this socket still open" must see them all.
+  readonly socketIds = new Set<string>();
   constructor(readonly max = MAX_VIEWERS) {
     if (!Number.isSafeInteger(max) || max < 1) throw new Error("maxViewers must be a positive integer");
   }
@@ -132,7 +140,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -147,6 +155,10 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const agentDeps = deps.agents && auth ? { ...deps.agents, carriesSecret: (text: string) => auth.appearsIn(text) } : undefined;
   const agentsFor = (who: Principal | null) => (agentDeps ? agentUseCases(agentDeps, who ?? undefined) : null);
   const noAgents = () => Response.json({ error: { kind: "unavailable", message: "managed agents not configured on this host" } }, { status: 503 });
+  // Terminal input needs tokens, like starting agents: on loopback without auth anyone could type.
+  if (deps.input && !auth) throw new Error("terminal input needs tokens; set FLEET_CONTROL_TOKENS");
+  const input = deps.input;
+  const noInput = () => Response.json({ error: { kind: "unavailable", message: "terminal input not configured on this host" } }, { status: 503 });
   const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who ?? undefined) : null);
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
@@ -161,7 +173,14 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   // upgrade and given back when the socket closes.
   const slots = opts.viewerSlots ?? new ViewerSlots(opts.maxViewers ?? MAX_VIEWERS);
   // Open terminal sockets, so a token reload can close the ones whose token was revoked or rotated.
-  const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void }>();
+  const sockets = new Set<{ data: SocketData; close(code?: number, reason?: string): void; sendText(text: string): number }>();
+  // This listener's sockets only: a lease granted here belongs to one of them.
+  const socketById = (id: string) => [...sockets].find((ws) => ws.data.id === id);
+  const tell = (ws: { sendText(text: string): number } | undefined, msg: object) => { try { ws?.sendText(JSON.stringify(msg)); } catch { /* closed */ } };
+  // A lease that ends for any reason tells its socket, which goes back to read-only.
+  const unlisten = input?.onEnd((lease, reason) => tell(socketById(lease.socketId), { type: "lease", state: "ended", session: lease.session, reason }));
+  // Expiry and a restarted session end a lease even while nobody types.
+  const sweeper = input ? setInterval(() => { input.sweep((id) => slots.socketIds.has(id)).catch((e) => console.error(`lease sweep failed: ${e instanceof Error ? e.message : e}`)); }, 1000) : undefined;
   const unsubscribe = auth?.onReplace(() => {
     for (const ws of sockets) if (ws.data.principal && !auth.current(ws.data.principal)) ws.close(1008, "token revoked");
   });
@@ -176,10 +195,10 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     // A browser cannot read the status of a refused upgrade, so over the cap the socket opens and closes
     // at once with 1013 and a reason the page can show. It never takes a slot.
     if (slots.open >= slots.max) {
-      if (server.upgrade(req, { data: { session, ...size, busy: true } })) return undefined;
+      if (server.upgrade(req, { data: { id: crypto.randomUUID(), session, ...size, busy: true } })) return undefined;
       return Response.json({ error: { kind: "busy", message: "too many open terminal viewers" } }, { status: 503 });
     }
-    if (server.upgrade(req, { data: { session, ...size, principal: who ?? undefined } })) { slots.open++; return undefined; }
+    if (server.upgrade(req, { data: { id: crypto.randomUUID(), session, ...size, principal: who ?? undefined } })) { slots.open++; return undefined; }
     return Response.json({ error: { kind: "upgrade_failed", message: "expected a WebSocket upgrade" } }, { status: 400 });
   };
 
@@ -355,6 +374,40 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           }
         }),
       },
+      // Input lease on one session, for one open terminal socket of the caller. Same Origin only.
+      "/api/sessions/:name/lease": {
+        POST: guard(async (req, _s, who) => {
+          if (!input) return noInput();
+          if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
+          try {
+            const body: unknown = await req.json();
+            if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            const b = body as Record<string, unknown>;
+            const id = typeof b.socket === "string" ? b.socket : "";
+            const ws = id ? socketById(id) : undefined;
+            const socket = ws && !ws.data.closed ? { owner: ws.data.principal?.name ?? "local", session: ws.data.session, isOpen: () => !ws.data.closed } : undefined;
+            const lease = await input.grant(who ?? undefined, { session: req.params.name, socketId: id, socket, minutes: b.minutes, reason: b.reason });
+            tell(ws, { type: "lease", state: "granted", session: lease.session, expiresAt: lease.expiresAt });
+            return Response.json({ lease }, { status: 201 });
+          } catch (e) {
+            if (e instanceof SyntaxError) return Response.json({ error: { kind: "invalid", message: "body is not JSON" } }, { status: 400 });
+            return commandError(e);
+          }
+        }),
+        DELETE: guard(async (req, _s, who) => {
+          if (!input) return noInput();
+          if (!originAllowed(req) || req.headers.get("origin") === null) return forbidden();
+          try {
+            const reason = new URL(req.url).searchParams.get("reason") ?? undefined;
+            return Response.json(await input.release(who ?? undefined, req.params.name, reason));
+          } catch (e) { return commandError(e); }
+        }),
+      },
+      // Who holds which session is for callers who may type themselves.
+      "/api/leases": { GET: guard((_req, _s, who) => {
+        if (!input) return noInput();
+        try { return Response.json({ leases: input.list(who ?? undefined) }); } catch (e) { return commandError(e); }
+      }) },
       // Streamable HTTP MCP endpoint. DNS rebinding protection admits only the configured Host headers.
       "/mcp": guard(async (req, _s, who) => {
         if (!control) return noControl();
@@ -362,17 +415,22 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         const hosts = [`127.0.0.1:${server.port}`, `localhost:${server.port}`, ...(isLoopback(hostname) ? [] : [`${hostname}:${server.port}`]), ...(opts.allowedHosts ?? [])];
         return handleMcp(req, control, hosts, who ?? undefined);
       }),
-      // Read-only terminal stream. The socket accepts no messages at all: input would be typing and
-      // a resize would resize the agent's window, since the viewer may be its only tmux client.
+      // Terminal stream. Output is read-only; a client message is accepted only as input from the socket
+      // that holds the session's input lease. There is no resize: the viewer may be the agent's only tmux client.
       "/api/sessions/:name/terminal": { GET: guard((req, server, who) => openTerminal(req, server, who, req.params.name)) },
       // Same stream with the session in the query, so a proxy that routes WebSocket upgrades by exact
       // path (the DeepSeek Harness panel) can carry every session over one path.
       "/api/terminal": { GET: guard((req, server, who) => openTerminal(req, server, who, new URL(req.url).searchParams.get("session") ?? "")) },
     },
     websocket: {
+      // One input message is at most MAX_INPUT_BYTES; Bun closes a socket that sends more.
+      maxPayloadLength: MAX_INPUT_BYTES,
       async open(ws) {
         if (ws.data.busy) return ws.close(1013, BUSY_REASON);
         sockets.add(ws);
+        slots.socketIds.add(ws.data.id);
+        // Text frames are control messages; terminal output is always binary.
+        if (input) tell(ws, { type: "socket", id: ws.data.id, session: ws.data.session });
         try {
           const viewer = await openViewer({
             ...terminal!,
@@ -388,14 +446,26 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           ws.close(1011, e instanceof Error ? e.message.slice(0, 120) : "viewer failed");
         }
       },
-      message(ws) {
-        ws.close(1008, "read-only terminal: client messages are not accepted");
+      message(ws, message) {
+        if (!input) return ws.close(1008, "read-only terminal: client messages are not accepted");
+        // Keys come as binary frames only; text frames from the page are control messages, and the host takes none.
+        if (typeof message === "string") return ws.close(1008, "read-only terminal: keys must be binary messages");
+        const bytes = new Uint8Array(message);
+        // In order, one at a time: a key typed after another must arrive after it.
+        const prev = ws.data.typing ?? Promise.resolve();
+        ws.data.typing = prev.then(() => input.input(ws.data.session, ws.data.id, bytes)).catch((e) => {
+          if (ws.data.closed) return;
+          if (e instanceof LeaseError && e.kind === "gone") return ws.close(1008, "read-only terminal: no input lease for this socket");
+          tell(ws, { type: "input_error", message: e instanceof Error ? e.message.slice(0, 200) : "input failed" });
+        });
       },
       close(ws) {
         if (ws.data.busy) return;
         if (!ws.data.closed) slots.open--;
         sockets.delete(ws);
+        slots.socketIds.delete(ws.data.id);
         ws.data.closed = true;
+        input?.socketClosed(ws.data.id);
         ws.data.viewer?.close();
       },
     },
@@ -403,9 +473,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   });
   // A stopped server must not stay subscribed to a shared Auth, or every later reload still reaches it.
   // Some tests replace Bun.serve with a stub that has no stop.
-  if (unsubscribe && typeof server?.stop === "function") {
+  if ((unsubscribe || unlisten || sweeper) && typeof server?.stop === "function") {
     const stop = server.stop.bind(server);
-    server.stop = (force?: boolean) => { unsubscribe(); return stop(force); };
+    server.stop = (force?: boolean) => { unsubscribe?.(); unlisten?.(); clearInterval(sweeper); return stop(force); };
   }
   return server;
 }
