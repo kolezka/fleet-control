@@ -306,7 +306,7 @@ test("a stop that lands before the start issued its token still leaves no token 
     const gate = new Promise<void>((r) => { release = r; });
     const issue = s.tokens.issue.bind(s.tokens);
     let token = "";
-    s.tokens.issue = async (n) => { await gate; token = await issue(n); return token; };
+    s.tokens.issue = async (n, current) => { await gate; token = await issue(n, current); return token; };
     expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
     await settle();
     expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
@@ -319,5 +319,50 @@ test("a stop that lands before the start issued its token still leaves no token 
     expect(s.launcher.open.has("fc-orch")).toBe(false);
   } finally {
     s.server.stop(true);
+  }
+});
+
+test("a late start never revokes the token of a newer start of the same name; a late revoke that fails shows on the row", async () => {
+  const s = await setup();
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const issue = s.tokens.issue.bind(s.tokens);
+    let calls = 0;
+    s.tokens.issue = async (n, current) => { if (++calls === 1) await gate; return issue(n, current); };
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    // A newer start of the same name gets to running while the first is still waiting.
+    expect((await s.rest(s.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect(s.agents.get("fc-orch")!.state).toBe("running");
+    const newer = s.launcher.given.get("fc-orch")!;
+    release();
+    await settle();
+    await settle();
+    expect((await s.rest(newer, "/api/whoami")).status).toBe(200);
+    expect(s.agents.get("fc-orch")!.state).toBe("running");
+    expect(s.launcher.open.has("fc-orch")).toBe(true);
+    expect((await s.rest(s.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+  } finally {
+    s.server.stop(true);
+  }
+  const t = await setup();
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const issue = t.tokens.issue.bind(t.tokens);
+    t.tokens.issue = async (n, current) => { await gate; return issue(n, current); };
+    expect((await t.rest(t.op, "/api/agents", spec())).status).toBe(202);
+    await settle();
+    expect((await t.rest(t.op, "/api/agents/fc-orch/stop", {})).status).toBe(200);
+    t.tokens.revoke = async () => { throw new Error("tokens file is locked"); };
+    release();
+    await settle();
+    await settle();
+    expect(t.agents.get("fc-orch")!.error).toContain("token not revoked after a late start: tokens file is locked");
+  } finally {
+    t.server.stop(true);
   }
 });

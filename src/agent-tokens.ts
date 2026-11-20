@@ -28,9 +28,10 @@ export class FileAgentTokens implements AgentTokens {
 
   // A line left for this name (a crash between issue and revoke) is replaced, so its old token dies.
   // A line with another role was made by hand: it is never touched, and the start is refused.
-  async issue(name: string): Promise<string> {
+  async issue(name: string, current: () => boolean = () => true): Promise<string> {
     let token = "";
     await this.edit(name, (text, role) => {
+      if (!current()) throw new AgentError("conflict", `a newer start of ${name} owns its token`);
       if (role !== null && role !== "agent") throw new AgentError("invalid", `${name} is a token for role ${role}, not a managed agent; choose another agent name`);
       const c = role !== null ? change("revoke", name, text) : { text };
       const added = change("add", name, c.text, undefined, "agent");

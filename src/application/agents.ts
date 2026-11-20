@@ -82,7 +82,9 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if (!deps.agents.claim(agent)) throw new AgentError("conflict", `agent ${spec.name} was started by another request`);
       // The token is made in the background too; a failure there fails the start like any launch failure.
       const launch = async () => {
-        const token = spec.orchestrator ? await deps.tokens!.issue(spec.name) : undefined;
+        // Asked under the tokens lock: a start that a stop and a newer start overtook must not replace the
+        // newer start's token line.
+        const token = spec.orchestrator ? await deps.tokens!.issue(spec.name, () => deps.agents.get(spec.name)?.createdAt === at) : undefined;
         await deps.launcher.start({ ...spec, cwd }, fleetRows, token);
       };
       // Records a token the host could not take back, so the page shows it and not only the log.
@@ -98,7 +100,12 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
           // existed. End the session this launch made, unless a newer start owns the name now.
           if (deps.agents.get(spec.name)?.createdAt !== at) return;
           // That stop ran before this launch issued its token, so take the token back here too.
-          await revoke(agent).catch((e) => warn(`agent ${spec.name}: token not revoked after a late start: ${message(e)}`));
+          await revoke(agent).catch((e) => {
+            warn(`agent ${spec.name}: token not revoked after a late start: ${message(e)}`);
+            // Shown on the row too, so a live token without a session is visible on the page.
+            const row = deps.agents.get(spec.name);
+            if (row?.createdAt === at) deps.agents.transition(spec.name, [row.state], row.state, `${row.error ? `${row.error}; ` : ""}token not revoked after a late start: ${message(e)}`, now(), at);
+          });
           await deps.launcher.stop(spec.name, fleetRows).catch((e) => warn(`agent ${spec.name}: stop after a late start failed: ${message(e)}`));
         },
         async (e) => {

@@ -88,7 +88,9 @@ export type FleetRow = Pick<Agent, "name" | "kind" | "cwd" | "model" | "orchestr
 // An orchestrator's own token. issue() adds an agent-role line for the name to the host's tokens and returns the
 // token, which only the agent's MCP config file holds; revoke() removes the line. Both take effect at once.
 export interface AgentTokens {
-  issue(name: string): Promise<string>;
+  // `current` is asked under the tokens lock right before the write; false means a newer start owns the
+  // name, so nothing is written and the issue fails.
+  issue(name: string, current?: () => boolean): Promise<string>;
   revoke(name: string): Promise<void>;
   // Names that have an agent line now, read once without the lock (for the service-start sweep).
   held(): Promise<Set<string>>;
