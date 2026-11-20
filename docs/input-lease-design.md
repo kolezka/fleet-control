@@ -1,6 +1,6 @@
 # Terminal input lease: design
 
-Status: design only, 2026-11-16. Nothing here is implemented. Live terminal input needs its own owner authorization (`AGENTS.md`), so implementation waits for that decision.
+Status: implemented on branch `feat/input-lease` (2026-11-20), off by default (`FLEET_CONTROL_INPUT=1`). The owner authorized terminal input in the Portainer-style GUI goal. Three choices differ from this design, each for a stated reason: keys are pasted with `tmux load-buffer` + `paste-buffer -S -d`, not `send-keys`, because tmux refuses `send-keys` with "client is read-only" while the page's viewer is attached (measured on tmux 3.8 and 3.7c); the allowlist is the `operator` role (new `input` permission) instead of a separate `input` file, because roles arrived after this design; the lease is 5 minutes by default, 30 at most, as proposed. See [implementation status](implementation-status.md#terminal-input-lease-2026-11-20-branch-featinput-lease-not-released).
 
 ## Why
 
