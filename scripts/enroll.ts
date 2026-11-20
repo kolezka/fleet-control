@@ -109,6 +109,8 @@ export function freshPlan(a: Args, ctx: { code: string; bun: string; home: strin
   if (!FLEET_NAME.test(a.fleet!)) fail("fleet name is not valid");
   const port = Number(a.port);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) fail("port must be 1-65535");
+  // A launchd or systemd --user service cannot bind a port below 1024.
+  if (port < 1024) fail("a user service cannot bind a port below 1024; choose 1024 or higher");
   if (!/^[A-Za-z0-9.-]{1,253}$/.test(a["tailnet-name"]!)) fail("tailnet name is not valid");
   const expand = (p: string) => (p.startsWith("~/") ? join(ctx.home, p.slice(2)) : p);
   const data = join(ctx.home, ".local/share/fleet-control", a.label!);

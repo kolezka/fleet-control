@@ -124,7 +124,7 @@ test("review fixes: home folder, a host on 443, the release check in the connect
   expect(checkEnrollRequest({ ...connect, url: "https://mini.tail.ts.net" }).url).toBe("https://mini.tail.ts.net");
   expect(checkEnrollRequest({ ...connect, url: "https://mini.tail.ts.net:443" }).url).toBe("https://mini.tail.ts.net");
   // A user service cannot bind below 1024, so a fresh install on 443 is refused up front.
-  expect(() => checkEnrollRequest({ ...fresh, url: "https://arch.tail.ts.net", port: 443 })).toThrow("a fresh install needs a port from 1024 up; for a host already on 443 use connect");
+  expect(() => checkEnrollRequest({ ...fresh, url: "https://arch.tail.ts.net", port: 443 })).toThrow("a fresh install runs a user service, which needs a port from 1024 up; a host already on a lower port is added with connect");
   expect(checkEnrollRequest({ ...fresh, url: "https://arch.tail.ts.net:1024", port: 1024 }).port).toBe(1024);
   // A host on a release without the enroll script gets a clear message, not a Bun stack trace.
   // It must not use exit: a pasted exit would close the operator's own terminal.
