@@ -109,5 +109,5 @@ test("fresh refuses existing folders or unit and unreadable certificates before 
   }
   expect(() => freshPlan(freshArgs, { ...ctx, platform: "win32" })).toThrow(/only macOS launchd and Linux/);
   expect(() => freshPlan({ ...freshArgs, port: "443" }, ctx)).toThrow(/cannot bind a port below 1024/);
-  expect(freshPlan({ ...freshArgs, port: "1024" }, ctx).unit).toBe(freshPlan(freshArgs, ctx).unit);
+  expect(freshPlan({ ...freshArgs, port: "1024" }, ctx).files.map((f) => f.content).join("\n")).toContain("PORT=1024");
 });
