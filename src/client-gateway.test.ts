@@ -327,6 +327,15 @@ describe("routing and credential isolation", () => {
     if (chunked) expect(chunked.status).toBe(413);
     expect(a.seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
+
+  test("a lease DELETE goes through without a content type, as the page sends it; a DELETE with a body is refused", async () => {
+    const r = await fetch(`${base()}/api/hosts/a/sessions/probe/lease?reason=done`, { method: "DELETE", headers: { origin: page() } });
+    expect(r.status).not.toBe(415);
+    expect(a.seen.filter((s) => s.method === "DELETE").map((s) => s.path)).toEqual(["/api/sessions/probe/lease?reason=done"]);
+    const withBody = await fetch(`${base()}/api/hosts/a/sessions/probe/lease`, { method: "DELETE", headers: { origin: page(), "content-type": "application/json" }, body: "{}" });
+    expect(withBody.status).toBe(400);
+    expect(a.seen.filter((s) => s.method === "DELETE")).toHaveLength(1);
+  });
 });
 
 // --- failure isolation -------------------------------------------------------------------------

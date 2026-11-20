@@ -14,7 +14,7 @@ function setup() {
   const instances = new Map<string, string | null>([["probe", "$0:100:200"]]);
   const typed: { session: string; text: string }[] = [];
   const terminal: LeaseTerminal = {
-    instance: async (s) => instances.get(s) ?? null,
+    instance: async (s) => { const v = instances.get(s); if (v === "throw") throw new Error("tmux could not be asked"); return v ?? null; },
     type: async (session, bytes) => { typed.push({ session, text: new TextDecoder().decode(bytes) }); },
   };
   const leases = new Leases(new Database(":memory:"));
@@ -22,7 +22,7 @@ function setup() {
   const use = leaseUseCases({ leases, terminal, now: () => clock, newId: () => `lease-${++n}` });
   const ended: string[] = [];
   use.onEnd((l, reason) => ended.push(`${l.id}: ${reason}`));
-  const sock = (owner = op.name, session = "probe") => ({ owner, session });
+  const sock = (owner = op.name, session = "probe", isOpen = () => true) => ({ owner, session, isOpen });
   return { use, leases, typed, instances, ended, sock, tick: (ms: number) => { clock = new Date(clock.getTime() + ms); } };
 }
 
@@ -70,7 +70,7 @@ test("a lease is granted only to the caller's own open terminal of that session,
   await expect(t.use.grant({ name: "v", role: "viewer" }, { session: "probe", socketId: "s1", socket: t.sock("v") })).rejects.toThrow("role viewer may not type into a terminal");
   await expect(t.use.grant(op, { session: "missing", socketId: "s1", socket: t.sock(op.name, "missing") })).rejects.toThrow("no session missing");
   await expect(t.use.grant(op, { session: "probe", socketId: "s1", socket: t.sock(), minutes: 31 })).rejects.toThrow("from 1 to 30");
-  expect(t.use.list()).toEqual([]);
+  expect(t.use.list(op)).toEqual([]);
 });
 
 test("another operator can revoke with a recorded reason; a restart ends every open lease", async () => {
@@ -99,4 +99,48 @@ test("a queued command waits while the session has a live lease and goes out whe
   await Bun.sleep(10);
   expect(sent).toEqual(["probe"]);
   expect(commands.get(id).status).toBe("delivered");
+});
+
+test("review fixes: a socket closing mid-grant gets no lease, a gone socket is swept, a failed probe ends nothing, the list needs input", async () => {
+  const t = setup();
+  // The socket closes while grant waits on tmux: no lease may remain.
+  let open = true;
+  const slow: LeaseTerminal = { instance: async () => { open = false; return "$0:100:200:-"; }, type: async () => {} };
+  const race = leaseUseCases({ leases: new Leases(new Database(":memory:")), terminal: slow });
+  await expect(race.grant(op, { session: "probe", socketId: "s1", socket: { owner: op.name, session: "probe", isOpen: () => open } })).rejects.toThrow("that terminal closed");
+  expect(race.list(op)).toEqual([]);
+
+  // A lease whose socket is no longer known is ended by the sweep.
+  await t.use.grant(op, { session: "probe", socketId: "s1", socket: t.sock() });
+  expect((await t.use.sweep((id) => id !== "s1")).map((e) => e.reason)).toEqual(["terminal closed"]);
+
+  // tmux cannot be asked: the sweep ends nothing, deliveries stay held, input is refused with a real error.
+  await t.use.grant(op, { session: "probe", socketId: "s2", socket: t.sock() });
+  t.instances.set("probe", "throw");
+  expect(await t.use.sweep()).toEqual([]);
+  expect((await t.use.holds("probe"))?.socketId).toBe("s2");
+  await expect(t.use.input("probe", "s2", new TextEncoder().encode("x"))).rejects.toThrow("tmux could not be asked");
+  // Expiry still ends it without tmux.
+  t.tick(5 * 60_000);
+  expect((await t.use.sweep()).map((e) => e.reason)).toEqual(["lease expired"]);
+
+  expect(() => t.use.list({ name: "watcher", role: "viewer" })).toThrow("role viewer may not type into a terminal");
+  expect(() => t.use.list({ name: "orch", role: "agent" })).toThrow("role agent may not type into a terminal");
+});
+
+test("one held command that fails to go out does not strand the ones queued behind it", async () => {
+  const commands = new Commands(new Database(":memory:"));
+  const sent: string[] = [];
+  let calls = 0;
+  const deliverer = new Deliverer(commands, async (session) => { sent.push(session); return { exitCode: 0, stdout: `${session}: delivered`, stderr: "" }; }, undefined,
+    async () => { calls++; if (calls === 1) throw new Error("lease check failed"); return false; });
+  const a = commands.submit({ idempotencyKey: "a", target: "probe", actor: "orch", text: "one" }).command.id;
+  const b = commands.submit({ idempotencyKey: "b", target: "probe", actor: "orch", text: "two" }).command.id;
+  // Commands go oldest first, and two made in the same millisecond tie on id; the first one checked fails.
+  const [first, second] = commands.list("queued").map((c) => c.id);
+  expect([first, second].sort()).toEqual([a, b].sort());
+  const out = await deliverer.deliverQueued("probe");
+  expect(out.map((c) => c.id)).toEqual([second!]);
+  expect(commands.get(first!).status).toBe("queued");
+  expect(commands.get(second!).status).toBe("delivered");
 });

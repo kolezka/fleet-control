@@ -4,7 +4,7 @@
 export type Lease = {
   id: string;
   session: string;
-  instance: string; // `#{session_id}:#{session_created}:#{pane_pid}` at grant time
+  instance: string; // `#{session_id}:#{session_created}:#{pane_pid}:<oldest child pid or ->` at grant time
   holder: string; // principal name
   socketId: string; // the one terminal socket allowed to write
   grantedAt: string;

@@ -29,7 +29,11 @@ export class Deliverer {
   // Sends every queued command for one session, oldest first. Called when its input lease ends.
   async deliverQueued(session: string): Promise<Command[]> {
     const out: Command[] = [];
-    for (const c of this.commands.list("queued")) if (c.target === session) out.push(await this.deliver(c.id));
+    // One failed delivery must not strand the commands queued behind it.
+    for (const c of this.commands.list("queued")) {
+      if (c.target !== session) continue;
+      try { out.push(await this.deliver(c.id)); } catch (e) { console.error(`delivery of ${c.id} failed: ${e instanceof Error ? e.message : e}`); }
+    }
     return out;
   }
 

@@ -176,7 +176,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   // A lease that ends for any reason tells its socket, which goes back to read-only.
   const unlisten = input?.onEnd((lease, reason) => tell(socketById(lease.socketId), { type: "lease", state: "ended", session: lease.session, reason }));
   // Expiry and a restarted session end a lease even while nobody types.
-  const sweeper = input ? setInterval(() => { input.sweep().catch((e) => console.error(`lease sweep failed: ${e instanceof Error ? e.message : e}`)); }, 1000) : undefined;
+  const sweeper = input ? setInterval(() => { input.sweep((id) => { const ws = socketById(id); return Boolean(ws && !ws.data.closed); }).catch((e) => console.error(`lease sweep failed: ${e instanceof Error ? e.message : e}`)); }, 1000) : undefined;
   const unsubscribe = auth?.onReplace(() => {
     for (const ws of sockets) if (ws.data.principal && !auth.current(ws.data.principal)) ws.close(1008, "token revoked");
   });
@@ -381,7 +381,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const b = body as Record<string, unknown>;
             const id = typeof b.socket === "string" ? b.socket : "";
             const ws = id ? socketById(id) : undefined;
-            const socket = ws && !ws.data.closed ? { owner: ws.data.principal?.name ?? "local", session: ws.data.session } : undefined;
+            const socket = ws && !ws.data.closed ? { owner: ws.data.principal?.name ?? "local", session: ws.data.session, isOpen: () => !ws.data.closed } : undefined;
             const lease = await input.grant(who ?? undefined, { session: req.params.name, socketId: id, socket, minutes: b.minutes, reason: b.reason });
             tell(ws, { type: "lease", state: "granted", session: lease.session, expiresAt: lease.expiresAt });
             return Response.json({ lease }, { status: 201 });
@@ -399,7 +399,11 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           } catch (e) { return commandError(e); }
         }),
       },
-      "/api/leases": { GET: guard(() => (input ? Response.json({ leases: input.list() }) : noInput())) },
+      // Who holds which session is for callers who may type themselves.
+      "/api/leases": { GET: guard((_req, _s, who) => {
+        if (!input) return noInput();
+        try { return Response.json({ leases: input.list(who ?? undefined) }); } catch (e) { return commandError(e); }
+      }) },
       // Streamable HTTP MCP endpoint. DNS rebinding protection admits only the configured Host headers.
       "/mcp": guard(async (req, _s, who) => {
         if (!control) return noControl();
@@ -439,7 +443,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       message(ws, message) {
         if (!input) return ws.close(1008, "read-only terminal: client messages are not accepted");
-        const bytes = typeof message === "string" ? new TextEncoder().encode(message) : new Uint8Array(message);
+        // Keys come as binary frames only; text frames from the page are control messages, and the host takes none.
+        if (typeof message === "string") return ws.close(1008, "read-only terminal: keys must be binary messages");
+        const bytes = new Uint8Array(message);
         // In order, one at a time: a key typed after another must arrive after it.
         const prev = ws.data.typing ?? Promise.resolve();
         ws.data.typing = prev.then(() => input.input(ws.data.session, ws.data.id, bytes)).catch((e) => {

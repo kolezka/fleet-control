@@ -51,8 +51,9 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
     const closed = new Promise<{ code: number; reason: string }>((resolve) => { ws.onclose = (e) => resolve({ code: e.code, reason: e.reason }); });
     return { ws, texts, closed, id: async () => { await until(() => texts.some((t) => t.type === "socket")); return texts.find((t) => t.type === "socket")!.id as string; } };
   };
+  // A DELETE goes out as the page sends it: no content type, no body.
   const lease = (token: string, body: unknown, method = "POST") => fetch(`${server.url}api/sessions/reader/lease`, {
-    method, headers: { origin: origin(), "content-type": "application/json", authorization: `Bearer ${token}` }, body: method === "POST" ? JSON.stringify(body) : undefined,
+    method, headers: { origin: origin(), authorization: `Bearer ${token}`, ...(method === "POST" ? { "content-type": "application/json" } : {}) }, body: method === "POST" ? JSON.stringify(body) : undefined,
   });
   const openLeases = async () => ((await (await fetch(`${server.url}api/leases`, { headers: { authorization: `Bearer ${alice}` } })).json()) as { leases: unknown[] }).leases.length;
 
@@ -62,7 +63,7 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
     // Without a lease a message closes the socket, as the read-only terminal always did.
     const b = open(alice);
     await b.id();
-    b.ws.send("x");
+    b.ws.send(new Uint8Array([0x78]));
     expect(await b.closed).toEqual({ code: 1008, reason: "read-only terminal: no input lease for this socket" });
 
     const r = await lease(alice, { socket: id, reason: "test" });
@@ -112,12 +113,17 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
       const closed = new Promise<number>((r) => { ws.onclose = (e) => r(e.code); });
       expect(await until(() => texts.some((t) => t.type === "socket"))).toBe(true);
       const id = texts.find((t) => t.type === "socket")!.id as string;
-      const call = (method: string, body?: unknown) => fetch(`${page}/api/hosts/h/sessions/reader/lease${method === "DELETE" ? "?reason=done" : ""}`, { method, headers: { origin: page, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+      // Exactly the page's requests: POST with JSON, DELETE with neither content type nor body (web/app.ts).
+      const call = (method: string, body?: unknown) => fetch(`${page}/api/hosts/h/sessions/reader/lease${method === "DELETE" ? "?reason=done" : ""}`,
+        method === "POST" ? { method, headers: { origin: page, "content-type": "application/json" }, body: JSON.stringify(body) } : { method, headers: { origin: page } });
       expect((await call("POST", { socket: id, minutes: 2 })).status).toBe(201);
       ws.send(new Uint8Array([0x67, 0x77, 0x0d]));
       expect(await until(async () => (await pane()).includes("B=67770d"))).toBe(true);
       expect(((await (await fetch(`${page}/api/hosts/h/leases`, { headers: { origin: page } })).json()) as { leases: { holder: string }[] }).leases.map((l) => l.holder)).toEqual(["alice"]);
-      expect(await (await call("DELETE")).json()).toEqual({ ended: true });
+      const released = await call("DELETE");
+      expect(released.status).toBe(200);
+      expect(await released.json()).toEqual({ ended: true });
+      expect(await openLeases()).toBe(0);
       ws.send(new Uint8Array([0x7a]));
       expect(await closed).toBe(1008);
     } finally {
@@ -135,5 +141,18 @@ describe.skipIf(!usable)("terminal input lease on a private tmux server", () => 
     a.ws.send("zz");
     expect((await a.closed).code).toBe(1008);
     expect(await pane()).toBe(before);
+  });
+
+  test("the holder's text frames are not keys, and only callers who may type see who holds what", async () => {
+    const a = open(alice);
+    const id = await a.id();
+    expect((await lease(alice, { socket: id })).status).toBe(201);
+    const before = await pane();
+    a.ws.send("echo text-frame\r");
+    expect(await a.closed).toEqual({ code: 1008, reason: "read-only terminal: keys must be binary messages" });
+    expect(await pane()).toBe(before);
+    expect(await until(async () => (await openLeases()) === 0)).toBe(true);
+    const r = await fetch(`${server.url}api/leases`, { headers: { authorization: `Bearer ${viewer}` } });
+    expect(r.status).toBe(403);
   });
 });

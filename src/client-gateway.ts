@@ -324,7 +324,10 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
 
     const headers = new Headers({ authorization: `Bearer ${token}`, ...(!central ? { origin: host.origin } : {}) });
     let body: Uint8Array | undefined;
-    if (write) {
+    // A DELETE carries no body, so it needs no content type; one that sends a body is refused.
+    if (write && req.method === "DELETE") {
+      if (req.body !== null || Number(req.headers.get("content-length") ?? 0) > 0) return fail(400, "invalid", "a DELETE takes no body");
+    } else if (write) {
       const ctype = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
       if (ctype !== "application/json") return fail(415, "unsupported_media_type", "content-type must be application/json");
       const limit = mcp ? maxReq * 4 : maxReq;

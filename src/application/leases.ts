@@ -7,7 +7,8 @@ import { requirePermission, type Caller } from "../domain/roles.ts";
 import { sessionNamePattern } from "../domain/commands.ts";
 
 export type LeaseTerminal = {
-  // `#{session_id}:#{session_created}:#{pane_pid}` of the session now, or null when it does not exist.
+  // Identity of the session's pane and the program running in it now, or null when the session does not exist.
+  // Throws when tmux could not be asked: that says nothing about the session, so no lease ends on it.
   instance(session: string): Promise<string | null>;
   // Types the bytes into the session's pane, exactly as given.
   type(session: string, bytes: Uint8Array): Promise<void>;
@@ -41,9 +42,12 @@ export function leaseUseCases(deps: LeaseDeps) {
   };
 
   // The open lease if it still allows input; a dead one is ended here, so it never blocks the next grant.
+  // Expiry needs no tmux, so an expired lease ends even while tmux cannot be asked. A failed probe throws.
   const live = async (session: string): Promise<Lease | null> => {
     const l = deps.leases.open(session);
     if (!l) return null;
+    const expired = leaseDead(l, now(), l.instance);
+    if (expired) { end(l, expired); return null; }
     const dead = leaseDead(l, now(), await deps.terminal.instance(session));
     if (dead) { end(l, dead); return null; }
     return l;
@@ -52,7 +56,8 @@ export function leaseUseCases(deps: LeaseDeps) {
   return {
     // The socket must belong to the caller: a lease is never granted to someone else's terminal.
     // `socket` is the caller's open terminal for this session as the server knows it, or undefined.
-    async grant(caller: Caller | undefined, input: { session: string; socketId: string; socket: { owner: string; session: string } | undefined; minutes?: unknown; reason?: unknown }): Promise<LeaseView> {
+    // `isOpen` is asked again after the last await: a socket that closed meanwhile never gets a lease nothing would end.
+    async grant(caller: Caller | undefined, input: { session: string; socketId: string; socket: { owner: string; session: string; isOpen: () => boolean } | undefined; minutes?: unknown; reason?: unknown }): Promise<LeaseView> {
       requirePermission(caller, "input");
       checkSession(input.session);
       const minutes = leaseMinutes(input.minutes);
@@ -64,6 +69,7 @@ export function leaseUseCases(deps: LeaseDeps) {
       if (!instance) throw new LeaseError("not_found", `no session ${input.session}`);
       const held = await live(input.session);
       if (held) throw new LeaseError("conflict", `${input.session} is held by ${held.holder} until ${held.expiresAt}`);
+      if (!input.socket.isOpen()) throw new LeaseError("invalid", "that terminal closed; reopen it and try again");
       const at = now();
       return view(deps.leases.grant({
         id: newId(), session: input.session, instance, holder: caller?.name ?? "local",
@@ -102,22 +108,33 @@ export function leaseUseCases(deps: LeaseDeps) {
       for (const l of deps.leases.openForSocket(socketId)) end(l, "terminal closed");
     },
 
-    // Ends leases that expired or whose session restarted or ended. Returns what ended, for the sockets.
-    async sweep(): Promise<{ lease: Lease; reason: string }[]> {
+    // Ends leases that expired, whose session restarted or ended, or whose socket is gone (`socketOpen`
+    // false: closed without the close callback). A lease whose session cannot be probed now is left for the next sweep.
+    async sweep(socketOpen: (socketId: string) => boolean = () => true): Promise<{ lease: Lease; reason: string }[]> {
       const out: { lease: Lease; reason: string }[] = [];
       for (const l of deps.leases.openAll()) {
-        const dead = leaseDead(l, now(), await deps.terminal.instance(l.session));
+        let dead = socketOpen(l.socketId) ? leaseDead(l, now(), l.instance) : "terminal closed";
+        if (!dead) {
+          try { dead = leaseDead(l, now(), await deps.terminal.instance(l.session)); } catch (e) {
+            console.error(`lease check for ${l.session} failed: ${e instanceof Error ? e.message : e}`);
+            continue;
+          }
+        }
         if (dead && end(l, dead)) out.push({ lease: l, reason: dead });
       }
       return out;
     },
 
-    // Whether deliveries to this session must wait. A dead lease does not hold anything.
+    // Whether deliveries to this session must wait. A dead lease does not hold anything; one whose
+    // session cannot be probed now still holds, so a paste never lands in what someone may be typing.
     async holds(session: string): Promise<Lease | null> {
-      return live(session);
+      try { return await live(session); } catch { return deps.leases.open(session); }
     },
 
-    list: (): LeaseView[] => deps.leases.openAll().map(view),
+    list(caller: Caller | undefined): LeaseView[] {
+      requirePermission(caller, "input");
+      return deps.leases.openAll().map(view);
+    },
 
     onEnd(f: LeaseEndListener): () => void {
       listeners.add(f);
