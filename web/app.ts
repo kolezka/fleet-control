@@ -10,7 +10,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AgentForm, type AgentList, agentStateText, canStop, parseAgents, settling, startGate } from "./agents.ts";
+import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -439,7 +439,7 @@ type AgentView = { list: AgentList | null; status: "loading" | "ready" | "unknow
 const agentViews = new Map<string, AgentView>();
 function agentView(hostId: string): AgentView {
   let v = agentViews.get(hostId);
-  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", cwd: "", model: "", prompt: "", confirm: "" } }; agentViews.set(hostId, v); }
+  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", kind: "claude", cwd: "", model: "", prompt: "", confirm: "" } }; agentViews.set(hostId, v); }
   return v;
 }
 
@@ -452,7 +452,7 @@ function renderAgents(h: HostState | undefined) {
   box.hidden = false;
   const list = v.list;
   form.hidden = v.status === "absent";
-  const rows = (list?.agents ?? []).map(a => '<li><div class="exchangemeta"><strong>' + esc(a.name) + '</strong><time>' + esc(time(a.updatedAt)) + '</time></div><p>' + esc(agentStateText(a) + ' · ' + a.model + ' · ' + a.cwd) + '</p>'
+  const rows = (list?.agents ?? []).map(a => '<li><div class="exchangemeta"><strong>' + esc(a.name) + '</strong><time>' + esc(time(a.updatedAt)) + '</time></div><p>' + esc(agentStateText(a) + ' · ' + KIND_LABEL[a.kind] + ' ' + a.model + ' · ' + a.cwd) + '</p>'
     + (canStop(a) ? '<button type="button" class="destructive" data-fk="stop-' + esc(a.name) + '" data-stop="' + esc(a.name) + '" data-host="' + esc(h.info.id) + '"' + (v.busy ? ' disabled' : '') + '>Stop ' + esc(a.name) + '</button>' : '') + '</li>').join('');
   setHtml($("agentRows"), rows);
   $("agentListStatus").textContent = v.status === "absent" ? `Managed agents are not configured on ${h.info.name}.`
@@ -461,10 +461,21 @@ function renderAgents(h: HostState | undefined) {
     : list && list.agents.length === 0 ? `No managed agents on ${h.info.name}.` : "";
   const folder = $("agentFolder") as HTMLSelectElement;
   const model = $("agentModel") as HTMLSelectElement;
+  const kind = $("agentKind") as HTMLSelectElement;
   const folders = list?.folders ?? [];
-  const models = list?.models ?? [];
+  const kinds = kindsOf(list);
+  if (kinds.length && !kinds.includes(v.form.kind)) v.form.kind = kinds[0]!;
+  const models = modelsFor(list, v.form.kind);
   if (!v.form.cwd && folders[0]) v.form.cwd = folders[0];
-  if (!v.form.model && models[0]) v.form.model = models[0];
+  // A model from the other kind is not kept when the kind changes.
+  if (!models.includes(v.form.model)) v.form.model = models[0] ?? "";
+  // One kind on offer needs no picker.
+  kind.hidden = $("agentKindLabel").hidden = kinds.length < 2;
+  setHtml(kind, kinds.map(k => '<option value="' + k + '">' + esc(KIND_LABEL[k]) + '</option>').join(''));
+  kind.value = v.form.kind;
+  $("agentRisk").textContent = v.form.kind === "dsh"
+    ? "The agent runs unattended through DSH headless, allowed to write inside the chosen folder."
+    : "The agent runs unattended with permission prompts skipped, inside the chosen folder.";
   setHtml(folder, folders.map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('') || '<option value="">No folders</option>');
   setHtml(model, models.map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join(''));
   folder.value = v.form.cwd;
@@ -648,11 +659,15 @@ document.addEventListener("click", (e) => {
 });
 
 // The form draft belongs to the selected host, like the instruction draft.
-for (const [id, key] of [["agentName", "name"], ["agentFolder", "cwd"], ["agentModel", "model"], ["agentPrompt", "prompt"], ["agentConfirm", "confirm"]] as const) {
+for (const [id, key] of [["agentName", "name"], ["agentKind", "kind"], ["agentFolder", "cwd"], ["agentModel", "model"], ["agentPrompt", "prompt"], ["agentConfirm", "confirm"]] as const) {
   $(id).addEventListener("input", () => {
     const h = selectedHostState(fleet);
     if (!h) return;
-    agentView(h.info.id).form[key] = ($(id) as HTMLInputElement).value;
+    const form = agentView(h.info.id).form;
+    const value = ($(id) as HTMLInputElement).value;
+    // The kind comes from a picker filled with known kinds; anything else is ignored.
+    if (key === "kind") { if (Object.hasOwn(KIND_LABEL, value)) form.kind = value as AgentKind; }
+    else form[key] = value;
     renderAgents(h);
   });
 }

@@ -1,7 +1,9 @@
-// Starts and stops managed Claude Code agents through agent-fleet on this machine.
+// Starts and stops managed Claude Code and DSH agents through agent-fleet on this machine.
 // The fleet's own fleet.conf gets one marked line that sources a file this service owns. That file adds a row
 // per managed agent and an agent_overrides function that agent-fleet's watchdog calls with the session name
-// on every start and replacement, so each agent keeps its folder and Claude Code arguments.
+// on every start and replacement, so each agent keeps its folder, kind and arguments. A DSH agent also gets a
+// small DSH patch file that turns the credentials store on (the headless profile has it off) and picks its model;
+// the keys stay where DSH keeps them.
 // The service writes files on this machine, so fleets that run over ssh are refused.
 import { chmod, mkdir, readdir, realpath, rename, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -121,7 +123,11 @@ export class FleetAgentLauncher implements AgentLauncher {
     const lines = [`# Written by Fleet Control for its managed agents. Changes here are overwritten.`];
     for (const r of rows) lines.push(`AGENTS+=("${r.name}|Fleet: ${r.name}|${r.name}.txt")`);
     lines.push('agent_overrides() { case "$1" in');
-    for (const r of rows) lines.push(`  ${r.name}) AGENT_CWD=${r.cwd}; CLAUDE_ARGS="--dangerously-skip-permissions --model ${r.model}" ;;`);
+    for (const r of rows) {
+      lines.push(r.kind === "dsh"
+        ? `  ${r.name}) AGENT_CWD=${r.cwd}; AGENT_KIND=dsh; DSH_ARGS="--patch ${join(dir, dshPatchFile(r.name))} --permission-mode workspace-write" ;;`
+        : `  ${r.name}) AGENT_CWD=${r.cwd}; AGENT_KIND=claude; CLAUDE_ARGS="--dangerously-skip-permissions --model ${r.model}" ;;`);
+    }
     lines.push("esac; }", "");
     await atomicWrite(join(dir, MANAGED_FILE), lines.join("\n"));
     const conf = await Bun.file(this.opts.confPath).text();
@@ -166,8 +172,17 @@ export class FleetAgentLauncher implements AgentLauncher {
       if (!watchdog.includes("agent_overrides")) {
         throw new AgentError("unavailable", `${join(dir, "watchdog.sh")} does not support agent_overrides; run fleet sync with agent-fleet 0.5.0 or newer`);
       }
-      // Trust first: if Claude Code's state cannot be read, nothing else is written.
-      await this.trust(agent.cwd);
+      if (agent.kind === "dsh") {
+        // An older watchdog takes the kind from the fleet only and would start Claude Code instead.
+        if (!watchdog.includes("agent_kind()")) {
+          throw new AgentError("unavailable", `${join(dir, "watchdog.sh")} does not support a per-agent kind; run fleet sync with agent-fleet 0.6.0 or newer`);
+        }
+        await writeFile(join(dir, dshPatchFile(agent.name)), dshPatch(agent.model), { mode: 0o600 });
+        await chmod(join(dir, dshPatchFile(agent.name)), 0o600);
+      } else {
+        // Trust first: if Claude Code's state cannot be read, nothing else is written.
+        await this.trust(agent.cwd);
+      }
       await writeFile(join(dir, `${agent.name}.txt`), agent.prompt.endsWith("\n") ? agent.prompt : agent.prompt + "\n", { mode: 0o600 });
       await chmod(join(dir, `${agent.name}.txt`), 0o600);
       if (!(await Bun.file(join(dir, "autonomy.txt")).exists())) await writeFile(join(dir, "autonomy.txt"), AUTONOMY, { mode: 0o644 });
@@ -200,6 +215,26 @@ export class FleetAgentLauncher implements AgentLauncher {
       await this.writeRows(dir, rows().filter((r) => r.name !== name));
     });
   }
+}
+
+export const dshPatchFile = (name: string) => `${name}.dsh.yml`;
+
+// DSH patch for one agent: the headless profile turns the credentials store off, which leaves DSH without
+// keys; this turns it back on (the keys stay in DSH's own store) and sets the model. model is provider/model,
+// checked against DSH_MODEL, so it is plain enough for YAML without quoting.
+export function dshPatch(model: string): string {
+  const [provider, id] = model.split("/");
+  return [
+    "# Written by Fleet Control for one managed DSH agent.",
+    "- id: credentials",
+    "  disabled: false",
+    "- id: agent-default-model",
+    '  name: "@deepseek-ai/dsh-agent-default-model"',
+    "  config:",
+    `    provider: ${provider}`,
+    `    model: ${id}`,
+    "",
+  ].join("\n");
 }
 
 async function atomicWrite(path: string, text: string) {

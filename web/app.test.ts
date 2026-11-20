@@ -321,7 +321,9 @@ test("agent form starts only after the name is typed again, and Stop posts to th
   await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
   const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
-  expect(JSON.parse(String(post.init!.body))).toEqual({ name: "fc-new", cwd: "/r/other", model: "haiku", prompt: "Say hi", confirm: "fc-new" });
+  expect(JSON.parse(String(post.init!.body))).toEqual({ name: "fc-new", kind: "claude", cwd: "/r/other", model: "haiku", prompt: "Say hi", confirm: "fc-new" });
+  // An older host offers only Claude Code: no kind picker.
+  expect(b.element("agentKind").hidden).toBe(true);
   expect(b.element("agentStatus").textContent).toContain("fc-new accepted, starting");
   expect(b.element("agentConfirm").value).toBe("");
   await b.click({ stop: "fc-old", host: "a" });
@@ -348,4 +350,35 @@ test("a refused start shows the host's reason and a host without agents hides th
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("agentForm").hidden).toBe(true);
   expect(b.element("agentListStatus").textContent).toBe("Managed agents are not configured on B.");
+});
+
+test("a host offering DSH shows a kind picker; picking DSH swaps the model list and posts kind dsh", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const agents = [{ name: "fc-deep", kind: "dsh", cwd: "/r/s", model: "deepseek-official/deepseek-flash", state: "running", error: null, createdBy: "gw", updatedAt: "2026-11-20T16:00:00Z", alive: true }];
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 202, agent: { ...JSON.parse(String(init.body)), state: "starting" } };
+    if (path.endsWith("/agents")) return { agents, models: ["haiku"], kinds: { claude: ["haiku"], dsh: ["deepseek-official/deepseek-flash", "cliproxyapi/claude-haiku-5-5"], codex: ["x"] }, folders: ["/r/s"] };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("agentRows").innerHTML).toContain("DSH deepseek-official/deepseek-flash");
+  expect(b.element("agentKind").hidden).toBe(false);
+  // Only kinds this panel knows are offered.
+  expect(b.element("agentKind").innerHTML).toBe('<option value="claude">Claude Code</option><option value="dsh">DSH</option>');
+  expect(b.element("agentModel").innerHTML).not.toContain("deepseek");
+  const type = async (id: string, value: string) => { b.element(id).value = value; await b.listeners.get(id + ":input")!({}); };
+  await type("agentKind", "dsh");
+  expect(b.element("agentModel").innerHTML).toContain("cliproxyapi/claude-haiku-5-5");
+  expect(b.element("agentModel").innerHTML).not.toContain(">haiku<");
+  expect(b.element("agentRisk").textContent).toContain("DSH headless");
+  for (const [id, v] of [["agentName", "fc-d2"], ["agentPrompt", "Say READY"], ["agentConfirm", "fc-d2"]] as const) await type(id, v);
+  await type("agentModel", "cliproxyapi/claude-haiku-5-5");
+  expect(b.element("agentStart").disabled).toBe(false);
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
+  expect(JSON.parse(String(post.init!.body))).toMatchObject({ name: "fc-d2", kind: "dsh", model: "cliproxyapi/claude-haiku-5-5" });
+  // Back to Claude Code: the DSH model is not kept.
+  await type("agentKind", "claude");
+  expect(b.element("agentModel").value).toBe("haiku");
 });

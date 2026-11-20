@@ -17,7 +17,7 @@ const launcher: AgentLauncher = {
   running: async () => new Set(calls.filter((c) => c.startsWith("start")).length > calls.filter((c) => c.startsWith("stop")).length ? ["fc-gw"] : []),
 };
 const store = new Store(":memory:");
-const host = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" }, store, agents: { agents: new Agents(store.db), launcher, models: ["haiku"] } },
+const host = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" }, store, agents: { agents: new Agents(store.db), launcher, models: { claude: ["haiku"] } } },
   0, { auth: new Auth(parseTokens(tokenLine("gw", "gateway-token", "operator"))) });
 const gateway = startGateway({ hosts: [{ id: "mini", name: "mini", origin: host.url.origin }], credentials: new Credentials(new Map([["mini", "gateway-token"]])) }, { port: 0, timeoutMs: 2000 });
 afterAll(() => { gateway.stop(true); host.stop(true); store.db.close(); });
@@ -27,8 +27,8 @@ const post = (path: string, body: unknown, origin: string | null = gateway.url.o
 });
 
 test("start, list and stop go through the gateway with the host's checks intact", async () => {
-  const listed = await (await fetch(url("agents"))).json() as { models: string[]; folders: string[]; agents: unknown[] };
-  expect(listed).toEqual({ agents: [], models: ["haiku"], folders: ["/r/sandbox"] });
+  const listed = await (await fetch(url("agents"))).json() as { models: string[]; kinds: unknown; folders: string[]; agents: unknown[] };
+  expect(listed).toEqual({ agents: [], models: ["haiku"], kinds: { claude: ["haiku"] }, folders: ["/r/sandbox"] });
 
   // The host's own validation answers through the gateway.
   const bad = await post("agents", { name: "fc-gw", cwd: "/r/sandbox", model: "haiku", prompt: "hi", confirm: "nope" });

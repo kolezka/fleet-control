@@ -1,14 +1,14 @@
-// Start and stop Claude Code agents on this host. Only an operator may; the start is confirmed by name,
+// Start and stop Claude Code and DSH agents on this host. Only an operator may; the start is confirmed by name,
 // the folder must be inside an allowed root and the prompt may not carry a token.
 import { createHash } from "node:crypto";
 import type { Agents } from "../data/agents.ts";
-import { AgentError, checkSpec, keepsFleetRow, recovered, restartable, stoppable, type Agent, type AgentLauncher } from "../domain/agents.ts";
+import { AgentError, checkSpec, keepsFleetRow, recovered, restartable, stoppable, type Agent, type AgentLauncher, type AgentModels } from "../domain/agents.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
 
 export type AgentDeps = {
   agents: Agents;
   launcher: AgentLauncher;
-  models: readonly string[];
+  models: AgentModels;
   now?: () => Date;
   carriesSecret?: (text: string) => boolean;
   // Where background failures go (a rewrite or a second stop after the reply was sent). Default: console.error.
@@ -24,7 +24,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
   const now = () => (deps.now ?? (() => new Date()))().toISOString();
   const warn = deps.warn ?? ((m: string) => console.error(m));
   // Rows that still own a fleet entry, read when the launcher writes the file.
-  const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, cwd, model }) => ({ name, cwd, model }));
+  const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, kind, cwd, model }) => ({ name, kind, cwd, model }));
 
   return {
     models: deps.models,
@@ -49,7 +49,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       return changed;
     },
 
-    // Claims the name, then launches in the background: agent-fleet waits up to 90 s for Claude Code.
+    // Claims the name, then launches in the background: agent-fleet waits up to 90 s for the agent.
     // `launched` settles when the start finished or failed; the reply does not wait for it.
     async start(input: Record<string, unknown>): Promise<{ agent: Agent; launched: Promise<void> }> {
       requirePermission(caller, "operate");
@@ -61,7 +61,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if ((await deps.launcher.running()).has(spec.name)) throw new AgentError("conflict", `a session named ${spec.name} is already open`);
       const at = now();
       const agent: Agent = {
-        name: spec.name, cwd, model: spec.model,
+        name: spec.name, kind: spec.kind, cwd, model: spec.model,
         promptSha256: createHash("sha256").update(spec.prompt).digest("hex"),
         promptBytes: new TextEncoder().encode(spec.prompt).length,
         createdBy: caller?.name ?? "local", createdAt: at, state: "starting", error: null, updatedAt: at,
