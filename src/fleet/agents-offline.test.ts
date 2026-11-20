@@ -211,9 +211,10 @@ test("an include line with trailing spaces or CRLF is not added twice", async ()
   expect((await readFile(confPath, "utf8")).split("\n").filter((line) => line.includes(MANAGED_FILE))).toHaveLength(1);
 });
 
-test("the pinned agent-fleet watchdog passes the launcher's agent_overrides check", async () => {
+test("the pinned agent-fleet watchdog passes the launcher's agent_overrides and agent_kind checks", async () => {
   const pinned = await readFile(join(import.meta.dir, "..", "..", "vendor", "agent-fleet", "scripts", "watchdog.sh"), "utf8");
   expect(pinned).toContain("agent_overrides");
+  expect(pinned).toContain("agent_kind()");
 });
 
 test("a DSH agent gets kind dsh, its own patch file and no Claude Code trust; the next agent keeps its own kind", async () => {
