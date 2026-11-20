@@ -50,6 +50,24 @@ export function change(action: Change["action"], name: string, text: string, tok
   return { action, name, ...(action === "rotate" || action === "add" ? { token } : {}), text: out };
 }
 
+// Adds a line from a hash made elsewhere (the gateway keeps the token). The same line already
+// present is a no-op, so pasting the command twice is safe; another hash for the name is refused.
+export function addHash(text: string, name: string, hash: string, role: Role): { text: string; changed: boolean } {
+  tokenLine(name, "", role); // validates name and role
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new AuthConfigError("hash must be 64 lowercase hex characters");
+  const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
+  const line = `${name} ${hash} ${role}`;
+  const at = lines.findIndex((l) => lineName(l) === name);
+  if (at >= 0) {
+    if (lines[at]!.trim().split(/\s+/).join(" ") === line) return { text, changed: false };
+    throw new AuthConfigError(`${name} already has a token here; choose another name, or revoke it first with bun scripts/tokens.ts revoke ${name} <tokens-file>`);
+  }
+  lines.push(line);
+  const out = `${lines.join("\n")}\n`;
+  parseTokens(out);
+  return { text: out, changed: true };
+}
+
 // Two changes at once would each read the old file and the later rename would drop the other's
 // principal, whose printed token then never works. A lock file next to the tokens file serialises them.
 export const LOCK_WAIT_MS = 5000;

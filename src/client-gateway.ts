@@ -15,13 +15,13 @@ let pageBuild: Promise<Map<string, Response>> | undefined;
 // Explicit asset responses let the approval page carry frame protection too.
 function buildPage() {
   return pageBuild ??= Bun.build({
-    entrypoints: ["index.html", "install.html"].map((name) => resolve(import.meta.dir, "../web", name)), target: "browser", publicPath: "/",
+    entrypoints: ["index.html", "install.html", "add-host.html"].map((name) => resolve(import.meta.dir, "../web", name)), target: "browser", publicPath: "/",
   }).then((result) => {
     if (!result.success) throw new Error("client page build failed");
     return new Map(result.outputs.map((output) => {
       const name = output.path.split("/").at(-1)!;
       const path = output.kind === "entry-point" && name.endsWith(".html")
-        ? (name === "install.html" ? "/install" : "/") : `/${name}`;
+        ? (name === "install.html" ? "/install" : name === "add-host.html" ? "/add-host" : "/") : `/${name}`;
       return [path, new Response(output, { headers: { ...frameHeaders, "content-type": output.type } })];
     }));
   });
@@ -45,6 +45,16 @@ export class Credentials {
   }
   bearer(id: string): string | undefined {
     return this.#tokens.get(id);
+  }
+  // A host added from the page. An id or token already in use is refused, as at load.
+  add(id: string, token: string) {
+    if (this.#tokens.has(id)) throw new GatewayConfigError(`host id ${id} already has a token`);
+    if (!TOKEN.test(token) || [...this.#tokens.values()].includes(token)) throw new GatewayConfigError(`host "${id}": token is malformed or shared`);
+    this.#tokens.set(id, token);
+  }
+  // Undoes add when the config file could not be written.
+  remove(id: string) {
+    this.#tokens.delete(id);
   }
   toJSON() {
     return {};
@@ -194,7 +204,10 @@ export type GatewayOptions = {
   maxFrameBytes?: number; // one terminal frame, default 1 MiB
   log?: (line: string) => void;
   installer?: InstallerHandler; // local installer API and page; off unless supplied
+  enroll?: EnrollHandler; // adding hosts from the page; off unless supplied
 };
+// Handles /api/enroll after the same Host, Origin and body checks as the installer.
+export type EnrollHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
 // Handles /api/install after the gateway's Host, Origin and body checks. path is the part after /api/install.
 export type InstallerHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
 
@@ -282,7 +295,8 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   const maxPre = opts.maxPreOpenBytes ?? 1024 * 1024;
   const maxFrame = opts.maxFrameBytes ?? 1024 * 1024;
   const log = opts.log ?? (() => {});
-  const hosts = new Map(config.hosts.map((h) => [h.id, h]));
+  // Hosts added from the page land in config.hosts, so look them up there each time.
+  const hosts = { get: (id: string) => config.hosts.find((h) => h.id === id) };
   let allowedHosts = new Set<string>();
 
   // Every outcome here is for one request on one host; nothing is shared between hosts.
@@ -563,7 +577,8 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       const url = new URL(req.url);
       if (!url.pathname.startsWith("/api/")) {
         if (req.method !== "GET" && req.method !== "HEAD") return fail(405, "method_not_allowed", "method not allowed");
-        const asset = url.pathname === "/install" && !opts.installer ? undefined : (await buildPage()).get(url.pathname);
+        const off = (url.pathname === "/install" && !opts.installer) || (url.pathname === "/add-host" && !opts.enroll);
+        const asset = off ? undefined : (await buildPage()).get(url.pathname);
         if (!asset) return fail(404, "not_found", "not found");
         return req.method === "HEAD" ? new Response(null, { headers: asset.headers }) : asset.clone();
       }
@@ -579,25 +594,27 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
       }
 
-      if (url.pathname === "/api/install" || url.pathname.startsWith("/api/install/")) {
-        if (!opts.installer) return fail(404, "not_found", "not found");
+      const enrolling = url.pathname === "/api/enroll" || url.pathname.startsWith("/api/enroll/");
+      if (enrolling || url.pathname === "/api/install" || url.pathname.startsWith("/api/install/")) {
+        const handler = enrolling ? opts.enroll : opts.installer;
+        if (!handler) return fail(404, "not_found", "not found");
         if (req.method !== "GET" && req.method !== "POST") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET, POST" });
         if (url.search) return fail(400, "invalid", "query parameters are not accepted");
         let bytes: Uint8Array | null = null;
         if (req.method === "POST") {
-          // The installer changes this machine, so a write must come from the page this gateway served.
+          // The installer and enrollment change this machine, so a write must come from the page this gateway served.
           if (origin === null) return fail(403, "forbidden", "Origin required for writes");
           if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) return fail(415, "unsupported_media_type", "content-type must be application/json");
           if (Number(req.headers.get("content-length") ?? 0) > maxReq) return fail(413, "too_large", "request body too large");
           bytes = await readBounded(req.body, maxReq);
           if (!bytes) return fail(413, "too_large", "request body too large");
         }
-        const reply = await opts.installer(req.method, url.pathname.slice("/api/install".length), bytes);
+        const reply = await handler(req.method, url.pathname.slice(enrolling ? "/api/enroll".length : "/api/install".length), bytes);
         return Response.json(reply.body, { status: reply.status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
       }
 
