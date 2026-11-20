@@ -49,6 +49,17 @@ export function leaseDead(lease: Lease, now: Date, instance: string | null): str
   if (lease.endedAt) return lease.endReason ?? "ended";
   if (now.getTime() >= Date.parse(lease.expiresAt)) return "lease expired";
   if (instance === null) return "session ended";
-  if (instance !== lease.instance) return "session restarted";
+  const [was, wasRunning] = splitInstance(lease.instance);
+  const [is, isRunning] = splitInstance(instance);
+  if (is !== was) return "session restarted";
+  // Something ran in the pane at grant and now only a shell does: the agent exited and keys would go to the
+  // shell. A pane that was a shell at grant stays leased while the holder runs commands in it.
+  if (wasRunning === "app" && isRunning === "shell") return "the agent exited; the pane is at a shell prompt";
   return null;
+}
+
+// "<session id>:<created>:<pane pid>[:shell|app]"; the last part is optional for leases stored before it.
+function splitInstance(i: string): [string, string] {
+  const m = /^(.*):(shell|app)$/.exec(i);
+  return m ? [m[1]!, m[2]!] : [i, ""];
 }

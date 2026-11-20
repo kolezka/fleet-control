@@ -8,17 +8,23 @@ function fake(answers: (argv: string[]) => Partial<Run>) {
   return { calls, runner };
 }
 
-test("instance is one list-sessions call: id, creation time and active pane pid; a new agent window is a new instance", async () => {
+test("instance is one list-sessions call: id, creation time, active pane pid and shell or app; a new agent window is a new instance", async () => {
   let pane = "900";
-  const f = fake((a) => a.includes("list-sessions") ? { stdout: `probe-2 $9:1:1\nprobe $3:1795194451:${pane}\nother $4:1:2\n` } : {});
+  let command = "claude";
+  // tmux filters by the exact name; the stand-in answers only for "probe", as tmux would.
+  const f = fake((a) => a.includes("list-sessions") ? { stdout: a.includes("#{==:#{session_name},probe}") ? `$3:1795194451:${pane} ${command}\n` : "" } : {});
   const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", f.runner);
-  expect(await t.instance("probe")).toBe("$3:1795194451:900");
+  expect(await t.instance("probe")).toBe("$3:1795194451:900:app");
+  // The agent exits and the pane shows its shell (login shells appear as -zsh).
+  command = "-zsh";
+  expect(await t.instance("probe")).toBe("$3:1795194451:900:shell");
   // agent-fleet restarts an agent in a new window; tmux then reports that window's pane.
-  pane = "950";
-  expect(await t.instance("probe")).toBe("$3:1795194451:950");
+  pane = "950"; command = "node";
+  expect(await t.instance("probe")).toBe("$3:1795194451:950:app");
   expect(await t.instance("gone")).toBeNull();
   expect(f.calls.every((a) => a.includes("list-sessions"))).toBe(true);
-  expect(f.calls).toHaveLength(3);
+  expect(f.calls[0]).toContain("#{==:#{session_name},probe}");
+  expect(f.calls).toHaveLength(4);
 });
 
 test("no tmux server means no session; any other tmux failure throws instead of ending a lease", async () => {
@@ -28,7 +34,7 @@ test("no tmux server means no session; any other tmux failure throws instead of 
   expect(await down.instance("probe")).toBeNull();
   const killed = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({ exitCode: 137, stderr: "" })).runner);
   await expect(killed.instance("probe")).rejects.toThrow("tmux could not be asked: exit 137");
-  const odd = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({ stdout: "probe garbage\n" })).runner);
+  const odd = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({ stdout: "garbage\n" })).runner);
   await expect(odd.instance("probe")).rejects.toThrow("tmux could not describe probe");
 });
 
@@ -60,4 +66,30 @@ test("a paste adds -S only where tmux has it, asks once, and targets the session
   }
   const t = tmuxLeaseTerminal("fleet-x", "/bin/tmux", fake(() => ({})).runner);
   await expect(t.type("probe; kill-server", new Uint8Array([1]))).rejects.toThrow("bad session name");
+});
+
+test("real tmux: a pane whose program exits to a shell reads as shell, and only the exact session name matches", async () => {
+  const socket = `fc-lt-${process.pid}`;
+  const tmuxBin = Bun.which("tmux", { PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/bin` });
+  if (!tmuxBin) { console.warn("SKIP: no tmux"); return; }
+  const tm = (...a: string[]) => Bun.spawnSync([tmuxBin, "-L", socket, "-f", "/dev/null", ...a]);
+  try {
+    // As agent-fleet does it: a shell pane, the agent command typed into it. Here the "agent" ends after 2 s.
+    tm("new-session", "-d", "-s", "agent", "sh");
+    await Bun.sleep(300);
+    tm("send-keys", "-t", "=agent:", "sleep 2", "Enter");
+    await Bun.sleep(500);
+    tm("new-session", "-d", "-s", "agent x", "sleep 30");
+    tm("new-session", "-d", "-s", "agent-2", "sh");
+    const t = tmuxLeaseTerminal(socket, tmuxBin);
+    const first = await t.instance("agent");
+    expect(first).toMatch(/^\$\d+:\d+:\d+:app$/);
+    await Bun.sleep(2200);
+    const after = await t.instance("agent");
+    expect(after).toBe(first!.replace(/:app$/, ":shell"));
+    expect(await t.instance("agent-2")).toMatch(/:shell$/);
+    expect(await t.instance("agen")).toBeNull();
+  } finally {
+    tm("kill-server");
+  }
 });

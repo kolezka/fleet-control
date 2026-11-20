@@ -7,6 +7,8 @@ import type { LeaseTerminal } from "../application/leases.ts";
 export type Run = { exitCode: number; stdout: string; stderr: string };
 const PLAIN = /^[A-Za-z0-9._-]+$/;
 const TIMEOUT_MS = 10_000;
+// A pane running one of these is at a shell prompt: its agent, if it had one, has exited.
+const SHELLS = /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh)$/;
 
 async function run(argv: string[], stdin?: Uint8Array): Promise<Run> {
   const p = Bun.spawn(argv, { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, TMUX: undefined } });
@@ -52,22 +54,24 @@ export function tmuxLeaseTerminal(socket: string, tmuxBin = findTmux(), runner: 
     (e) => { raw = undefined; throw e; },
   ));
   return {
-    // One tmux call: the session's id, creation time and the pid of its active pane. agent-fleet starts every
-    // agent, also a restart, in a new window, so a restarted agent has a new pane pid. A command typed into
-    // the same pane (by the lease holder) does not change it.
+    // One tmux call: the session's id, creation time and the pid of its active pane, then "shell" or "app"
+    // for what runs in that pane now. agent-fleet starts every agent, also a restart, in a new window, so a
+    // restarted agent has a new pane pid. A command typed into the same pane does not change it; an agent
+    // that exits leaves the pane at a shell prompt, which leaseDead treats as the end of the lease.
     async instance(session) {
       target(session);
-      const r = await runner(tmux("list-sessions", "-F", "#{session_name} #{session_id}:#{session_created}:#{pane_pid}"));
+      // The filter matches the name whole (tmux prints a tab as "_", so names are not parsed from the output).
+      const r = await runner(tmux("list-sessions", "-f", `#{==:#{session_name},${session}}`, "-F", "#{session_id}:#{session_created}:#{pane_pid} #{pane_current_command}"));
       // No server at all means no session; anything else that failed means tmux could not be asked.
       if (r.exitCode !== 0) {
         if (/no server running|error connecting to/.test(r.stderr)) return null;
         throw new Error(`tmux could not be asked: ${r.stderr.trim().slice(0, 200) || `exit ${r.exitCode}`}`);
       }
-      const line = r.stdout.split("\n").find((l) => l.startsWith(`${session} `));
-      if (!line) return null;
-      const v = line.slice(session.length + 1).trim();
-      if (!/^\$\d+:\d+:\d+$/.test(v)) throw new Error(`tmux could not describe ${session}: ${v.slice(0, 80)}`);
-      return v;
+      const lines = r.stdout.split("\n").filter((l) => l !== "");
+      if (lines.length === 0) return null;
+      const m = lines.length === 1 ? /^(\$\d+:\d+:\d+) (.*)$/.exec(lines[0]!) : null;
+      if (!m) throw new Error(`tmux could not describe ${session}: ${lines.join(" ").slice(0, 80)}`);
+      return `${m[1]}:${SHELLS.test(m[2]!.trim()) ? "shell" : "app"}`;
     },
     async type(session, bytes) {
       const buffer = `fcinput-${process.pid}-${crypto.randomUUID()}`;
