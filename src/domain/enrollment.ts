@@ -63,6 +63,8 @@ export function checkEnrollRequest(input: unknown): EnrollRequest {
     out.ref = field(r.ref, GIT_REF, "git ref");
     if (out.ref.includes("..")) fail("git ref is not valid");
     out.port = port(r.port, "port");
+    // A launchd or systemd --user service cannot bind a port below 1024.
+    if (out.port < 1024) fail("a fresh install needs a port from 1024 up; for a host already on 443 use connect");
     out.label = field(r.label, LABEL, "service name");
     out.fleet = field(r.fleet, FLEET_NAME, "fleet name");
     out.tlsCert = path(r.tlsCert, "certificate path");

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth } from "./auth.ts";
@@ -7,7 +7,7 @@ import { enrollUseCases } from "./application/enrollment.ts";
 import { loadGatewayConfig, startGateway, type GatewayConfig } from "./client-gateway.ts";
 import { reloadTokens } from "./config.ts";
 import { Store } from "./data/store.ts";
-import { enrollDeps, enrollHandler } from "./gateway-enroll.ts";
+import { enrollDeps, enrollHandler, gatewayHostAdder } from "./gateway-enroll.ts";
 import { serve } from "./server.ts";
 import { connect, parseArgs } from "../scripts/enroll.ts";
 
@@ -128,4 +128,31 @@ test("a token file left from an earlier attempt is never overwritten", async () 
   // The answer names the file, so the operator knows what to check and remove.
   expect((await r.json()).error.message).toBe(`${stale} already exists. Another host may use it; if none does, remove it and try again.`);
   expect(readFileSync(stale, "utf8")).toBe("keep-me-0000000000000000\n");
+});
+
+test("a refused credential or a failed rename leaves no temp file, no credential and the config unchanged", async () => {
+  const d = mkdtempSync(join(tmpdir(), "gateway-adder-"));
+  try {
+    const path = join(d, "client.json");
+    writeFileSync(join(d, "token-a"), "token-a-0000000000000000\n", { mode: 0o600 });
+    const before = JSON.stringify({ hosts: [{ id: "a", name: "A", url: "https://a.tail.ts.net:4871", tokenFile: "token-a" }] });
+    writeFileSync(path, before, { mode: 0o600 });
+    const cfg = await loadGatewayConfig(path);
+    let failRename = false;
+    const add = gatewayHostAdder(path, cfg, async (from, to) => { if (failRename) throw new Error("rename failed"); renameSync(from, to); });
+    const files = () => readdirSync(d).sort();
+    // The credential check refuses a token another host already uses.
+    await expect(add({ id: "dup", name: "Dup", url: "https://dup.tail.ts.net:4871", tokenFile: "token-dup" }, "token-a-0000000000000000")).rejects.toThrow("token is malformed or shared");
+    expect(files()).toEqual(["client.json", "token-a"]);
+    expect(cfg.credentials.bearer("dup")).toBeUndefined();
+    // The rename fails after the credential was added; the credential is taken back.
+    failRename = true;
+    await expect(add({ id: "b", name: "B", url: "https://b.tail.ts.net:4871", tokenFile: "token-b" }, "token-b-1111111111111111")).rejects.toThrow("rename failed");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(cfg.credentials.bearer("b")).toBeUndefined();
+    expect(cfg.hosts.map((h) => h.id)).toEqual(["a"]);
+    expect(files()).toEqual(["client.json", "token-a"]);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
 });

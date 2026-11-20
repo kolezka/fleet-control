@@ -37,7 +37,7 @@
             <div class="field"><label for="dir" id="dirLabel">Service folder on that host</label><input id="dir" autocomplete="off" spellcheck="false" placeholder="~/Development/fleet-control-service"><small id="dirNote">Absolute, or under the home folder as ~/...</small></div>
             <div id="freshFields" hidden>
               <div class="field"><label for="ref">Git ref</label><input id="ref" autocomplete="off" spellcheck="false" placeholder="main"></div>
-              <div class="field"><label for="port">Service port</label><input id="port" inputmode="numeric" autocomplete="off" placeholder="4871"><small>Must match the port in the address.</small></div>
+              <div class="field"><label for="port">Service port</label><input id="port" inputmode="numeric" autocomplete="off" placeholder="4871"><small>1024 or higher, and the same as the port in the address.</small></div>
               <div class="field"><label for="label">Service name</label><input id="label" autocomplete="off" spellcheck="false" placeholder="pl.raqz.fleet-control"><small>launchd label or systemd unit name. An existing one is refused.</small></div>
               <div class="field"><label for="fleet">Fleet name</label><input id="fleet" autocomplete="off" spellcheck="false" placeholder="main"><small>Its own tmux socket, fleet-&lt;name&gt;. Starts with no agents.</small></div>
               <div class="field"><label for="tlsCert">Certificate on that host</label><input id="tlsCert" autocomplete="off" spellcheck="false" placeholder="~/.config/fleet-control/tailnet-tls/cert.pem"></div>

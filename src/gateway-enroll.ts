@@ -17,7 +17,7 @@ class TokenFileExists extends Error {
 }
 
 // Adds one host to a running gateway: the in-memory list and credentials, then the config file.
-export function gatewayHostAdder(configPath: string, config: GatewayConfig) {
+export function gatewayHostAdder(configPath: string, config: GatewayConfig, renameFile: (from: string, to: string) => Promise<void> = rename) {
   return async (host: { id: string; name: string; url: string; tokenFile: string }, token: string) => {
     const json = JSON.parse(await readFile(configPath, "utf8")) as { hosts: unknown[] };
     const entry = { id: host.id, name: host.name, url: host.url, tokenFile: host.tokenFile };
@@ -27,14 +27,21 @@ export function gatewayHostAdder(configPath: string, config: GatewayConfig) {
     if (config.hosts.some((h) => h.id === host.id)) throw new GatewayConfigError(`host id ${host.id} is already in use`);
     const mode = (await stat(configPath)).mode & 0o777;
     const tmp = `${configPath}.tmp-${randomUUID()}`;
-    const fd = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-    try { await fd.writeFile(`${JSON.stringify(next, null, 2)}\n`); await fd.sync(); } finally { await fd.close(); }
-    await chmod(tmp, mode);
     const added = parsed.find((h) => h.id === host.id)!;
-    // The credential check can refuse; do it before the file changes so file and memory agree.
-    config.credentials.add(host.id, token);
-    try { await rename(tmp, configPath); }
-    catch (e) { config.credentials.remove(host.id); await rm(tmp, { force: true }); throw e; }
+    let credential = false;
+    try {
+      const fd = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+      try { await fd.writeFile(`${JSON.stringify(next, null, 2)}\n`); await fd.sync(); } finally { await fd.close(); }
+      await chmod(tmp, mode);
+      // The credential check can refuse; do it before the file changes so file and memory agree.
+      config.credentials.add(host.id, token);
+      credential = true;
+      await renameFile(tmp, configPath);
+    } catch (e) {
+      if (credential) config.credentials.remove(host.id);
+      await rm(tmp, { force: true });
+      throw e;
+    }
     config.hosts.push({ id: added.id, name: added.name, origin: added.origin });
   };
 }
