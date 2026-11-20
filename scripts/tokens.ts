@@ -8,6 +8,7 @@
 // The running service rereads the file on SIGHUP (releases before that only at start).
 import { chmodSync, closeSync, constants, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { AuthConfigError, newToken, parseTokens, tokenLine } from "../src/auth.ts";
+import { AGENT_NAME } from "../src/domain/agents.ts";
 import { isRole, ROLES, type Role } from "../src/domain/roles.ts";
 
 export type Change = { action: "add" | "rotate" | "revoke" | "role"; name: string; token?: string; text: string };
@@ -26,9 +27,17 @@ const lineRole = (raw: string): Role | undefined => checkRole(raw.trim().split(/
 
 // Pure: returns the new file text. Comments and order are kept; the result must parse.
 // `role` is the role for add (none writes an old-style agent line) and the new role for "role".
+// Managed agents' names (fc-...) carry only agent tokens; the service replaces and removes them on its own.
+function refuseManaged(name: string, role: string | undefined) {
+  if (AGENT_NAME.test(name) && role !== undefined && role !== "agent") {
+    throw new AuthConfigError(`${name}: names starting with fc- are kept for managed agents and take only the agent role`);
+  }
+}
+
 export function change(action: Change["action"], name: string, text: string, token = newToken(), role?: string): Change {
   tokenLine(name, token); // validates the name
   const wanted = checkRole(role);
+  if (action === "add" || action === "role") refuseManaged(name, wanted);
   if (action === "role" && !wanted) throw new AuthConfigError(`role must be one of ${ROLES.join(", ")}`);
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const at = lines.findIndex((l) => lineName(l) === name);
@@ -54,6 +63,7 @@ export function change(action: Change["action"], name: string, text: string, tok
 // present is a no-op, so pasting the command twice is safe; another hash for the name is refused.
 export function addHash(text: string, name: string, hash: string, role: Role): { text: string; changed: boolean } {
   tokenLine(name, "", role); // validates name and role
+  refuseManaged(name, role);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw new AuthConfigError("hash must be 64 lowercase hex characters");
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const line = `${name} ${hash} ${role}`;

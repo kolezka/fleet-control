@@ -141,7 +141,7 @@ export async function tlsFromEnv(
 
 // FLEET_CONTROL_AGENT_ROOTS="/Users/me/fleet-agents:/other" turns on managed agents; unset means off.
 // FLEET_CONTROL_AGENT_MODELS="sonnet,opus,haiku" narrows the model list (default those three).
-export function agentSettingsFromEnv(env: Record<string, string | undefined>): { roots: string[]; models: AgentModels } | undefined {
+export function agentSettingsFromEnv(env: Record<string, string | undefined>): { roots: string[]; models: AgentModels; mcpUrl?: string } | undefined {
   const raw = env.FLEET_CONTROL_AGENT_ROOTS?.trim();
   if (!raw) return undefined;
   const roots = raw.split(":").map((r) => r.trim()).filter(Boolean);
@@ -152,5 +152,15 @@ export function agentSettingsFromEnv(env: Record<string, string | undefined>): {
   // DSH agents are offered only where they are listed: provider/model pairs, as in DSH's allowedModels.
   const dsh = (env.FLEET_CONTROL_AGENT_DSH_MODELS ?? "").split(",").map((m) => m.trim()).filter(Boolean);
   for (const m of dsh) if (!DSH_MODEL.test(m)) throw new Error(`FLEET_CONTROL_AGENT_DSH_MODELS: ${m} is not provider/model`);
-  return { roots, models: dsh.length ? { claude: models, dsh } : { claude: models } };
+  // Where an orchestrator agent reaches this host's MCP. Set it to offer orchestrators; the agent runs here,
+  // so a loopback http URL or this host's own https name both work.
+  const mcp = env.FLEET_CONTROL_AGENT_MCP_URL?.trim();
+  if (mcp) {
+    let u: URL;
+    try { u = new URL(mcp); } catch { throw new Error(`FLEET_CONTROL_AGENT_MCP_URL: ${mcp} is not a URL`); }
+    const loopback = u.hostname === "127.0.0.1" || u.hostname === "localhost";
+    if (!(u.protocol === "https:" || (u.protocol === "http:" && loopback)) || u.pathname !== "/mcp" || u.search || u.hash || u.username || u.password)
+      throw new Error("FLEET_CONTROL_AGENT_MCP_URL must be https://<this host>:<port>/mcp or http://127.0.0.1:<port>/mcp");
+  }
+  return { roots, models: dsh.length ? { claude: models, dsh } : { claude: models }, ...(mcp ? { mcpUrl: mcp } : {}) };
 }

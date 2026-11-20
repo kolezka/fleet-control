@@ -12,6 +12,8 @@ export type Agent = {
   kind: AgentKind;
   cwd: string; // real path inside an allowed root
   model: string;
+  // Gets its own agent-role token and Fleet Control MCP, so it can register a run and ask the operator for approval.
+  orchestrator: boolean;
   promptSha256: string;
   promptBytes: number;
   createdBy: string;
@@ -21,7 +23,7 @@ export type Agent = {
   updatedAt: string;
 };
 
-export type AgentSpec = { name: string; kind: AgentKind; cwd: string; model: string; prompt: string };
+export type AgentSpec = { name: string; kind: AgentKind; cwd: string; model: string; prompt: string; orchestrator: boolean };
 // Models offered per kind. A kind with no models is not offered on this host.
 export type AgentModels = Partial<Record<AgentKind, readonly string[]>>;
 
@@ -44,8 +46,9 @@ export const CLAUDE_MODEL = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 export const DSH_MODEL = /^[a-z0-9][a-z0-9.-]{0,63}\/[a-z0-9][a-z0-9.-]{0,63}$/;
 export const kindsOf = (models: AgentModels) => AGENT_KINDS.filter((k) => (models[k]?.length ?? 0) > 0);
 
-export function checkSpec(spec: { name?: unknown; kind?: unknown; cwd?: unknown; model?: unknown; prompt?: unknown; confirm?: unknown }, models: AgentModels): AgentSpec {
+export function checkSpec(spec: { name?: unknown; kind?: unknown; cwd?: unknown; model?: unknown; prompt?: unknown; confirm?: unknown; orchestrator?: unknown }, models: AgentModels): AgentSpec {
   const { name, cwd, model, prompt, confirm } = spec;
+  const orchestrator = spec.orchestrator ?? false;
   // Callers from before DSH agents send no kind; they meant Claude Code.
   const kind = spec.kind ?? "claude";
   if (typeof name !== "string" || !AGENT_NAME.test(name)) throw new AgentError("invalid", "name must be fc- followed by 1 to 31 lowercase letters, digits or dashes");
@@ -58,7 +61,10 @@ export function checkSpec(spec: { name?: unknown; kind?: unknown; cwd?: unknown;
   if (new TextEncoder().encode(prompt).length > MAX_PROMPT_BYTES) throw new AgentError("invalid", `prompt is longer than ${MAX_PROMPT_BYTES} bytes`);
   // The start runs an unattended agent; the caller repeats the name to show it was confirmed.
   if (confirm !== name) throw new AgentError("invalid", "confirm must repeat the agent name");
-  return { name, kind: kind as AgentKind, cwd, model, prompt };
+  if (typeof orchestrator !== "boolean") throw new AgentError("invalid", "orchestrator must be true or false");
+  // DSH agents take MCP servers from DSH's own config, which this host does not write.
+  if (orchestrator && kind !== "claude") throw new AgentError("invalid", "only Claude Code agents can be orchestrators");
+  return { name, kind: kind as AgentKind, cwd, model, prompt, orchestrator };
 }
 
 // A row may be started again only once nothing of it runs.
@@ -77,7 +83,18 @@ export function recovered(state: AgentState, alive: boolean): { state: AgentStat
   return null;
 }
 
-export type FleetRow = Pick<Agent, "name" | "kind" | "cwd" | "model">;
+export type FleetRow = Pick<Agent, "name" | "kind" | "cwd" | "model" | "orchestrator">;
+
+// An orchestrator's own token. issue() adds an agent-role line for the name to the host's tokens and returns the
+// token, which only the agent's MCP config file holds; revoke() removes the line. Both take effect at once.
+export interface AgentTokens {
+  // `current` is asked under the tokens lock right before the write; false means a newer start owns the
+  // name, so nothing is written and the issue fails.
+  issue(name: string, current?: () => boolean): Promise<string>;
+  revoke(name: string): Promise<void>;
+  // Names that have an agent line now, read once without the lock (for the service-start sweep).
+  held(): Promise<Set<string>>;
+}
 
 // What the host needs from the machine to run agents. src/fleet/agents.ts implements it over agent-fleet.
 export interface AgentLauncher {
@@ -87,7 +104,8 @@ export interface AgentLauncher {
   folders(): Promise<string[]>;
   // Writes the prompt and the fleet rows, then starts this one. `rows` is read when the file is written, so
   // a change made while an earlier write waited is not undone. It must include this agent.
-  start(agent: AgentSpec, rows: () => FleetRow[]): Promise<void>;
+  // `mcpToken`, for an orchestrator, goes into the agent's MCP config file, never into the rows or the prompt.
+  start(agent: AgentSpec, rows: () => FleetRow[], mcpToken?: string): Promise<void>;
   // Ends the tmux session and rewrites the rows. Does not wait for a start in progress.
   stop(name: string, rows: () => FleetRow[]): Promise<void>;
   // Rewrites the managed fleet rows to what `rows` returns when the write runs.

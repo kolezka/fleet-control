@@ -4,6 +4,7 @@ import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFr
 import { agentUseCases } from "./src/application/agents.ts";
 import { Agents } from "./src/data/agents.ts";
 import { FleetAgentLauncher } from "./src/fleet/agents.ts";
+import { FileAgentTokens } from "./src/agent-tokens.ts";
 import { Commands } from "./src/data/commands.ts";
 import { Deliverer } from "./src/application/delivery.ts";
 import { fleetSender } from "./src/fleet/sender.ts";
@@ -47,12 +48,18 @@ const deps = {
   terminal: { fleetBin, confPath },
   control: { commands, deliverer: new Deliverer(commands, fleetSender(fleetBin, confPath)), requests: new Requests(store.db) },
   agents: agentSettings
-    ? { agents: new Agents(store.db), launcher: new FleetAgentLauncher({ fleetBin, confPath, roots: agentSettings.roots }), models: agentSettings.models }
+    ? {
+      agents: new Agents(store.db),
+      launcher: new FleetAgentLauncher({ fleetBin, confPath, roots: agentSettings.roots, mcpUrl: agentSettings.mcpUrl }),
+      models: agentSettings.models,
+      // Orchestrators get their own agent-role line in the tokens file; offered only with an MCP URL.
+      tokens: agentSettings.mcpUrl ? new FileAgentTokens(process.env.FLEET_CONTROL_TOKENS!, options.auth!) : undefined,
+    }
     : undefined,
 };
 if (deps.agents) {
   const offered = Object.entries(agentSettings!.models).map(([k, m]) => `${k}: ${m.join(", ")}`).join("; ");
-  console.log(`managed agents in ${agentSettings!.roots.join(", ")} (${offered})`);
+  console.log(`managed agents in ${agentSettings!.roots.join(", ")} (${offered})${agentSettings!.mcpUrl ? `; orchestrators use ${agentSettings!.mcpUrl}` : ""}`);
   // A restart cut off any start or stop in progress; settle those rows before serving.
   try {
     const settled = await agentUseCases(deps.agents).recover();

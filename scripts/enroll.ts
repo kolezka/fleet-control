@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFi
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { AuthConfigError } from "../src/auth.ts";
+import { AGENT_NAME } from "../src/domain/agents.ts";
 import { FLEET_NAME, HASH, LABEL, PRINCIPAL } from "../src/domain/enrollment.ts";
 import { addHash, withLock, writeAtomic } from "./tokens.ts";
 
@@ -84,6 +85,7 @@ export function parseArgs(argv: string[], allowed: string[]): Args {
   }
   for (const k of allowed) if (!(k in a)) fail(`--${k} is required`);
   if (!PRINCIPAL.test(a.principal!)) fail("principal is not valid");
+  if (AGENT_NAME.test(a.principal!)) fail("names starting with fc- are kept for managed agents; choose another principal");
   if (!HASH.test(a.hash!)) fail("hash must be 64 lowercase hex characters");
   if (a.role !== "operator") fail("role must be operator");
   return a;

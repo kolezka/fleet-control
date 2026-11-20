@@ -4,7 +4,7 @@ import { Agents } from "./agents.ts";
 import type { Agent } from "../domain/agents.ts";
 
 const row = (over: Partial<Agent> = {}): Agent => ({
-  name: "fc-one", kind: "claude", cwd: "/r/a", model: "haiku", promptSha256: "0".repeat(64), promptBytes: 1,
+  name: "fc-one", kind: "claude", cwd: "/r/a", model: "haiku", orchestrator: false, promptSha256: "0".repeat(64), promptBytes: 1,
   createdBy: "op", createdAt: "t0", state: "starting", error: null, updatedAt: "t0", ...over,
 });
 

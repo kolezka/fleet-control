@@ -5,7 +5,7 @@
 // small DSH patch file that turns the credentials store on (the headless profile has it off) and picks its model;
 // the keys stay where DSH keeps them.
 // The service writes files on this machine, so fleets that run over ssh are refused.
-import { chmod, mkdir, readdir, realpath, rename, rmdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { AgentError, type AgentLauncher, type AgentSpec, type FleetRow } from "../domain/agents.ts";
@@ -27,6 +27,20 @@ export const AUTONOMY = `Hard limits (Fleet Control managed agent):
 - When you finish or are blocked, say so in one short line and stop.
 `;
 
+// Added after an orchestrator's task. The tools are this host's MCP server "fleet-control"; the human answers
+// on the Fleet Control page, never the agent.
+export const ORCHESTRATION = `
+Phased run (Fleet Control orchestrator):
+- You have one MCP server, fleet-control, with your own token. Use it for the run record and for approvals.
+- Fields named orchestrator, actor and origin take your agent name; the host records your token's name whatever you pass.
+- Pick a short run id. Call run_register once with runId, orchestrator and phase (the first phase name). Keep the run's revision from the reply.
+- Work one phase at a time. When a phase is done, call phase_update with runId, actor, expectedRevision (the current revision), phaseStatus (what was done and how it was checked, at most 500 characters) and newRevision false. Then call request_create with runId, origin, expectedRevision (the revision phase_update returned), kind "approval" and a short question.
+- Then wait: call request_list with runId every 30 seconds until your request's status is resolved. Never call request_resolve; you cannot answer for the human.
+- If the response is approve, call request_acknowledge with requestId and actor, then phase_update with the next phase name, newRevision false. Any other response: stop and say so in one line.
+- If the work changes after you asked (a fix round), call phase_update with newRevision true and ask again with the new revision.
+- Every tool reply carries the run's current revision; use the newest one you saw.
+`;
+
 type Run = { exitCode: number; stdout: string; stderr: string };
 export type AgentLauncherOptions = {
   fleetBin: string;
@@ -36,6 +50,8 @@ export type AgentLauncherOptions = {
   claudeState?: string;
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
+  // This host's MCP endpoint as an orchestrator reaches it, e.g. https://name.tailnet.ts.net:4871/mcp.
+  mcpUrl?: string;
 };
 
 export class FleetAgentLauncher implements AgentLauncher {
@@ -124,12 +140,20 @@ export class FleetAgentLauncher implements AgentLauncher {
     for (const r of rows) lines.push(`AGENTS+=("${r.name}|Fleet: ${r.name}|${r.name}.txt")`);
     lines.push('agent_overrides() { case "$1" in');
     for (const r of rows) {
+      // An orchestrator gets this host's MCP and only it; the token is in the file, not on the command line.
+      const mcp = r.orchestrator ? ` --strict-mcp-config --mcp-config ${join(dir, mcpConfigFile(r.name))}` : "";
       lines.push(r.kind === "dsh"
         ? `  ${r.name}) AGENT_CWD=${r.cwd}; AGENT_KIND=dsh; DSH_ARGS="--patch ${join(dir, dshPatchFile(r.name))} --permission-mode workspace-write" ;;`
-        : `  ${r.name}) AGENT_CWD=${r.cwd}; AGENT_KIND=claude; CLAUDE_ARGS="--dangerously-skip-permissions --model ${r.model}" ;;`);
+        : `  ${r.name}) AGENT_CWD=${r.cwd}; AGENT_KIND=claude; CLAUDE_ARGS="--dangerously-skip-permissions --model ${r.model}${mcp}" ;;`);
     }
     lines.push("esac; }", "");
     await atomicWrite(join(dir, MANAGED_FILE), lines.join("\n"));
+    // An MCP config holds a token: only an orchestrator that keeps its row keeps its file. This catches a failed
+    // start, a stop and anything a restart cut off. fc- names belong to managed agents only.
+    const keep = new Set(rows.filter((r) => r.orchestrator).map((r) => mcpConfigFile(r.name)));
+    for (const f of await readdir(dir)) {
+      if (/^fc-[a-z0-9][a-z0-9-]*\.mcp\.json$/.test(f) && !keep.has(f)) await rm(join(dir, f), { force: true });
+    }
     const conf = await Bun.file(this.opts.confPath).text();
     if (!conf.split("\n").some((l) => l.trim() === INCLUDE_LINE)) await atomicWrite(this.opts.confPath, `${conf.endsWith("\n") ? conf : conf + "\n"}${INCLUDE}`);
   }
@@ -163,7 +187,8 @@ export class FleetAgentLauncher implements AgentLauncher {
     }
   }
 
-  async start(agent: AgentSpec, rows: () => FleetRow[]): Promise<void> {
+  async start(agent: AgentSpec, rows: () => FleetRow[], mcpToken?: string): Promise<void> {
+    if (agent.orchestrator && (!mcpToken || !this.opts.mcpUrl)) throw new AgentError("unavailable", "an orchestrator needs this host's MCP address and its own token");
     await this.serial(async () => {
       const { dir } = await this.conf();
       // An older watchdog ignores agent_overrides and would start Claude Code in the fleet's default folder
@@ -183,7 +208,16 @@ export class FleetAgentLauncher implements AgentLauncher {
         // Trust first: if Claude Code's state cannot be read, nothing else is written.
         await this.trust(agent.cwd);
       }
-      await writeFile(join(dir, `${agent.name}.txt`), agent.prompt.endsWith("\n") ? agent.prompt : agent.prompt + "\n", { mode: 0o600 });
+      const mcpFile = join(dir, mcpConfigFile(agent.name));
+      if (agent.orchestrator) {
+        await writeFile(mcpFile, mcpConfig(this.opts.mcpUrl!, mcpToken!), { mode: 0o600 });
+        await chmod(mcpFile, 0o600);
+      } else {
+        // A name used before by an orchestrator must not find its old config.
+        await rm(mcpFile, { force: true });
+      }
+      const task = agent.prompt.endsWith("\n") ? agent.prompt : agent.prompt + "\n";
+      await writeFile(join(dir, `${agent.name}.txt`), agent.orchestrator ? task + ORCHESTRATION : task, { mode: 0o600 });
       await chmod(join(dir, `${agent.name}.txt`), 0o600);
       if (!(await Bun.file(join(dir, "autonomy.txt")).exists())) await writeFile(join(dir, "autonomy.txt"), AUTONOMY, { mode: 0o644 });
       await this.writeRows(dir, rows());
@@ -213,9 +247,15 @@ export class FleetAgentLauncher implements AgentLauncher {
         throw new AgentError("unavailable", `tmux kill-session exited ${r.exitCode}`);
       }
       await this.writeRows(dir, rows().filter((r) => r.name !== name));
+      await rm(join(dir, mcpConfigFile(name)), { force: true });
     });
   }
 }
+
+export const mcpConfigFile = (name: string) => `${name}.mcp.json`;
+// Claude Code's --mcp-config format: one HTTP server named fleet-control with the agent's bearer token.
+export const mcpConfig = (url: string, token: string) =>
+  JSON.stringify({ mcpServers: { "fleet-control": { type: "http", url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2) + "\n";
 
 export const dshPatchFile = (name: string) => `${name}.dsh.yml`;
 

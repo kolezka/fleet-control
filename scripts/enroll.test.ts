@@ -21,6 +21,7 @@ test("arguments are strict: unknown, missing, repeated, a non-operator role or a
     [["--principal", "macbook-gateway", "--hash", "B".repeat(64), "--role", "operator"], /hash/],
     [["--principal", "a b", "--hash", HASH, "--role", "operator"], /principal/],
     [["--principal", "--hash", HASH, "--role", "operator"], /needs a value/],
+    [["--principal", "fc-orch", "--hash", HASH, "--role", "operator"], /kept for managed agents/],
   ];
   for (const [argv, msg] of bad) expect(() => parseArgs(argv, ["principal", "hash", "role"]), argv.join(" ")).toThrow(msg);
 });

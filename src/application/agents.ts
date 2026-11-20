@@ -2,13 +2,15 @@
 // the folder must be inside an allowed root and the prompt may not carry a token.
 import { createHash } from "node:crypto";
 import type { Agents } from "../data/agents.ts";
-import { AgentError, checkSpec, keepsFleetRow, recovered, restartable, stoppable, type Agent, type AgentLauncher, type AgentModels } from "../domain/agents.ts";
+import { AgentError, checkSpec, keepsFleetRow, recovered, restartable, stoppable, type Agent, type AgentLauncher, type AgentModels, type AgentTokens } from "../domain/agents.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
 
 export type AgentDeps = {
   agents: Agents;
   launcher: AgentLauncher;
   models: AgentModels;
+  // Present where orchestrators are offered: their tokens. Without it a start as orchestrator is refused.
+  tokens?: AgentTokens;
   now?: () => Date;
   carriesSecret?: (text: string) => boolean;
   // Where background failures go (a rewrite or a second stop after the reply was sent). Default: console.error.
@@ -24,10 +26,14 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
   const now = () => (deps.now ?? (() => new Date()))().toISOString();
   const warn = deps.warn ?? ((m: string) => console.error(m));
   // Rows that still own a fleet entry, read when the launcher writes the file.
-  const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, kind, cwd, model }) => ({ name, kind, cwd, model }));
+  const fleetRows = () => deps.agents.list().filter((a) => keepsFleetRow(a.state)).map(({ name, kind, cwd, model, orchestrator }) => ({ name, kind, cwd, model, orchestrator }));
+  // An agent token must not outlive its session, whatever the row says now: a plain restart of a name whose
+  // earlier token was not revoked must not keep it. Revoking a name without an agent line is a no-op.
+  const revoke = async (a: Pick<Agent, "name">) => { await deps.tokens?.revoke(a.name); };
 
   return {
     models: deps.models,
+    orchestrators: Boolean(deps.tokens),
 
     async list(): Promise<AgentView[]> {
       const alive = await deps.launcher.running();
@@ -45,6 +51,12 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
         const next = recovered(a.state, alive.has(a.name));
         if (next && deps.agents.transition(a.name, [a.state], next.state, next.error, now())) changed.push(a.name);
       }
+      // A token left by a stop or failed start that a restart cut off.
+      // Only names that have a line: one read, so a held lock costs a wait per leftover token, not per row.
+      const held = deps.tokens ? await deps.tokens.held().catch((e) => { warn(`agent tokens not read: ${message(e)}`); return new Set<string>(); }) : new Set<string>();
+      for (const a of deps.agents.list()) {
+        if (!keepsFleetRow(a.state) && held.has(a.name)) await revoke(a).catch((e) => warn(`agent ${a.name}: token not revoked: ${message(e)}`));
+      }
       await deps.launcher.rewrite(fleetRows);
       return changed;
     },
@@ -54,6 +66,7 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
     async start(input: Record<string, unknown>): Promise<{ agent: Agent; launched: Promise<void> }> {
       requirePermission(caller, "operate");
       const spec = checkSpec(input, deps.models);
+      if (spec.orchestrator && !deps.tokens) throw new AgentError("unavailable", "orchestrators are not set up on this host");
       if (deps.carriesSecret?.(spec.prompt)) throw new AgentError("invalid", "prompt contains an access token; it was not stored");
       const cwd = await deps.launcher.resolveDir(spec.cwd);
       const existing = deps.agents.get(spec.name);
@@ -61,23 +74,44 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if ((await deps.launcher.running()).has(spec.name)) throw new AgentError("conflict", `a session named ${spec.name} is already open`);
       const at = now();
       const agent: Agent = {
-        name: spec.name, kind: spec.kind, cwd, model: spec.model,
+        name: spec.name, kind: spec.kind, cwd, model: spec.model, orchestrator: spec.orchestrator,
         promptSha256: createHash("sha256").update(spec.prompt).digest("hex"),
         promptBytes: new TextEncoder().encode(spec.prompt).length,
         createdBy: caller?.name ?? "local", createdAt: at, state: "starting", error: null, updatedAt: at,
       };
       if (!deps.agents.claim(agent)) throw new AgentError("conflict", `agent ${spec.name} was started by another request`);
-      const launched = deps.launcher.start({ ...spec, cwd }, fleetRows).then(
+      // The token is made in the background too; a failure there fails the start like any launch failure.
+      const launch = async () => {
+        // Asked under the tokens lock: a start that a stop and a newer start overtook must not replace the
+        // newer start's token line.
+        const token = spec.orchestrator ? await deps.tokens!.issue(spec.name, () => deps.agents.get(spec.name)?.createdAt === at) : undefined;
+        await deps.launcher.start({ ...spec, cwd }, fleetRows, token);
+      };
+      // Records a token the host could not take back, so the page shows it and not only the log.
+      const unrevoked = (e: unknown) => {
+        const row = deps.agents.get(spec.name);
+        if (row?.createdAt === at) deps.agents.transition(spec.name, ["failed"], "failed", `${row.error ?? "start failed"}; token not revoked: ${message(e)}`, now(), at);
+        warn(`agent ${spec.name}: token not revoked after a failed start: ${message(e)}`);
+      };
+      const launched = launch().then(
         async () => {
           if (deps.agents.transition(spec.name, ["starting"], "running", null, now(), at)) return;
           // Stopped (or its stop failed) while it was starting: the stop may have run before the session
           // existed. End the session this launch made, unless a newer start owns the name now.
           if (deps.agents.get(spec.name)?.createdAt !== at) return;
+          // That stop ran before this launch issued its token, so take the token back here too.
+          await revoke(agent).catch((e) => {
+            warn(`agent ${spec.name}: token not revoked after a late start: ${message(e)}`);
+            // Shown on the row too, so a live token without a session is visible on the page.
+            const row = deps.agents.get(spec.name);
+            if (row?.createdAt === at) deps.agents.transition(spec.name, [row.state], row.state, `${row.error ? `${row.error}; ` : ""}token not revoked after a late start: ${message(e)}`, now(), at);
+          });
           await deps.launcher.stop(spec.name, fleetRows).catch((e) => warn(`agent ${spec.name}: stop after a late start failed: ${message(e)}`));
         },
         async (e) => {
           if (deps.agents.transition(spec.name, ["starting"], "failed", message(e), now(), at)) {
             await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${spec.name}: fleet rows not rewritten after a failed start: ${message(e2)}`));
+            await revoke(agent).catch(unrevoked);
           }
         },
       );
@@ -91,8 +125,15 @@ export function agentUseCases(deps: AgentDeps, caller?: Caller) {
       if (!stoppable(agent.state)) throw new AgentError("conflict", `agent ${name} is ${agent.state}`);
       if (!deps.agents.transition(name, [agent.state], "stopping", null, now())) throw new AgentError("conflict", `agent ${name} changed; read it again`);
       try {
+        // The token goes first, so the agent loses the host before its session ends. If it cannot be taken
+        // back the session still ends, and the row says the token is left so a second stop retries it.
+        const revoked = await revoke(agent).then(() => null, (e: unknown) => e);
+        if (revoked !== null) warn(`agent ${name}: token not revoked: ${message(revoked)}`);
         // The row is stopping now, so the rows written here already leave it out.
-        await deps.launcher.stop(name, fleetRows);
+        await deps.launcher.stop(name, fleetRows).catch((e: unknown) => {
+          throw revoked === null ? e : new AgentError("unavailable", `${message(e)}; its token was not revoked either (${message(revoked)})`);
+        });
+        if (revoked !== null) throw new AgentError("unavailable", `the session ended but its token was not revoked (${message(revoked)}); stop again to retry`);
       } catch (e) {
         if (deps.agents.transition(name, ["stopping"], "failed", `stop failed: ${message(e)}`, now())) {
           await deps.launcher.rewrite(fleetRows).catch((e2) => warn(`agent ${name}: fleet rows not rewritten after a failed stop: ${message(e2)}`));

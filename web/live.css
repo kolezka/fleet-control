@@ -58,3 +58,7 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .agentform #agentStatus{font-size:10px;color:var(--muted);line-height:1.5}
 .agents li button{font-size:11px;padding:4px 11px;margin-top:4px;border-color:var(--line)}
 .agents button.destructive{color:var(--bad)}
+
+/* Orchestrator option in the agent form: checkbox and its text on one line. */
+.agentform .checkrow { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); }
+.agentform .checkrow input { margin-top: 2px; }
