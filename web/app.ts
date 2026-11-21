@@ -271,7 +271,8 @@ function renderPanes(h: HostState | undefined) {
     renderedPanes = key;
     stopPanes();
     if (!h) {
-      box.innerHTML = `<div class="empty"><span>${hostListError ? "No host list" : "Loading hosts"}</span></div>`;
+      const text = enroll && fleet.order.length === 0 && hostListError.startsWith("No hosts yet") ? "No hosts yet" : hostListError ? "No host list" : "Loading hosts";
+      box.innerHTML = `<div class="empty"><span>${text}</span></div>`;
     } else if (running.length === 0) {
       const r = h.sessionsRead;
       box.innerHTML = r.status === "loading"

@@ -408,8 +408,10 @@ test("an empty gateway that can add hosts points at Add a host instead of a dead
   const empty = await browser({ hosts: [], enroll: true } as never, reply);
   expect(empty.element("sidebar").innerHTML).toContain('href="./add-host">Add a host</a>');
   expect(empty.element("hostSubtitle").textContent).toBe("No hosts yet. Use Add a host at the bottom of the host list.");
+  expect(empty.element("terminals").innerHTML).toContain("<span>No hosts yet</span>");
   const closed = await browser({ hosts: [] } as never, reply);
   expect(closed.element("hostSubtitle").textContent).toBe("The gateway lists no hosts.");
+  expect(closed.element("terminals").innerHTML).toContain("<span>No host list</span>");
 });
 
 test("a pane types only after a confirmed lease the host granted, sends keys as binary, and goes read-only on any end", async () => {
