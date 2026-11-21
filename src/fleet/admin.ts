@@ -41,10 +41,13 @@ export function serviceLogFromEnv(value: string | undefined): ServiceLog | undef
 // Reads the values a fleet.conf sets. It runs the file, as agent-fleet does each time it loads it.
 // Loads it the way agent-fleet does (set -euo pipefail, then the FLEET and FLEET_DIR checks), so a file that
 // breaks fleet breaks here. No `|| exit` around the source: that would switch set -e off inside the file.
-// The marker line appended after the text tells a file that stops early (return) from one that ran to its end.
-const FACTS = 'set -euo pipefail; LOCAL_DIR=$(cd "$(dirname "$0")" && pwd); CONF=$0; . "$0" >/dev/null 2>&1; [ "${__FLEET_CONTROL_END-}" = 1 ] || exit 4; : "${FLEET:?}" "${FLEET_DIR:?}"; printf "%s\\0%s\\0%s\\0%s\\0" "$FLEET" "$FLEET_DIR" "${FLEET_TMUX_SOCKET-fleet-$FLEET}" "${REMOTE_SSH:-}"; for r in "${AGENTS[@]+"${AGENTS[@]}"}"; do printf "%s\\0" "${r%%|*}"; done';
+// A marker line with a fresh nonce, appended after the text, tells a file that stops early (return) from one
+// that ran to its end; a trailing "done" tells an `exit` (which ends the whole bash with status 0) apart.
+// CONF and LOCAL_DIR are not set: fleet sets them but the watchdog does not, so a file needing them fails here.
+const facts = (nonce: string) => `set -euo pipefail; . "$0" >/dev/null 2>&1; [ "\${__FLEET_CONTROL_END-}" = ${nonce} ] || exit 4; : "\${FLEET:?}" "\${FLEET_DIR:?}"; printf "%s\\0%s\\0%s\\0%s\\0" "$FLEET" "$FLEET_DIR" "\${FLEET_TMUX_SOCKET-fleet-$FLEET}" "\${REMOTE_SSH:-}"; for r in "\${AGENTS[@]+"\${AGENTS[@]}"}"; do printf "%s\\0" "\${r%%|*}"; done; printf done`;
 // Runs after the file's own lines: it keeps the status of the file's last command, as a plain source would.
-const END_LINE = '__fc_status=$?; __FLEET_CONTROL_END=1; return "$__fc_status"';
+const endLine = (nonce: string) => `__fc_status=$?; __FLEET_CONTROL_END=${nonce}; return "$__fc_status"`;
+const EARLY_STOP = "it stops before its end (return or exit), so the lines after it, the managed agents among them, never load";
 
 export class FleetAdminHost implements FleetHost {
   constructor(readonly opts: { confPath: string; fleetBin: string; serviceLog?: ServiceLog; tmuxBin?: string; restartTimeoutMs?: number }) {}
@@ -53,23 +56,28 @@ export class FleetAdminHost implements FleetHost {
   read() { return readFile(this.opts.confPath, "utf8"); }
 
   async syntax(text: string) {
-    const r = await run(["bash", "-n"], { stdin: text, timeoutMs: 5_000 });
-    return r.exitCode === 0 ? null : (r.stderr.trim().replace(/^bash: /gm, "") || `exit ${r.exitCode}`);
+    // bash -n only warns (status 0) about a heredoc left open; that one would swallow the rest of the file.
+    const r = await run(["bash", "-n"], { stdin: text, timeoutMs: 5_000, env: { LC_ALL: "C" } });
+    const said = r.stderr.trim().replace(/^bash: /gm, "");
+    return r.exitCode === 0 && said === "" ? null : (said || `exit ${r.exitCode}`);
   }
 
   // The text is written to a private temp file beside the real one, so relative sources resolve the same way.
   async facts(text: string): Promise<ConfFacts> {
     const tmp = join(dirname(this.opts.confPath), `.fleet.conf.check-${randomUUID()}`);
+    // A last line ending in a backslash would join the marker line; agent-fleet's bash fails on it.
+    if (/\\[ \t]*\n?$/.test(text)) throw new Error("its last line ends with a backslash");
+    const nonce = randomUUID().replace(/-/g, "");
     const fh = await open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(`${text}${text.endsWith("\n") || text === "" ? "" : "\n"}${END_LINE}\n`);
+      await fh.writeFile(`${text}${text.endsWith("\n") || text === "" ? "" : "\n"}${endLine(nonce)}\n`);
       await fh.close();
-      const r = await run(["bash", "-c", FACTS, tmp], { timeoutMs: 5_000 });
+      const r = await run(["bash", "-c", facts(nonce), tmp], { timeoutMs: 5_000 });
       if (r.exitCode === 124) throw new Error("loading it took longer than 5 s");
-      if (r.exitCode === 4) throw new Error("it stops before its end (return or exit), so the lines after it, the managed agents among them, never load");
+      if (r.exitCode === 4 || (r.exitCode === 0 && !r.stdout.endsWith("done"))) throw new Error(EARLY_STOP);
       // agent-fleet sources it under set -euo pipefail: any failing command or unset variable breaks every fleet call.
       if (r.exitCode !== 0) throw new Error("sourcing it the way agent-fleet does (set -euo pipefail) failed: a command in it fails, a variable is unset, or FLEET or FLEET_DIR is missing");
-      const [fleet = "", dir = "", socket = "", remote = "", ...rest] = r.stdout.split("\0");
+      const [fleet = "", dir = "", socket = "", remote = "", ...rest] = r.stdout.slice(0, -"done".length).split("\0");
       return { fleet, dir, socket, remote, sessions: rest.filter(Boolean) };
     } finally {
       await fh.close().catch(() => undefined);

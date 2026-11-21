@@ -664,9 +664,10 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
       else { v.conf = conf; v.draft = conf.text; v.changedOnHost = false; }
       v.status = "ready"; v.error = "";
     } else { v.status = "unknown"; v.error = "malformed answer"; }
-  } else if (status === 404 || status === 503) { v.status = "absent"; v.conf = null; }
+  // The section hides, but an unsaved edit and the file it was made from stay for when it comes back.
+  } else if (status === 404 || status === 503) { v.status = "absent"; }
   // An agent or viewer token sees nothing here; the host refuses it.
-  else if (status === 403) { v.status = "absent"; v.conf = null; }
+  else if (status === 403) { v.status = "absent"; }
   else { v.status = "unknown"; v.error = outcome.message; }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }

@@ -212,7 +212,7 @@ export type EnrollHandler = (method: string, path: string, body: Uint8Array | nu
 export type InstallerHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
 
 type Target =
-  | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; body: boolean; timeoutMs?: number }
+  | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; timeoutMs?: number }
   | { kind: "ws"; upstream: string; query: Record<string, RegExp> }
   | { kind: "mcp" };
 
@@ -227,7 +227,7 @@ function matchRoute(seg: string[]): Target | null {
   const [a, b, c] = seg;
   const ok = (s: string | undefined): s is string => s !== undefined && SEGMENT.test(s) && !/^\.+$/.test(s);
   const http = (upstream: string, methods: string[], query: Record<string, RegExp> = {}): Extract<Target, { kind: "http" }> => ({
-    kind: "http", upstream, methods, query, body: methods.includes("POST") || methods.includes("PUT"),
+    kind: "http", upstream, methods, query,
   });
   if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "screen") return http(`/api/sessions/${b}/screen`, ["GET"], { lines: NUM });

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, rm, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, rm, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "../auth.ts";
 import { Store } from "../data/store.ts";
@@ -87,10 +87,22 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
       ["false", loads],
       ["X=$UNSET_VARIABLE_FOR_TEST", loads],
       ["return 0", "fleet.conf does not load: it stops before its end (return or exit), so the lines after it, the managed agents among them, never load"],
+      ["exit 0", "fleet.conf does not load: it stops before its end (return or exit), so the lines after it, the managed agents among them, never load"],
+      // The real check's marker carries a fresh nonce, so a file cannot fake having run to its end.
+      ["__FLEET_CONTROL_END=1; return 0", "fleet.conf does not load: it stops before its end (return or exit), so the lines after it, the managed agents among them, never load"],
+      // fleet sets CONF and LOCAL_DIR before sourcing, the watchdog does not; a file needing them fails there.
+      ['X="$CONF"', loads],
     ] as const) {
       const r = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited.replace("AGENTS=(", `${line}\nAGENTS=(`), revision: read.revision, confirm: "fleet.conf" }) });
       expect([line, r.status, (await r.json()).error?.message]).toEqual([line, 400, message]);
     }
+    // A heredoc left open swallows the rest of the file (bash -n only warns), and a trailing backslash would join
+    // the check's own marker line; both are refused before anything runs.
+    const heredoc = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: above("cat <<EOF"), revision: read.revision, confirm: "fleet.conf" }) });
+    expect([heredoc.status, (await heredoc.json()).error.message]).toEqual([400, expect.stringMatching(/^bash -n: .*here-document/)]);
+    // (A backslash can only end the include line here, which the page refuses anyway, so it is checked on the host.)
+    const slash = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin }).facts(edited.trimEnd() + " \\").then(() => "", (e) => e.message);
+    expect(slash).toBe("its last line ends with a backslash");
     // The same lines through agent-fleet itself: each makes `fleet log` fail, so the refusal matches the CLI.
     // A failing test in the middle of an && list does not stop bash under set -e, in agent-fleet or here.
     const midList = "[ -f /nonexistent-fleet-test ] && . /nonexistent-fleet-test";
@@ -113,6 +125,19 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     expect((await stat(fleet.confPath)).mode & 0o777).toBe(0o640);
     expect((await stat(body.backup)).mode & 0o777).toBe(0o640);
     expect((await readdir(fleet.dir)).filter((f) => f.startsWith("."))).toEqual([]);
+
+    // A symlinked fleet.conf stays a symlink; the file it points to is replaced.
+    const real = join(fleet.dir, "real-fleet.conf"), link = join(fleet.dir, "linked-fleet.conf");
+    await writeFile(real, edited);
+    await symlink(real, link);
+    const linked = new FleetAdminHost({ confPath: link, fleetBin });
+    await linked.replace(edited, edited + "# via link\n");
+    expect([(await lstat(link)).isSymbolicLink(), await readFile(real, "utf8")]).toEqual([true, edited + "# via link\n"]);
+    // A change on the host between the read and the rename is a conflict (409 on the page), and nothing is written.
+    const raced = await linked.replace("not what is on disk", "x").then(() => null, (e) => e);
+    expect([raced?.constructor?.name, raced?.kind, await readFile(real, "utf8")]).toEqual(["AdminError", "conflict", edited + "# via link\n"]);
+    for (const f of (await readdir(fleet.dir)).filter((f) => f.startsWith("real-fleet.conf.bak-"))) await rm(join(fleet.dir, f));
+    await rm(link); await rm(real);
 
     // A second save from the first read is refused: the file moved on.
     const stale = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: conf0, revision: read.revision, confirm: "fleet.conf" }) });

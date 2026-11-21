@@ -587,3 +587,26 @@ test("after a 409 the unsaved edit keeps its old revision: a background refresh 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("adminStatus").textContent).toBe("A did not answer in time. Unknown whether probe-shell is running; check its terminal.");
 });
+
+test("a refresh where the host briefly refuses the section keeps the unsaved edit and the file it was made from", async () => {
+  let refuse = false;
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/fleet/conf") && !init?.method) return refuse ? { __status: 503, error: { message: "fleet administration is off" } } : conf;
+    if (path.endsWith("/fleet/conf")) return conf;
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  b.element("confText").value = "FLEET=t\nMINE=1\n";
+  await b.listeners.get("confText:input")!({});
+  refuse = true;
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(true);
+  refuse = false;
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("confText").value).toBe("FLEET=t\nMINE=1\n");
+});
