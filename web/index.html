@@ -43,6 +43,24 @@
                 <p id="agentStatus" role="status"></p>
               </form>
             </details>
+            <details class="exchange fleetadmin" id="adminBox" hidden><summary>Fleet</summary>
+              <div class="adminpart"><div class="sectionheading"><h4>fleet.conf</h4><small id="confPath"></small></div>
+                <p class="fineprint">Hand-written part of the fleet. Managed agents live in their own file and are not edited here.</p>
+                <textarea id="confText" rows="10" spellcheck="false" autocomplete="off" aria-label="fleet.conf text"></textarea>
+                <label for="confConfirm">Type fleet.conf to save</label><input id="confConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><button type="button" id="confReload">Reload</button><span id="confGate"></span><button type="button" id="confSave" disabled>Save fleet.conf</button></div>
+              </div>
+              <div class="adminpart"><div class="sectionheading"><h4>Restart a session</h4></div>
+                <label for="restartSession">Session</label><select id="restartSession"></select>
+                <label for="restartConfirm">Type the session name to confirm</label><input id="restartConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="restartGate"></span><button type="button" id="restartGo" class="destructive" disabled>Restart</button></div>
+              </div>
+              <div class="adminpart"><div class="sectionheading"><h4>Logs</h4></div>
+                <div class="composerfooter"><select id="logSource" aria-label="Log"><option value="watchdog">Watchdog</option><option value="service">Service</option></select><button type="button" id="logRead">Show last 200 lines</button></div>
+                <pre id="logText" class="logtext" tabindex="0" aria-label="Log lines"></pre>
+              </div>
+              <p id="adminStatus" role="status"></p>
+            </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
           </div>
           <form id="instructionForm" class="instructionform"><label for="instruction">Instruction to supervisor</label><textarea id="instruction" rows="2" maxlength="4000" placeholder="Clarify the scope or give an instruction..."></textarea><div class="composerfooter"><span id="composerTarget">Select a session</span><button type="submit" id="sendInstruction" disabled>Send</button></div><p id="instructionStatus" role="status"></p></form>

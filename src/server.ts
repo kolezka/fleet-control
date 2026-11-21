@@ -17,6 +17,8 @@ import { AgentError } from "./domain/agents.ts";
 import { agentUseCases, type AgentDeps } from "./application/agents.ts";
 import type { LeaseUseCases } from "./application/leases.ts";
 import { LeaseError, MAX_INPUT_BYTES } from "./domain/leases.ts";
+import { AdminError } from "./domain/fleet-admin.ts";
+import { adminUseCases, type AdminDeps } from "./application/fleet-admin.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -85,6 +87,16 @@ function pageQuery(req: Request): { limit?: number; cursor?: string } | null | R
   if (cursor !== null && (cursor.length === 0 || cursor.length > 4096)) return bad("invalid cursor or cursor filter mismatch");
   return { ...(limit !== null ? { limit: Number(limit) } : {}), ...(cursor !== null ? { cursor } : {}) };
 }
+const adminStatus: Record<AdminError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, unavailable: 503 };
+// Admin calls touch host files and programs; their plain failures (a missing log, a failed read) go back
+// to the operator as 503 with the reason, since only an operator can reach them.
+function adminError(e: unknown): Response {
+  if (e instanceof AdminError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: adminStatus[e.kind] });
+  if (e instanceof RoleError) return Response.json({ error: { kind: e.kind, message: e.message } }, { status: 403 });
+  const message = e instanceof Error ? e.message : String(e);
+  console.error(`fleet admin: ${message}`);
+  return Response.json({ error: { kind: "unavailable", message } }, { status: 503 });
+}
 const forbidden = () => Response.json({ error: { kind: "forbidden", message: "cross-origin request" } }, { status: 403 });
 const noControl = () => Response.json({ error: { kind: "unavailable", message: "command queue not configured" } }, { status: 503 });
 
@@ -102,7 +114,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -118,6 +130,8 @@ export type ServeOptions = {
 };
 
 export const MAX_VIEWERS = 16;
+// How long a restart request may stay open while the session starts again.
+export const RESTART_IDLE_SECONDS = 200;
 
 // The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
 export class ViewerSlots {
@@ -140,7 +154,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -159,6 +173,14 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   if (deps.input && !auth) throw new Error("terminal input needs tokens; set FLEET_CONTROL_TOKENS");
   const input = deps.input;
   const noInput = () => Response.json({ error: { kind: "unavailable", message: "terminal input not configured on this host" } }, { status: 503 });
+  // Editing fleet.conf and restarting sessions need tokens, like starting agents.
+  if (deps.admin && !auth) throw new Error("fleet administration needs tokens; set FLEET_CONTROL_TOKENS");
+  const adminFor = (who: Principal | null) => (deps.admin ? adminUseCases(deps.admin, who ?? undefined) : null);
+  const noAdmin = () => Response.json({ error: { kind: "unavailable", message: "fleet administration not configured on this host" } }, { status: 503 });
+  const jsonBody = async (req: Request) => {
+    const body: unknown = await req.json().catch(() => null);
+    return body && typeof body === "object" && !Array.isArray(body) ? body : null;
+  };
   const requestsFor = (who: Principal | null) => (control?.requests ? requestUseCases(control.requests, who ?? undefined) : null);
 
   // With auth, every API, MCP and terminal call needs a principal; the principal is the actor.
@@ -269,6 +291,46 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const { agent } = await agents.start(body as Record<string, unknown>);
             return Response.json({ agent }, { status: 202 });
           } catch (e) { return commandError(e); }
+        }),
+      },
+      // Fleet administration: operator only. GET answers too, since fleet.conf and logs can hold host details.
+      "/api/fleet/conf": {
+        GET: guard(async (_req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          try { return Response.json(await admin.conf()); } catch (e) { return adminError(e); }
+        }),
+        PUT: guard(async (req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          if (!originAllowed(req)) return forbidden();
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await admin.saveConf(body));
+          } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/fleet/logs": {
+        GET: guard(async (req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          const q = new URL(req.url).searchParams;
+          try { return Response.json(await admin.log(q.get("source"), q.get("lines"))); } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/sessions/:name/restart": {
+        POST: guard(async (req, srv, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          if (!originAllowed(req)) return forbidden();
+          // fleet start can wait 90 s for an agent; Bun would drop the idle connection after 10 s.
+          srv.timeout(req, RESTART_IDLE_SECONDS);
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await admin.restart(req.params.name, body));
+          } catch (e) { return adminError(e); }
         }),
       },
       "/api/agents/:name/stop": {

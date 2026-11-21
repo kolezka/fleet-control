@@ -16,7 +16,8 @@ import { serve, ViewerSlots } from "./src/server.ts";
 import { Store } from "./src/data/store.ts";
 import { Leases } from "./src/data/leases.ts";
 import { leaseUseCases } from "./src/application/leases.ts";
-import { fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
+import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
+import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -66,6 +67,21 @@ if (input) {
   const ended = input.endAfterRestart();
   if (ended.length) console.log(`input leases ended by the restart: ${ended.join(", ")}`);
 }
+// FLEET_CONTROL_ADMIN=1 lets an operator edit fleet.conf, read the logs and restart a session from the page.
+// FLEET_CONTROL_SERVICE_LOG names this service's own log: a file, or journal:<unit> for systemd.
+const adminSetup = () => {
+  try {
+    return { host: new FleetAdminHost({ confPath, fleetBin, serviceLog: serviceLogFromEnv(process.env.FLEET_CONTROL_SERVICE_LOG), tmuxBin: findTmux() }) };
+  } catch (e) {
+    console.error(`FLEET_CONTROL_ADMIN: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+};
+const admin = process.env.FLEET_CONTROL_ADMIN === "1" ? adminSetup() : undefined;
+if (admin && !options.auth) {
+  console.error("FLEET_CONTROL_ADMIN needs FLEET_CONTROL_TOKENS");
+  process.exit(1);
+}
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
 const deps = {
   fleet: new FleetCli({ fleetBin, confPath }),
@@ -74,6 +90,7 @@ const deps = {
   terminal: { fleetBin, confPath },
   control: { commands, deliverer, requests: new Requests(store.db) },
   input,
+  admin,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),
@@ -109,4 +126,5 @@ if (tailnet) {
     process.exit(1);
   }
 }
+if (admin) console.log(`fleet administration on: fleet.conf ${confPath}, service log ${process.env.FLEET_CONTROL_SERVICE_LOG?.trim() || "not set"}`);
 console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);

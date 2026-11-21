@@ -30,16 +30,18 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = FakeTerminal;");
   source = source.replace(/import {([\s\S]*?)} from ".\/lease.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = leaseModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/host-state.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = state;");
+  source = source.replace(/import {([\s\S]*?)} from ".\/fleet-admin.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = adminModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/agents.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = agentsModule;");
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
   const agentsModule = await import("./agents.ts");
   const leaseModule = await import("./lease.ts");
-  const run = new Function("FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const adminModule = await import("./fleet-admin.ts");
+  const run = new Function("adminModule", "FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
   const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
   const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
-  const app = await run(FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
+  const app = await run(adminModule, FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
@@ -474,4 +476,73 @@ test("the orchestrator option shows only where the host offers it and only for C
   await new Promise(resolve => setTimeout(resolve, 0));
   const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
   expect(JSON.parse(String(post.init!.body))).toMatchObject({ name: "fc-o2", kind: "claude", orchestrator: true });
+});
+
+test("the fleet section shows only where the host offers it, saves with the read revision and the typed confirm, and restarts a typed session", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell", "fc-agent"], loadError: null };
+  const plain = { id: "p", name: "Plain", apiBase: "/api/hosts/p" };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host, plain], (path, init) => {
+    if (path.startsWith("/api/hosts/p/fleet/")) return { __status: 404, error: { message: "not found" } };
+    if (path.endsWith("/fleet/conf") && init?.method === "PUT") return { path: conf.path, revision: "b".repeat(64), backup: "/f/fleet.conf.bak-1", sessions: conf.sessions };
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.includes("/fleet/logs")) return { source: "watchdog", lines: 200, text: "wd line\n" };
+    if (path.endsWith("/restart")) return { session: "probe-shell", output: "probe-shell: started\n" };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("confText").value).toBe("FLEET=t\n");
+  // Managed agents are restarted from the agent list, not here.
+  expect(b.element("restartSession").innerHTML).toBe('<option value="probe-shell">probe-shell</option>');
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+
+  await type("confText", "FLEET=t\nX=1\n");
+  expect(b.element("confSave").disabled).toBe(true);
+  expect(b.element("confGate").textContent).toBe("Type fleet.conf to confirm");
+  await type("confConfirm", "fleet.conf");
+  expect(b.element("confSave").disabled).toBe(false);
+  await b.listeners.get("confSave:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/fleet/conf" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ text: "FLEET=t\nX=1\n", revision: "a".repeat(64), confirm: "fleet.conf" });
+  expect(b.element("adminStatus").textContent).toContain("/f/fleet.conf.bak-1");
+
+  // A pick reported only as change still counts; the restart needs the name typed in full.
+  await type("restartSession", "probe-shell", "change");
+  await type("restartConfirm", "probe");
+  expect(b.element("restartGo").disabled).toBe(true);
+  await type("restartConfirm", "probe-shell");
+  expect(b.element("restartGo").disabled).toBe(false);
+  await b.listeners.get("restartGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const restart = b.calls.find(c => c.path.endsWith("/restart"))!;
+  expect([restart.path, restart.init?.method, JSON.parse(String(restart.init!.body))]).toEqual(["/api/hosts/a/sessions/probe-shell/restart", "POST", { confirm: "probe-shell" }]);
+  expect(b.element("adminStatus").textContent).toBe("A: probe-shell started again.");
+
+  await b.listeners.get("logRead:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/fleet/logs?source=watchdog&lines=200")).toBe(true);
+  expect(b.element("logText").textContent).toBe("wd line\n");
+
+  // The other host does not offer it: the section hides.
+  await b.click({ host: "p" });
+  expect(b.element("adminBox").hidden).toBe(true);
+});
+
+test("an agent model picked with only a change event is the one posted", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 202, agent: { ...JSON.parse(String(init.body)), state: "starting" } };
+    if (path.endsWith("/agents")) return { agents: [], models: ["sonnet", "haiku"], folders: ["/r/s"] };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  for (const [id, v] of [["agentName", "fc-h"], ["agentPrompt", "Say READY"], ["agentConfirm", "fc-h"]] as const) await type(id, v);
+  await type("agentModel", "haiku", "change");
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
+  expect(JSON.parse(String(post.init!.body)).model).toBe("haiku");
 });

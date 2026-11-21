@@ -67,3 +67,13 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Orchestrator option in the agent form: checkbox and its text on one line. */
 .agentform .checkrow { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); }
 .agentform .checkrow input { margin-top: 2px; }
+
+/* Fleet section: fleet.conf, restart, logs. */
+.fleetadmin .adminpart { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.fleetadmin .adminpart:last-of-type { border-bottom: 0; }
+.fleetadmin h4 { margin: 0; font-size: 12px; }
+.fleetadmin textarea#confText, .fleetadmin .logtext { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; width: 100%; box-sizing: border-box; }
+.fleetadmin .logtext { max-height: 220px; overflow: auto; margin: 0; padding: 6px; background: var(--terminal); color: var(--ink); white-space: pre-wrap; border-radius: 4px; }
+.fleetadmin .logtext:empty { display: none; }
+.fleetadmin button.destructive { color: var(--bad); border-color: var(--bad); }
+.fleetadmin textarea#confText { min-height: 160px; resize: vertical; padding: 6px; background: var(--terminal); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }

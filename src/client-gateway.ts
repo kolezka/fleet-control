@@ -212,11 +212,13 @@ export type EnrollHandler = (method: string, path: string, body: Uint8Array | nu
 export type InstallerHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
 
 type Target =
-  | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; body: boolean }
+  | { kind: "http"; upstream: string; methods: string[]; query: Record<string, RegExp>; body: boolean; timeoutMs?: number }
   | { kind: "ws"; upstream: string; query: Record<string, RegExp> }
   | { kind: "mcp" };
 
 const NUM = /^[0-9]{1,4}$/;
+// fleet start waits up to 90 s for an agent's UI, after which the host answers; leave room above that.
+export const RESTART_TIMEOUT_MS = 180_000;
 // Keyset paging on the host lists: the host checks the range and the cursor itself.
 const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
 
@@ -224,7 +226,7 @@ const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
 function matchRoute(seg: string[]): Target | null {
   const [a, b, c] = seg;
   const ok = (s: string | undefined): s is string => s !== undefined && SEGMENT.test(s) && !/^\.+$/.test(s);
-  const http = (upstream: string, methods: string[], query: Record<string, RegExp> = {}): Target => ({
+  const http = (upstream: string, methods: string[], query: Record<string, RegExp> = {}): Extract<Target, { kind: "http" }> => ({
     kind: "http", upstream, methods, query, body: methods.includes("POST"),
   });
   if (seg.length === 1 && a === "sessions") return http("/api/sessions", ["GET"]);
@@ -239,6 +241,10 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 3 && a === "requests" && ok(b) && c === "resolve") return http(`/api/requests/${b}/resolve`, ["POST"]);
   if (seg.length === 1 && a === "agents") return http("/api/agents", ["GET", "POST"]);
   if (seg.length === 3 && a === "agents" && ok(b) && c === "stop") return http(`/api/agents/${b}/stop`, ["POST"]);
+  if (seg.length === 2 && a === "fleet" && b === "conf") return http("/api/fleet/conf", ["GET", "PUT"]);
+  if (seg.length === 2 && a === "fleet" && b === "logs") return http("/api/fleet/logs", ["GET"], { source: /^[a-z]{1,16}$/, lines: NUM });
+  // A restart waits for the session to start again, which for an agent can take minutes.
+  if (seg.length === 3 && a === "sessions" && ok(b) && c === "restart") return { ...http(`/api/sessions/${b}/restart`, ["POST"]), timeoutMs: RESTART_TIMEOUT_MS };
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;
 }
@@ -354,7 +360,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
         headers,
         body,
         redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(!mcp && route.timeoutMs ? route.timeoutMs : timeoutMs),
         // A write must never be replayed by the HTTP client on a stale pooled connection.
         ...(write ? { keepalive: false } : {}),
         ...(upstreamOrigin.startsWith("https:") ? { tls: { rejectUnauthorized: true } } : {}),
@@ -671,6 +677,8 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       // Browser writes must come from the page this gateway served.
       if (req.method !== "GET" && origin === null) return fail(403, "forbidden", "Origin required for writes");
       if (host.supervisor && route.upstream.startsWith("/api/commands")) return proxyCentral(req, host, route, url);
+      // Bun drops a connection idle for 10 s; a long route keeps it open as long as it waits upstream.
+      if (route.timeoutMs) srv.timeout(req, Math.ceil(route.timeoutMs / 1000) + 10);
       return proxyHttp(req, host, route, url);
     },
   });
