@@ -7,7 +7,7 @@ const BASE = `FLEET=t\nFLEET_DIR=/f\nAGENTS=("probe-shell|Probe|p.txt")\n${MANAG
 // A host whose file lives in memory. facts() reads FLEET, FLEET_DIR and the session names the way bash would for these simple files.
 function fakeHost(initial = BASE) {
   const calls: string[] = [];
-  const state = { text: initial, backups: [] as string[], restartOk: true, logs: "", managed: [] as string[] };
+  const state = { text: initial, backups: [] as string[], restartOk: true, restartStage: "start" as "kill" | "start" | "timeout", logs: "", managed: [] as string[] };
   const facts = (text: string): ConfFacts => {
     if (text.includes("exit 7")) throw new Error("sourcing it failed");
     const get = (k: string) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1] ?? "";
@@ -20,7 +20,7 @@ function fakeHost(initial = BASE) {
     facts: async (t) => facts(t),
     replace: async (current, t) => { calls.push("replace"); expect(current).toBe(state.text); state.backups.push(state.text); state.text = t; return `/f/fleet.conf.bak-${state.backups.length}`; },
     log: async (source, lines) => { calls.push(`log ${source} ${lines}`); return state.logs; },
-    restart: async (s, socket) => { calls.push(`restart ${s} ${socket}`); return { ok: state.restartOk, output: state.restartOk ? `${s}: started\n` : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
+    restart: async (s, socket) => { calls.push(`restart ${s} ${socket}`); return state.restartOk ? { ok: true, output: `${s}: started\n` } : { ok: false, stage: state.restartStage, output: state.restartStage === "kill" ? "tmux kill-session failed: permission denied" : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
   };
   return { host, state, calls };
 }
@@ -112,8 +112,17 @@ test("a restart takes a fleet.conf session typed in full, never a managed agent,
   expect(await use.restart("probe-shell", { confirm: "probe-shell" })).toEqual({ session: "probe-shell", output: "probe-shell: started\n" });
   state.restartOk = false;
   const e = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
-  expect([e.kind, e.message]).toEqual(["unavailable", "probe-shell did not start again: probe-shell: start FAILED: claude UI not detected after 90 s"]);
-  expect(calls).toEqual(["restart probe-shell fleet-t", "restart probe-shell fleet-t"]);
+  expect([e.kind, e.message]).toEqual(["failed", "the old probe-shell session ended, and it did not start again: probe-shell: start FAILED: claude UI not detected after 90 s"]);
+  // tmux could not end the old session: nothing was started and the old one may still run.
+  state.restartStage = "kill";
+  const k = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
+  expect([k.kind, k.message]).toEqual(["unavailable", "probe-shell was not restarted; the old session may still be running: tmux kill-session failed: permission denied"]);
+  // A start cut off at the time limit may have opened the session anyway.
+  state.restartStage = "timeout";
+  const t = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
+  expect([t.kind, t.message]).toEqual(["unavailable", "the old probe-shell session ended, and its start did not finish in time; check its terminal: probe-shell: start FAILED: claude UI not detected after 90 s"]);
+  state.restartStage = "start";
+  expect(calls).toEqual(["restart probe-shell fleet-t", "restart probe-shell fleet-t", "restart probe-shell fleet-t", "restart probe-shell fleet-t"]);
 });
 
 test("review fixes: a broken current file, a lost managed agent, the include line moved, and a REMOTE_SSH restart are refused", async () => {

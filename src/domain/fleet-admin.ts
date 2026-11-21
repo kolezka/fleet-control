@@ -1,6 +1,8 @@
 // Rules for looking after a host's fleet from the page: its hand-written fleet.conf, its logs and
 // restarting one session. Only an operator may do any of it.
-export type AdminErrorKind = "invalid" | "conflict" | "not_found" | "unavailable";
+// failed: the host did what it was asked and it did not work (a restart whose start failed). The outcome is
+// known, unlike a 5xx, which the gateway reports as unknown.
+export type AdminErrorKind = "invalid" | "conflict" | "not_found" | "unavailable" | "failed";
 export class AdminError extends Error {
   constructor(readonly kind: AdminErrorKind, message: string) {
     super(message);

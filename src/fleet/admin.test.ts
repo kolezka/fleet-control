@@ -175,6 +175,37 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     expect(id(after)).toBeDefined();
     expect(id(after)).not.toBe(id(before));
   });
+
+  test("the host tells a failed kill, a failed start and a start cut off by time apart", async () => {
+    const tmuxStub = join(fleet.dir, "tmux-refuses");
+    await writeFile(tmuxStub, `#!/bin/bash\necho "permission denied on socket" >&2\nexit 1\n`);
+    await chmod(tmuxStub, 0o755);
+    const killFails = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin: join(fleet.dir, "fake-fleet"), tmuxBin: tmuxStub }).restart("nothing-here", "");
+    expect(killFails).toEqual({ ok: false, stage: "kill", output: "tmux kill-session failed: permission denied on socket" });
+    const slow = join(fleet.dir, "slow-fleet");
+    await writeFile(slow, `#!/bin/bash\necho starting\nexec sleep 30\n`);
+    await chmod(slow, 0o755);
+    const cut = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin: slow, restartTimeoutMs: 500 }).restart("nothing-here", fleet.socket);
+    expect([cut.ok, cut.ok ? null : cut.stage]).toEqual([false, "timeout"]);
+  });
+
+  test("a start that fails after the restart is a definite answer on the page, not an unknown one", async () => {
+    // The stand-in refuses to start this session, as fleet start does on a trust dialog.
+    const failing = join(fleet.dir, "failing-fleet");
+    await writeFile(failing, `#!/bin/bash\necho "$2: start FAILED: workspace trust dialog" >&2\nexit 1\n`);
+    await chmod(failing, 0o755);
+    const host = new FleetAdminHost({ confPath: fleet.confPath, fleetBin: failing });
+    const s = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store: new Store(":memory:"), admin: { host } }, 0, { auth: await Auth.fromFile(join(fleet.dir, "tokens")) });
+    const g = startGateway({ hosts: [{ id: "h", name: "H", origin: s.url.origin }], credentials: new Credentials(new Map([["h", op]])) }, { port: 0 });
+    try {
+      const r = await fetch(`${g.url.origin}/api/hosts/h/sessions/${fleet.session}/restart`, { method: "POST", headers: { origin: g.url.origin, "content-type": "application/json" }, body: JSON.stringify({ confirm: fleet.session }) });
+      const body = await r.json();
+      expect([r.status, body.error.message, body.error.outcome]).toEqual([422, `the old ${fleet.session} session ended, and it did not start again: ${fleet.session}: start FAILED: workspace trust dialog`, undefined]);
+    } finally {
+      g.stop(true);
+      s.stop(true);
+    }
+  });
 });
 
 test("the service log setting is a file path or journal:<unit>", () => {

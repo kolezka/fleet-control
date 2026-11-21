@@ -712,6 +712,8 @@ async function restartSession(hostId: string) {
   // The gateway gives up first (504) or loses the host (502): the restart may still be going on.
   v.notice = outcome.ok ? `${host.name}: ${s} started again.`
     : status === null || status === 502 || status === 504 ? `${host.name} did not answer in time. Unknown whether ${s} is running; check its terminal.`
+    // 422: the old session ended and the start failed; that is known, so it is said as it is.
+    : status === 422 ? `${host.name}: ${outcome.message}`
     : `${host.name}: ${s} not restarted: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
   void refresh(hostId, "sessions");
