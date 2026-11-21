@@ -30,16 +30,18 @@ async function browser(hosts: unknown[], respond: (path: string, init?: RequestI
   source = source.replace(/import { init, Terminal } from "ghostty-web";/, "const init = async () => {}; const Terminal = FakeTerminal;");
   source = source.replace(/import {([\s\S]*?)} from ".\/lease.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = leaseModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/host-state.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = state;");
+  source = source.replace(/import {([\s\S]*?)} from ".\/fleet-admin.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = adminModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/agents.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = agentsModule;");
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
   const agentsModule = await import("./agents.ts");
   const leaseModule = await import("./lease.ts");
-  const run = new Function("FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const adminModule = await import("./fleet-admin.ts");
+  const run = new Function("adminModule", "FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
   const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
   const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
-  const app = await run(FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
+  const app = await run(adminModule, FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href: "http://127.0.0.1:4870/" }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
@@ -474,4 +476,137 @@ test("the orchestrator option shows only where the host offers it and only for C
   await new Promise(resolve => setTimeout(resolve, 0));
   const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
   expect(JSON.parse(String(post.init!.body))).toMatchObject({ name: "fc-o2", kind: "claude", orchestrator: true });
+});
+
+test("the fleet section shows only where the host offers it, saves with the read revision and the typed confirm, and restarts a typed session", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell", "second", "fc-agent"], loadError: null };
+  const plain = { id: "p", name: "Plain", apiBase: "/api/hosts/p" };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host, plain], (path, init) => {
+    if (path.startsWith("/api/hosts/p/fleet/")) return { __status: 404, error: { message: "not found" } };
+    if (path.endsWith("/fleet/conf") && init?.method === "PUT") return { path: conf.path, revision: "b".repeat(64), backup: "/f/fleet.conf.bak-1", sessions: conf.sessions };
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.includes("/fleet/logs")) return { source: "watchdog", lines: 200, text: "wd line\n" };
+    if (path.endsWith("/restart")) return { session: "second", output: "second: started\n" };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("confText").value).toBe("FLEET=t\n");
+  // Managed agents are restarted from the agent list, not here.
+  expect(b.element("restartSession").innerHTML).toBe('<option value="probe-shell">probe-shell</option><option value="second">second</option>');
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+
+  await type("confText", "FLEET=t\nX=1\n");
+  expect(b.element("confSave").disabled).toBe(true);
+  expect(b.element("confGate").textContent).toBe("Type fleet.conf to confirm");
+  await type("confConfirm", "fleet.conf");
+  expect(b.element("confSave").disabled).toBe(false);
+  await b.listeners.get("confSave:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/fleet/conf" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ text: "FLEET=t\nX=1\n", revision: "a".repeat(64), confirm: "fleet.conf" });
+  expect(b.element("adminStatus").textContent).toContain("/f/fleet.conf.bak-1");
+
+  // A pick reported only as change still counts; the restart needs the name typed in full.
+  // "second" is not the default pick, so only the change listener can make it the one posted.
+  await type("restartSession", "second", "change");
+  await type("restartConfirm", "secon");
+  expect(b.element("restartGo").disabled).toBe(true);
+  await type("restartConfirm", "second");
+  expect(b.element("restartGo").disabled).toBe(false);
+  await b.listeners.get("restartGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const restart = b.calls.find(c => c.path.endsWith("/restart"))!;
+  expect([restart.path, restart.init?.method, JSON.parse(String(restart.init!.body))]).toEqual(["/api/hosts/a/sessions/second/restart", "POST", { confirm: "second" }]);
+  expect(b.element("adminStatus").textContent).toBe("A: second started again.");
+
+  await b.listeners.get("logRead:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/fleet/logs?source=watchdog&lines=200")).toBe(true);
+  expect(b.element("logText").textContent).toBe("wd line\n");
+
+  // The other host does not offer it: the section hides.
+  await b.click({ host: "p" });
+  expect(b.element("adminBox").hidden).toBe(true);
+});
+
+test("an agent model picked with only a change event is the one posted", async () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/agents") && init?.method === "POST") return { __status: 202, agent: { ...JSON.parse(String(init.body)), state: "starting" } };
+    if (path.endsWith("/agents")) return { agents: [], models: ["sonnet", "haiku"], folders: ["/r/s"] };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  for (const [id, v] of [["agentName", "fc-h"], ["agentPrompt", "Say READY"], ["agentConfirm", "fc-h"]] as const) await type(id, v);
+  await type("agentModel", "haiku", "change");
+  await b.listeners.get("agentForm:submit")!({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const post = b.calls.find(c => c.path === "/api/hosts/a/agents" && c.init?.method === "POST")!;
+  expect(JSON.parse(String(post.init!.body)).model).toBe("haiku");
+});
+
+test("after a 409 the unsaved edit keeps its old revision: a background refresh does not make it saveable over the host's change", async () => {
+  let hostConf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/fleet/conf") && init?.method === "PUT") return { __status: 409, error: { code: "conflict", message: "fleet.conf changed on the host since you read it; reload it and edit again" } };
+    if (path.endsWith("/fleet/conf")) return hostConf;
+    if (path.endsWith("/restart")) return { __status: 504, error: { message: "host did not answer in time" } };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  await type("confText", "FLEET=t\nMINE=1\n");
+  await type("confConfirm", "fleet.conf");
+  // Someone edits the file on the host; the save is refused.
+  hostConf = { ...hostConf, text: "FLEET=t\nTHEIRS=1\n", revision: "b".repeat(64) };
+  await b.listeners.get("confSave:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("confSave").disabled).toBe(true);
+  // The 60 s host refresh runs: the draft stays, and Save stays blocked until Reload.
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("confText").value).toBe("FLEET=t\nMINE=1\n");
+  expect(b.element("confSave").disabled).toBe(true);
+  expect(b.element("confGate").textContent).toBe("fleet.conf changed on the host; copy your edit, then Reload");
+  // Any later PUT would still name the revision the draft was made from.
+  expect(b.calls.filter(c => c.init?.method === "PUT").map(c => JSON.parse(String(c.init!.body)).revision)).toEqual(["a".repeat(64)]);
+  // Reload takes the host's file and lifts the block.
+  await b.listeners.get("confReload:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("confText").value).toBe("FLEET=t\nTHEIRS=1\n");
+  expect(b.element("confGate").textContent).toBe("No changes");
+
+  // A restart the gateway gave up on (504) is reported as unknown, not as not restarted.
+  await type("restartSession", "probe-shell", "change");
+  await type("restartConfirm", "probe-shell");
+  await b.listeners.get("restartGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminStatus").textContent).toBe("A did not answer in time. Unknown whether probe-shell is running; check its terminal.");
+});
+
+test("a refresh where the host briefly refuses the section keeps the unsaved edit and the file it was made from", async () => {
+  let refuse = false;
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/fleet/conf") && !init?.method) return refuse ? { __status: 503, error: { message: "fleet administration is off" } } : conf;
+    if (path.endsWith("/fleet/conf")) return conf;
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  b.element("confText").value = "FLEET=t\nMINE=1\n";
+  await b.listeners.get("confText:input")!({});
+  refuse = true;
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(true);
+  refuse = false;
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("confText").value).toBe("FLEET=t\nMINE=1\n");
 });

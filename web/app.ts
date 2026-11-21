@@ -11,6 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
+import { type AdminView, emptyAdmin, parseConf, restartable, restartGate, saveGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -610,9 +611,131 @@ async function stopAgent(hostId: string, name: string) {
   void refresh(hostId, "sessions");
 }
 
+// --- fleet administration: fleet.conf, restart one session, logs. Shown only where the host offers it.
+const RESTART_TIMEOUT_MS = 190_000;
+const adminViews = new Map<string, AdminView>();
+function adminView(hostId: string): AdminView {
+  let v = adminViews.get(hostId);
+  if (!v) { v = emptyAdmin(); adminViews.set(hostId, v); }
+  return v;
+}
+
+function renderAdmin(h: HostState | undefined) {
+  const box = $("adminBox");
+  if (!h || h.info.supervisor) { box.hidden = true; return; }
+  const v = adminView(h.info.id);
+  box.hidden = v.status === "absent" || v.status === "idle";
+  $("confPath").textContent = v.conf?.path ?? "";
+  const text = $("confText") as HTMLTextAreaElement;
+  if (text.value !== v.draft) text.value = v.draft;
+  const confirm = $("confConfirm") as HTMLInputElement;
+  if (confirm.value !== v.saveConfirm) confirm.value = v.saveConfirm;
+  const save = saveGate(v);
+  $("confGate").textContent = save.reason;
+  ($("confSave") as HTMLButtonElement).disabled = !save.ok;
+  ($("confReload") as HTMLButtonElement).disabled = v.busy;
+  const sessions = restartable(v.conf);
+  if (!sessions.includes(v.restartSession)) v.restartSession = sessions[0] ?? "";
+  setHtml($("restartSession"), sessions.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('') || '<option value="">No sessions</option>');
+  ($("restartSession") as HTMLSelectElement).value = v.restartSession;
+  const rc = $("restartConfirm") as HTMLInputElement;
+  if (rc.value !== v.restartConfirm) rc.value = v.restartConfirm;
+  const restart = restartGate(v);
+  $("restartGate").textContent = restart.reason;
+  ($("restartGo") as HTMLButtonElement).disabled = !restart.ok;
+  ($("logSource") as HTMLSelectElement).value = v.logSource;
+  ($("logRead") as HTMLButtonElement).disabled = v.busy;
+  $("logText").textContent = v.logText;
+  $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
+}
+
+async function refreshAdmin(hostId: string, keepDraft = true) {
+  const host = fleet.hosts[hostId]?.info;
+  if (!host || host.supervisor) return;
+  const v = adminView(hostId);
+  const { status, outcome } = await hostCall(host, "/fleet/conf");
+  if (outcome.ok) {
+    const conf = parseConf(outcome.data);
+    if (conf) {
+      // An unsaved edit keeps the file it was made from, so its save still names that revision and the host
+      // refuses it if the file moved on. Only Reload or a clean draft takes the new file.
+      const dirty = keepDraft && v.conf !== null && v.draft !== v.conf.text;
+      if (dirty) v.changedOnHost = conf.revision !== v.conf!.revision;
+      else { v.conf = conf; v.draft = conf.text; v.changedOnHost = false; }
+      v.status = "ready"; v.error = "";
+    } else { v.status = "unknown"; v.error = "malformed answer"; }
+  // The section hides, but an unsaved edit and the file it was made from stay for when it comes back.
+  } else if (status === 404 || status === 503) { v.status = "absent"; }
+  // An agent or viewer token sees nothing here; the host refuses it.
+  else if (status === 403) { v.status = "absent"; }
+  else { v.status = "unknown"; v.error = outcome.message; }
+  if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
+}
+
+async function saveConf(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !v.conf || !saveGate(v).ok) return;
+  v.busy = true; v.notice = `Saving fleet.conf on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/fleet/conf", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: v.draft, revision: v.conf.revision, confirm: v.saveConfirm }),
+  }, WRITE_TIMEOUT_MS);
+  v.busy = false;
+  if (outcome.ok) {
+    const backup = (outcome.data as { backup?: string | null }).backup;
+    v.notice = `${host.name}: fleet.conf saved${backup ? `; the previous file is ${backup}` : ""}. Running sessions keep going; restart one to apply its change.`;
+    v.saveConfirm = "";
+    await refreshAdmin(hostId, false);
+    return;
+  }
+  if (status === 409) v.changedOnHost = true;
+  v.notice = status === 409 ? `${host.name}: ${outcome.message}. Your edit is still here; copy it before reloading.`
+    : status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether fleet.conf was saved; reload before saving again.`
+    : `${host.name}: fleet.conf not saved: ${outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+}
+
+async function restartSession(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !restartGate(v).ok) return;
+  const s = v.restartSession;
+  v.busy = true; v.notice = `Restarting ${s} on ${host.name}; a start can take up to 90 s`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, `/sessions/${encodeURIComponent(s)}/restart`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: v.restartConfirm }),
+  }, RESTART_TIMEOUT_MS);
+  v.busy = false;
+  v.restartConfirm = "";
+  // The gateway gives up first (504) or loses the host (502): the restart may still be going on.
+  v.notice = outcome.ok ? `${host.name}: ${s} started again.`
+    : status === null || status === 502 || status === 504 ? `${host.name} did not answer in time. Unknown whether ${s} is running; check its terminal.`
+    : `${host.name}: ${s} not restarted: ${outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+  void refresh(hostId, "sessions");
+}
+
+async function readLog(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || v.busy) return;
+  v.busy = true; v.notice = `Reading the ${v.logSource} log on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const { outcome } = await hostCall(host, `/fleet/logs?source=${v.logSource}&lines=200`);
+  v.busy = false;
+  if (outcome.ok && typeof (outcome.data as { text?: unknown }).text === "string") {
+    v.logText = (outcome.data as { text: string }).text || "(empty)";
+    v.notice = `${host.name}: last lines of the ${v.logSource} log, read ${new Date().toLocaleTimeString()}.`;
+  } else v.notice = `${host.name}: log not read: ${outcome.ok ? "malformed answer" : outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+}
+
 function render() {
   const h = selectedHostState(fleet);
   renderAgents(h);
+  renderAdmin(h);
   renderChrome(h);
   renderNav();
   renderPanes(h);
@@ -688,6 +811,7 @@ async function loadHostList() {
     void refreshAll("sessions");
     void refreshAll("coord");
     for (const id of fleet.order) void refreshAgents(id);
+    for (const id of fleet.order) void refreshAdmin(id);
   } catch {
     hostListError = "Cannot reach the host list. Host state is unknown.";
     render();
@@ -720,12 +844,13 @@ document.addEventListener("click", (e) => {
     void refresh(b.dataset.host, "sessions");
     void refresh(b.dataset.host, "coord");
     void refreshAgents(b.dataset.host);
+    void refreshAdmin(b.dataset.host);
   }
 });
 
 // The form draft belongs to the selected host, like the instruction draft.
 for (const [id, key] of [["agentName", "name"], ["agentKind", "kind"], ["agentFolder", "cwd"], ["agentModel", "model"], ["agentPrompt", "prompt"], ["agentConfirm", "confirm"]] as const) {
-  $(id).addEventListener("input", () => {
+  const onEdit = () => {
     const h = selectedHostState(fleet);
     if (!h) return;
     const form = agentView(h.info.id).form;
@@ -734,8 +859,38 @@ for (const [id, key] of [["agentName", "name"], ["agentKind", "kind"], ["agentFo
     if (key === "kind") { if (Object.hasOwn(KIND_LABEL, value)) form.kind = value as AgentKind; }
     else form[key] = value;
     renderAgents(h);
-  });
+  };
+  // A select reports a pick with change; some browsers and automation send no input event for it.
+  $(id).addEventListener("input", onEdit);
+  $(id).addEventListener("change", onEdit);
 }
+
+// Fleet section edits belong to the selected host.
+const adminField = (id: string, set: (v: AdminView, value: string) => void) => {
+  const onEdit = () => {
+    const h = selectedHostState(fleet);
+    if (!h) return;
+    set(adminView(h.info.id), ($(id) as HTMLInputElement).value);
+    renderAdmin(h);
+  };
+  $(id).addEventListener("input", onEdit);
+  $(id).addEventListener("change", onEdit);
+};
+adminField("confText", (v, x) => { v.draft = x; });
+adminField("confConfirm", (v, x) => { v.saveConfirm = x; });
+adminField("restartSession", (v, x) => { v.restartSession = x; v.restartConfirm = ""; });
+adminField("restartConfirm", (v, x) => { v.restartConfirm = x; });
+adminField("logSource", (v, x) => { if (x === "watchdog" || x === "service") v.logSource = x; });
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog]] as const) {
+  $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
+}
+$("confReload").addEventListener("click", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  const v = adminView(h.info.id);
+  v.notice = ""; v.saveConfirm = "";
+  void refreshAdmin(h.info.id, false);
+});
 $("agentOrchestrator").addEventListener("change", () => {
   const h = selectedHostState(fleet);
   if (!h) return;
