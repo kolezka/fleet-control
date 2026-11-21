@@ -246,7 +246,7 @@ The owner chose option 1a: the host service only. The service on `.4` now runs `
 - **Browser (headless Chromium on `.4`, same day):** after signing in on `/login` the page listed `mac-mini` with `probe-shell`, the supervisor panel showed the stored run and request, and the `probe-shell` pane read "Read-only · live" with one read-only tmux client; after the browser closed, 0 clients were left. The log showed one `AbortError` from the page while an earlier browser session closed, nothing else. With only a bearer header and no sign-in the pane showed "Disconnected (1006)", because the browser does not send that header with the WebSocket; a test setup limit, not a service fault.
 - **Not shown by this:** the MacBook as a client, a real fleet.
 
-## Fleet section: fleet.conf, logs, restart one session (2026-11-21, branch `feat/fleet-admin`, not released)
+## Fleet section: fleet.conf, logs, restart one session (2026-11-21, released in `69a08a4`)
 
 The owner approved this scope on 2026-11-20: edit the hand-written `fleet.conf` with a typed confirm, `bash -n`, a backup and a revision check; read logs; restart one session; no service restart from the page. Off unless the host service starts with `FLEET_CONTROL_ADMIN=1`; operator role only (`operate` permission). Settings: [installation.md](installation.md).
 
@@ -314,6 +314,17 @@ With `FLEET_CONTROL_AGENT_ROOTS` set, an operator starts and stops Claude Code a
 - `serve()` refuses managed agents without tokens, even on loopback. The gateway relays agent calls with its own per-host token, which must be `operator`; anything that can reach the loopback gateway can then start an agent, as it can already queue commands. Treat the gateway as a privileged local surface. Cooperative (central) hosts have no agent routes; the page hides the box for them.
 - Tests: domain, store, use cases and REST with a fake launcher (restart recovery, stop retry from `stopping`, failed start or stop drops the fleet row, stop during start, no tokens, rows read at write time, a late failure of an older start, a failed rewrite reported); the launcher against a stub `fleet` that calls `agent_overrides` like the watchdog and a private tmux socket (per-agent values, include restored by its line, unreadable or symlinked state file, a stop not waiting for a slow start, folder picker filter, an older watchdog refused, a `FLEET_CONF` outside `FLEET_DIR` refused, an include line with trailing spaces or CRLF); the gateway route; the page form (start only after the name is typed again, the request body, Stop, a refused start, a host without agents, a cooperative host, escaping). Each new test failed on the code before the fix or under a mutation.
 - Not done: MCP tools for agents; live start and stop on `.4` and `.15` with a real paid agent (next, after review and release).
+
+## Release 69a08a4: Fleet section on .4 and .15 (2026-11-21, approved)
+
+Code: `main` at `69a08a4` (PR #199 Fleet section, PR #200 failed-restart answer) plus `vendor/agent-fleet` `c916b8d`. Reviews: Claude Opus as an exception to the different-family rule, because DeepSeek answered 402 "Insufficient Balance" and no other family was reachable (user decision 2026-11-21).
+
+- `.4`: `6526300` deployed 04:05, then `69a08a4` at 04:20, both with `FLEET_CONTROL_ADMIN=1` and `FLEET_CONTROL_SERVICE_LOG=/Users/me/Library/Logs/fleet-control.log`. Backups `~/.config/fleet-control/rollback-6526300` and `rollback-69a08a4` (state, tokens, plist, `fleet.conf`, `watchdog.sh`, agents file, `SHA256SUMS`), copies on `.15` in `~/fleet-control-backups/mac-mini-*` (checksums match). Old release dir `fleet-control-service.before-69a08a4` (`6526300`) and `before-6526300` (`239b084`).
+- `.15`: same releases with `FLEET_CONTROL_ADMIN=1` and `FLEET_CONTROL_SERVICE_LOG=journal:fleet-control`; backups `rollback-6526300`, `rollback-69a08a4`, copies on `.4` in `~/fleet-control-backups/local-arch-*` (checksums match).
+- Live on `.4` through a scratch gateway on the Mac mini in a headless browser: a page save wrote a backup and kept the file loadable (`fleet log 1` exit 0); a breaking edit (`false` before `AGENTS`) was refused with the load message and the file checksum unchanged; the test line was removed again from the page and the file matches the pre-deploy backup; the service log read worked. Restarting `probe-shell` ended it and `fleet start` stopped at Claude's workspace trust dialog (that session is a hand-made `cat` pane, `fleet start` launches Claude for it). On `6526300` the page then said the outcome was unknown; on `69a08a4` it says "the old probe-shell session ended, and it did not start again: ... workspace trust dialog". `probe-shell` was recreated by hand both times.
+- Live on `.15` over the tailnet: 401 without a token, 403 for the agent-role token, operator reads `fleet.conf` and the journal, a breaking edit is refused and the file checksum stays the same. No session restarted there.
+- Rollback on either host: stop the service, swap `fleet-control-service` and `fleet-control-service.before-69a08a4`, restore the plist or unit from `rollback-69a08a4`, start.
+- Not checked: the Fleet section from the MacBook browser (stage 9).
 
 ## Release 239b084: typing, orchestrators and add-host on .4 and .15 (2026-11-20, approved)
 
