@@ -38,9 +38,13 @@ export function checkConfEdit(input: unknown): ConfEdit {
 }
 
 // A save keeps the managed-agents include if the file had it: without it running agents fall out of the fleet.
+// Where it was the last line that does anything, it stays last, so nothing after it can reset AGENTS.
 export function keepsManagedInclude(before: string, after: string): boolean {
-  const has = (t: string) => t.split("\n").some((l) => l.trim() === MANAGED_INCLUDE);
-  return !has(before) || has(after);
+  const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+  const [b, a] = [lines(before), lines(after)];
+  if (!b.includes(MANAGED_INCLUDE)) return true;
+  if (!a.includes(MANAGED_INCLUDE)) return false;
+  return b.at(-1) !== MANAGED_INCLUDE || a.at(-1) === MANAGED_INCLUDE;
 }
 
 export function logQuery(source: string | null, lines: string | null): { source: LogSource; lines: number } {

@@ -7,11 +7,11 @@ const BASE = `FLEET=t\nFLEET_DIR=/f\nAGENTS=("probe-shell|Probe|p.txt")\n${MANAG
 // A host whose file lives in memory. facts() reads FLEET, FLEET_DIR and the session names the way bash would for these simple files.
 function fakeHost(initial = BASE) {
   const calls: string[] = [];
-  const state = { text: initial, backups: [] as string[], restartOk: true, logs: "" };
+  const state = { text: initial, backups: [] as string[], restartOk: true, logs: "", managed: [] as string[] };
   const facts = (text: string): ConfFacts => {
     if (text.includes("exit 7")) throw new Error("sourcing it failed");
     const get = (k: string) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1] ?? "";
-    return { fleet: get("FLEET"), dir: get("FLEET_DIR"), socket: `fleet-${get("FLEET")}`, remote: get("REMOTE_SSH"), sessions: [...text.matchAll(/"([A-Za-z0-9._-]+)\|/g)].map((m) => m[1]!) };
+    return { fleet: get("FLEET"), dir: get("FLEET_DIR"), socket: `fleet-${get("FLEET")}`, remote: get("REMOTE_SSH"), sessions: [...text.matchAll(/"([A-Za-z0-9._-]+)\|/g)].map((m) => m[1]!).concat(state.managed && text.includes(MANAGED_INCLUDE) && !/AGENTS=\(\)\s*$/.test(text) ? state.managed : []) };
   };
   const host: FleetHost = {
     path: "/f/fleet.conf",
@@ -20,7 +20,7 @@ function fakeHost(initial = BASE) {
     facts: async (t) => facts(t),
     replace: async (current, t) => { calls.push("replace"); expect(current).toBe(state.text); state.backups.push(state.text); state.text = t; return `/f/fleet.conf.bak-${state.backups.length}`; },
     log: async (source, lines) => { calls.push(`log ${source} ${lines}`); return state.logs; },
-    restart: async (s) => { calls.push(`restart ${s}`); return { ok: state.restartOk, output: state.restartOk ? `${s}: started\n` : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
+    restart: async (s, socket) => { calls.push(`restart ${s} ${socket}`); return { ok: state.restartOk, output: state.restartOk ? `${s}: started\n` : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
   };
   return { host, state, calls };
 }
@@ -60,17 +60,19 @@ test("a save is refused, and nothing written, for a bad shape, bad bash, a dropp
   const { host, state, calls } = fakeHost();
   const use = adminUseCases({ host }, operator);
   const revision = revisionOf(BASE);
+  // Lines go above the include line, which stays last.
+  const add = (line: string) => BASE.replace(MANAGED_INCLUDE, `${line}\n${MANAGED_INCLUDE}`);
   const cases: [unknown, string][] = [
     [{ text: BASE + "x=1\n", revision }, "type fleet.conf to confirm the save"],
     [{ text: BASE + "x=1\n", revision, confirm: "fleet.conf", extra: 1 }, "unknown field extra"],
     [{ text: BASE, revision: "abc", confirm: "fleet.conf" }, "revision must be the SHA-256 the file was read with"],
     [{ text: "x".repeat(32 * 1024 + 1), revision, confirm: "fleet.conf" }, "fleet.conf may be at most 32768 bytes"],
-    [{ text: BASE + "((\n", revision, confirm: "fleet.conf" }, "bash -n: line 2: syntax error near unexpected token"],
-    [{ text: BASE.replace(MANAGED_INCLUDE + "\n", ""), revision, confirm: "fleet.conf" }, `keep the managed agents line: ${MANAGED_INCLUDE}`],
+    [{ text: add("(("), revision, confirm: "fleet.conf" }, "bash -n: line 2: syntax error near unexpected token"],
+    [{ text: BASE.replace(MANAGED_INCLUDE + "\n", ""), revision, confirm: "fleet.conf" }, `keep the managed agents line, as the last line: ${MANAGED_INCLUDE}`],
     [{ text: BASE.replace("FLEET_DIR=/f", "FLEET_DIR=/g"), revision, confirm: "fleet.conf" }, 'FLEET_DIR cannot change from the page (it is "/f"); change it on the host and restart the service'],
     [{ text: BASE.replace("FLEET=t", "FLEET=u"), revision, confirm: "fleet.conf" }, 'FLEET cannot change from the page (it is "t"); change it on the host and restart the service'],
-    [{ text: BASE + "REMOTE_SSH='ssh x'\n", revision, confirm: "fleet.conf" }, 'REMOTE_SSH cannot change from the page (it is ""); change it on the host and restart the service'],
-    [{ text: BASE + "exit 7\n", revision, confirm: "fleet.conf" }, "fleet.conf does not load: sourcing it failed"],
+    [{ text: add("REMOTE_SSH='ssh x'"), revision, confirm: "fleet.conf" }, 'REMOTE_SSH cannot change from the page (it is ""); change it on the host and restart the service'],
+    [{ text: add("exit 7"), revision, confirm: "fleet.conf" }, "fleet.conf does not load: sourcing it failed"],
   ];
   for (const [body, message] of cases) {
     const e = await fail(use.saveConf(body));
@@ -111,5 +113,43 @@ test("a restart takes a fleet.conf session typed in full, never a managed agent,
   state.restartOk = false;
   const e = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
   expect([e.kind, e.message]).toEqual(["unavailable", "probe-shell did not start again: probe-shell: start FAILED: claude UI not detected after 90 s"]);
-  expect(calls).toEqual(["restart probe-shell", "restart probe-shell"]);
+  expect(calls).toEqual(["restart probe-shell fleet-t", "restart probe-shell fleet-t"]);
+});
+
+test("review fixes: a broken current file, a lost managed agent, the include line moved, and a REMOTE_SSH restart are refused", async () => {
+  const { host, state, calls } = fakeHost();
+  const use = adminUseCases({ host }, operator);
+  // The current file does not load: no values to compare against, so nothing is saved from the page.
+  const broken = BASE + "exit 7\n";
+  state.text = broken;
+  let e = await fail(use.saveConf({ text: BASE, revision: revisionOf(broken), confirm: "fleet.conf" }));
+  expect(e.message).toBe("the current fleet.conf does not load (sourcing it failed); fix it on the host");
+  // A no-op save of a broken file answers without the load error.
+  expect((await use.saveConf({ text: broken, revision: revisionOf(broken), confirm: "fleet.conf" })).backup).toBeNull();
+
+  // The include line kept, but AGENTS reset after it: the managed agent fc-a falls out.
+  state.text = BASE; state.managed = ["fc-a"];
+  e = await fail(use.saveConf({ text: BASE + "AGENTS=()\n", revision: revisionOf(BASE), confirm: "fleet.conf" }));
+  expect(e.message).toBe(`keep the managed agents line, as the last line: ${MANAGED_INCLUDE}`);
+  // Same reset with the include line still last (the reset moved above a second copy): the loss itself is refused.
+  e = await fail(use.saveConf({ text: BASE.replace(MANAGED_INCLUDE, "AGENTS=()") + "AGENTS=()\n" + MANAGED_INCLUDE + "\nAGENTS=()\n# end\n" , revision: revisionOf(BASE), confirm: "fleet.conf" }));
+  expect(e.message).toBe(`keep the managed agents line, as the last line: ${MANAGED_INCLUDE}`);
+  expect(calls).toEqual([]);
+
+  // REMOTE_SSH fleets run their sessions elsewhere.
+  state.text = BASE + "REMOTE_SSH='ssh x'\n" + MANAGED_INCLUDE + "\n";
+  e = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
+  expect([e.kind, e.message]).toEqual(["unavailable", "this fleet runs over REMOTE_SSH; restart its sessions on that host"]);
+  expect(calls).toEqual([]);
+});
+
+test("a save that keeps the include line last but loses a managed agent is refused", async () => {
+  const { host, state, calls } = fakeHost();
+  state.managed = ["fc-a"];
+  const use = adminUseCases({ host }, operator);
+  // The fake loads managed agents unless the file ends in AGENTS=(); here the host reports the loss through facts.
+  host.facts = async (t) => ({ fleet: "t", dir: "/f", socket: "fleet-t", remote: "", sessions: t.includes("DROP") ? ["probe-shell"] : ["probe-shell", "fc-a"] });
+  const e = await fail(use.saveConf({ text: BASE.replace("AGENTS=(", "# DROP\nAGENTS=("), revision: revisionOf(BASE), confirm: "fleet.conf" }));
+  expect(e.message).toBe("this edit drops the managed agents fc-a; keep the managed agents line last and do not reset AGENTS after it");
+  expect(calls).toEqual([]);
 });

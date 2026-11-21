@@ -4,7 +4,10 @@ export type ConfRead = { path: string; text: string; revision: string; sessions:
 export type AdminView = {
   status: "idle" | "loading" | "ready" | "absent" | "unknown";
   error: string;
+  // The file the draft was made from; it changes only on Reload or a successful save.
   conf: ConfRead | null;
+  // Set when a later read found a different file while the draft had unsaved changes.
+  changedOnHost: boolean;
   draft: string;
   saveConfirm: string;
   logSource: "watchdog" | "service";
@@ -16,7 +19,7 @@ export type AdminView = {
 };
 
 export const emptyAdmin = (): AdminView => ({
-  status: "idle", error: "", conf: null, draft: "", saveConfirm: "", logSource: "watchdog", logText: "",
+  status: "idle", error: "", conf: null, changedOnHost: false, draft: "", saveConfirm: "", logSource: "watchdog", logText: "",
   restartSession: "", restartConfirm: "", busy: false, notice: "",
 });
 
@@ -34,6 +37,7 @@ export const restartable = (conf: ConfRead | null): string[] => (conf?.sessions 
 export function saveGate(v: AdminView): { ok: boolean; reason: string } {
   if (v.busy) return { ok: false, reason: "Working…" };
   if (!v.conf) return { ok: false, reason: "Read fleet.conf first" };
+  if (v.changedOnHost) return { ok: false, reason: "fleet.conf changed on the host; copy your edit, then Reload" };
   if (v.draft === v.conf.text) return { ok: false, reason: "No changes" };
   if (v.saveConfirm !== "fleet.conf") return { ok: false, reason: "Type fleet.conf to confirm" };
   return { ok: true, reason: "Save keeps a backup of the current file" };

@@ -1,9 +1,9 @@
 // The host side of fleet administration: the fleet.conf file, bash, the logs and the fleet CLI.
-import { chmod, copyFile, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ConfFacts, FleetHost } from "../application/fleet-admin.ts";
-import type { LogSource } from "../domain/fleet-admin.ts";
+import { AdminError, type LogSource } from "../domain/fleet-admin.ts";
 
 type Run = { exitCode: number; stdout: string; stderr: string };
 const tail = (s: string) => s.slice(-16_384);
@@ -39,7 +39,12 @@ export function serviceLogFromEnv(value: string | undefined): ServiceLog | undef
 }
 
 // Reads the values a fleet.conf sets. It runs the file, as agent-fleet does each time it loads it.
-const FACTS = '. "$0" >/dev/null 2>&1 || exit 3; printf "%s\\0%s\\0%s\\0%s\\0" "${FLEET:-}" "${FLEET_DIR:-}" "${FLEET_TMUX_SOCKET-fleet-${FLEET:-}}" "${REMOTE_SSH:-}"; for r in "${AGENTS[@]}"; do printf "%s\\0" "${r%%|*}"; done';
+// Loads it the way agent-fleet does (set -euo pipefail, then the FLEET and FLEET_DIR checks), so a file that
+// breaks fleet breaks here. No `|| exit` around the source: that would switch set -e off inside the file.
+// The marker line appended after the text tells a file that stops early (return) from one that ran to its end.
+const FACTS = 'set -euo pipefail; LOCAL_DIR=$(cd "$(dirname "$0")" && pwd); CONF=$0; . "$0" >/dev/null 2>&1; [ "${__FLEET_CONTROL_END-}" = 1 ] || exit 4; : "${FLEET:?}" "${FLEET_DIR:?}"; printf "%s\\0%s\\0%s\\0%s\\0" "$FLEET" "$FLEET_DIR" "${FLEET_TMUX_SOCKET-fleet-$FLEET}" "${REMOTE_SSH:-}"; for r in "${AGENTS[@]+"${AGENTS[@]}"}"; do printf "%s\\0" "${r%%|*}"; done';
+// Runs after the file's own lines: it keeps the status of the file's last command, as a plain source would.
+const END_LINE = '__fc_status=$?; __FLEET_CONTROL_END=1; return "$__fc_status"';
 
 export class FleetAdminHost implements FleetHost {
   constructor(readonly opts: { confPath: string; fleetBin: string; serviceLog?: ServiceLog; tmuxBin?: string; restartTimeoutMs?: number }) {}
@@ -57,11 +62,13 @@ export class FleetAdminHost implements FleetHost {
     const tmp = join(dirname(this.opts.confPath), `.fleet.conf.check-${randomUUID()}`);
     const fh = await open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(text);
+      await fh.writeFile(`${text}${text.endsWith("\n") || text === "" ? "" : "\n"}${END_LINE}\n`);
       await fh.close();
       const r = await run(["bash", "-c", FACTS, tmp], { timeoutMs: 5_000 });
-      // agent-fleet sources it under set -e, so a failing last command breaks every fleet call.
-      if (r.exitCode !== 0) throw new Error(r.exitCode === 124 ? "loading it took longer than 5 s" : "sourcing it with bash failed; agent-fleet runs it under set -e, so its last command must succeed");
+      if (r.exitCode === 124) throw new Error("loading it took longer than 5 s");
+      if (r.exitCode === 4) throw new Error("it stops before its end (return or exit), so the lines after it, the managed agents among them, never load");
+      // agent-fleet sources it under set -euo pipefail: any failing command or unset variable breaks every fleet call.
+      if (r.exitCode !== 0) throw new Error("sourcing it the way agent-fleet does (set -euo pipefail) failed: a command in it fails, a variable is unset, or FLEET or FLEET_DIR is missing");
       const [fleet = "", dir = "", socket = "", remote = "", ...rest] = r.stdout.split("\0");
       return { fleet, dir, socket, remote, sessions: rest.filter(Boolean) };
     } finally {
@@ -71,7 +78,8 @@ export class FleetAdminHost implements FleetHost {
   }
 
   async replace(current: string, text: string) {
-    const path = this.opts.confPath;
+    // A symlinked fleet.conf stays a symlink: the file it points to is the one replaced.
+    const path = await realpath(this.opts.confPath);
     const mode = (await stat(path)).mode & 0o777;
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
     const backup = join(dirname(path), `${basename(path)}.bak-${stamp}-${randomUUID().slice(0, 8)}`);
@@ -85,7 +93,7 @@ export class FleetAdminHost implements FleetHost {
       await fh.close();
       await chmod(tmp, mode);
       // Last look: a hand edit since the check wins over the page.
-      if ((await readFile(path, "utf8")) !== current) throw new Error("fleet.conf changed on the host during the save; nothing was written");
+      if ((await readFile(path, "utf8")) !== current) throw new AdminError("conflict", "fleet.conf changed on the host during the save; nothing was written. Reload it and edit again");
       await rename(tmp, path);
     } catch (e) {
       await fh.close().catch(() => undefined);
@@ -110,11 +118,10 @@ export class FleetAdminHost implements FleetHost {
     return r.stdout;
   }
 
-  async restart(session: string) {
+  async restart(session: string, fleetSocket: string) {
     const env = { FLEET_CONF: this.opts.confPath };
-    const facts = await this.facts(await this.read());
     const tmux = this.opts.tmuxBin ?? "tmux";
-    const socket = facts.socket ? ["-L", facts.socket] : [];
+    const socket = fleetSocket ? ["-L", fleetSocket] : [];
     // Ending a session that is not running is fine: the start below brings it up either way.
     const k = await run([tmux, ...socket, "kill-session", "-t", `=${session}`], { timeoutMs: 10_000 });
     if (k.exitCode !== 0 && !/can't find session|no server running|error connecting to/.test(k.stderr)) {

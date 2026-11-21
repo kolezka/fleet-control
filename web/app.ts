@@ -657,9 +657,12 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
   if (outcome.ok) {
     const conf = parseConf(outcome.data);
     if (conf) {
-      // An unsaved edit is kept unless asked to reload; the next save then names the new revision only if reloaded.
-      if (!keepDraft || !v.conf || v.draft === v.conf.text) v.draft = conf.text;
-      v.conf = conf; v.status = "ready"; v.error = "";
+      // An unsaved edit keeps the file it was made from, so its save still names that revision and the host
+      // refuses it if the file moved on. Only Reload or a clean draft takes the new file.
+      const dirty = keepDraft && v.conf !== null && v.draft !== v.conf.text;
+      if (dirty) v.changedOnHost = conf.revision !== v.conf!.revision;
+      else { v.conf = conf; v.draft = conf.text; v.changedOnHost = false; }
+      v.status = "ready"; v.error = "";
     } else { v.status = "unknown"; v.error = "malformed answer"; }
   } else if (status === 404 || status === 503) { v.status = "absent"; v.conf = null; }
   // An agent or viewer token sees nothing here; the host refuses it.
@@ -686,6 +689,7 @@ async function saveConf(hostId: string) {
     await refreshAdmin(hostId, false);
     return;
   }
+  if (status === 409) v.changedOnHost = true;
   v.notice = status === 409 ? `${host.name}: ${outcome.message}. Your edit is still here; copy it before reloading.`
     : status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether fleet.conf was saved; reload before saving again.`
     : `${host.name}: fleet.conf not saved: ${outcome.message}`;
@@ -704,8 +708,9 @@ async function restartSession(hostId: string) {
   }, RESTART_TIMEOUT_MS);
   v.busy = false;
   v.restartConfirm = "";
+  // The gateway gives up first (504) or loses the host (502): the restart may still be going on.
   v.notice = outcome.ok ? `${host.name}: ${s} started again.`
-    : status === null ? `${host.name} did not answer in time. Unknown whether ${s} is running; check its terminal.`
+    : status === null || status === 502 || status === 504 ? `${host.name} did not answer in time. Unknown whether ${s} is running; check its terminal.`
     : `${host.name}: ${s} not restarted: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
   void refresh(hostId, "sessions");

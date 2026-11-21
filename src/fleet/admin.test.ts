@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "../auth.ts";
 import { Store } from "../data/store.ts";
@@ -42,7 +42,7 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     const host = new FleetAdminHost({ confPath: fleet.confPath, fleetBin, serviceLog: { file: serviceLog() } });
     // Logs through the real CLI, restarts through the stand-in.
     const restarter = new FleetAdminHost({ confPath: fleet.confPath, fleetBin: join(fleet.dir, "fake-fleet") });
-    host.restart = (s) => restarter.restart(s);
+    host.restart = (s, socket) => restarter.restart(s, socket);
     const deps = { fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store: new Store(":memory:"), admin: { host } };
     server = serve(deps, 0, { auth: await Auth.fromFile(tokens) });
     gateway = startGateway({ hosts: [{ id: "h", name: "H", origin: server.url.origin }], credentials: new Credentials(new Map([["h", op]])) }, { port: 0 });
@@ -73,14 +73,34 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     const edited = conf0.replace(`AGENTS=("${fleet.session}|Probe shell|probe.txt")`, `AGENTS=("${fleet.session}|Probe shell|probe.txt" "extra|Extra|extra.txt")`);
     expect(edited).not.toBe(conf0);
 
-    const broken = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited + "if then\n", revision: read.revision, confirm: "fleet.conf" }) });
+    // New lines go above the managed agents line, which stays last.
+    const above = (line: string) => edited.replace(MANAGED_INCLUDE, `${line}\n${MANAGED_INCLUDE}`);
+    const broken = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: above("if then"), revision: read.revision, confirm: "fleet.conf" }) });
     expect(broken.status).toBe(400);
     expect((await broken.json()).error.message).toStartWith("bash -n: ");
     const moved = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited.replace(`FLEET_DIR=${fleet.dir}`, `FLEET_DIR=${fleet.dir}/moved`), revision: read.revision, confirm: "fleet.conf" }) });
     expect((await moved.json()).error.message).toBe(`FLEET_DIR cannot change from the page (it is "${fleet.dir}"); change it on the host and restart the service`);
-    // A last command that fails would break every fleet call (set -e), so it is refused too.
-    const failing = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited + "false\n", revision: read.revision, confirm: "fleet.conf" }) });
-    expect((await failing.json()).error.message).toBe("fleet.conf does not load: sourcing it with bash failed; agent-fleet runs it under set -e, so its last command must succeed");
+    // agent-fleet sources the file under set -euo pipefail: a failing command anywhere, an unset variable or
+    // a return before the end breaks it (or drops the managed agents), so each is refused.
+    const loads = "fleet.conf does not load: sourcing it the way agent-fleet does (set -euo pipefail) failed: a command in it fails, a variable is unset, or FLEET or FLEET_DIR is missing";
+    for (const [line, message] of [
+      ["false", loads],
+      ["X=$UNSET_VARIABLE_FOR_TEST", loads],
+      ["return 0", "fleet.conf does not load: it stops before its end (return or exit), so the lines after it, the managed agents among them, never load"],
+    ] as const) {
+      const r = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited.replace("AGENTS=(", `${line}\nAGENTS=(`), revision: read.revision, confirm: "fleet.conf" }) });
+      expect([line, r.status, (await r.json()).error?.message]).toEqual([line, 400, message]);
+    }
+    // The same lines through agent-fleet itself: each makes `fleet log` fail, so the refusal matches the CLI.
+    // A failing test in the middle of an && list does not stop bash under set -e, in agent-fleet or here.
+    const midList = "[ -f /nonexistent-fleet-test ] && . /nonexistent-fleet-test";
+    for (const [line, code] of [["false", 1], ["X=$UNSET_VARIABLE_FOR_TEST", 1], [midList, 0]] as const) {
+      const probe = join(fleet.dir, "probe.conf");
+      await writeFile(probe, edited.replace("AGENTS=(", `${line}\nAGENTS=(`));
+      const p = Bun.spawnSync([fleetBin, "log", "1"], { env: { ...process.env, FLEET_CONF: probe } });
+      expect([line, p.exitCode]).toEqual([line, code]);
+      await rm(probe);
+    }
     expect(await readFile(fleet.confPath, "utf8")).toBe(conf0);
 
     const saved = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited, revision: read.revision, confirm: "fleet.conf" }) });
