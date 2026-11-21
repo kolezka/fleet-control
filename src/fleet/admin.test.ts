@@ -96,13 +96,16 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
       const r = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: edited.replace("AGENTS=(", `${line}\nAGENTS=(`), revision: read.revision, confirm: "fleet.conf" }) });
       expect([line, r.status, (await r.json()).error?.message]).toEqual([line, 400, message]);
     }
-    // A heredoc left open swallows the rest of the file (bash -n only warns), and a trailing backslash would join
-    // the check's own marker line; both are refused before anything runs.
+    // A heredoc left open swallows the rest of the file. bash 5's -n warns about it and the warning is a refusal;
+    // bash 3.2's -n is silent, and then the load check refuses it (agent-fleet itself needs bash 4 or newer).
     const heredoc = await page("/fleet/conf", { method: "PUT", body: JSON.stringify({ text: above("cat <<EOF"), revision: read.revision, confirm: "fleet.conf" }) });
-    expect([heredoc.status, (await heredoc.json()).error.message]).toEqual([400, expect.stringMatching(/^bash -n: .*here-document/)]);
-    // (A backslash can only end the include line here, which the page refuses anyway, so it is checked on the host.)
-    const slash = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin }).facts(edited.trimEnd() + " \\").then(() => "", (e) => e.message);
-    expect(slash).toBe("its last line ends with a backslash");
+    expect([heredoc.status, (await heredoc.json()).error.message]).toEqual([400, expect.stringMatching(/^bash -n: .*here-document|^fleet\.conf does not load: /)]);
+    // A trailing backslash cannot pull the check's own marker line into the file's last command: one followed
+    // by a newline loads (as in agent-fleet), one at the very end fails in agent-fleet's bash and is refused.
+    const checker = new FleetAdminHost({ confPath: fleet.confPath, fleetBin });
+    // ("true \\" + newline would otherwise take the marker as its argument; agent-fleet loads it fine.)
+    expect((await checker.facts(edited + "true \\\n")).sessions).toEqual([fleet.session, "extra"]);
+    expect(await checker.facts(edited + "X=1 \\").then(() => "", (e) => e.message)).toBe("it ends with a backslash and no newline; add a newline at the end");
     // The same lines through agent-fleet itself: each makes `fleet log` fail, so the refusal matches the CLI.
     // A failing test in the middle of an && list does not stop bash under set -e, in agent-fleet or here.
     const midList = "[ -f /nonexistent-fleet-test ] && . /nonexistent-fleet-test";
@@ -136,6 +139,8 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     // A change on the host between the read and the rename is a conflict (409 on the page), and nothing is written.
     const raced = await linked.replace("not what is on disk", "x").then(() => null, (e) => e);
     expect([raced?.constructor?.name, raced?.kind, await readFile(real, "utf8")]).toEqual(["AdminError", "conflict", edited + "# via link\n"]);
+    // Only the successful save left a backup; the refused one removed its own.
+    expect((await readdir(fleet.dir)).filter((f) => f.startsWith("real-fleet.conf.bak-")).length).toBe(1);
     for (const f of (await readdir(fleet.dir)).filter((f) => f.startsWith("real-fleet.conf.bak-"))) await rm(join(fleet.dir, f));
     await rm(link); await rm(real);
 

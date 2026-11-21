@@ -65,12 +65,14 @@ export class FleetAdminHost implements FleetHost {
   // The text is written to a private temp file beside the real one, so relative sources resolve the same way.
   async facts(text: string): Promise<ConfFacts> {
     const tmp = join(dirname(this.opts.confPath), `.fleet.conf.check-${randomUUID()}`);
-    // A last line ending in a backslash would join the marker line; agent-fleet's bash fails on it.
-    if (/\\[ \t]*\n?$/.test(text)) throw new Error("its last line ends with a backslash");
+    // bash 5 reads a backslash with no newline after it as a command named "\\" and fails; the check's own
+    // blank line would hide that, so it is refused here. A backslash followed by a newline is fine.
+    if (text.endsWith("\\")) throw new Error("it ends with a backslash and no newline; add a newline at the end");
     const nonce = randomUUID().replace(/-/g, "");
     const fh = await open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(`${text}${text.endsWith("\n") || text === "" ? "" : "\n"}${endLine(nonce)}\n`);
+      // The blank line ends any backslash continuation, so the marker always runs as its own command.
+      await fh.writeFile(`${text}\n\n${endLine(nonce)}\n`);
       await fh.close();
       const r = await run(["bash", "-c", facts(nonce), tmp], { timeoutMs: 5_000 });
       if (r.exitCode === 124) throw new Error("loading it took longer than 5 s");
@@ -106,6 +108,8 @@ export class FleetAdminHost implements FleetHost {
     } catch (e) {
       await fh.close().catch(() => undefined);
       await rm(tmp, { force: true });
+      // Nothing was written, so the backup of the unchanged file is not kept either.
+      await rm(backup, { force: true });
       throw e;
     }
     return backup;
