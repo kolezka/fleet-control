@@ -156,3 +156,53 @@ test("a refused credential or a failed rename leaves no temp file, no credential
     rmSync(d, { recursive: true, force: true });
   }
 });
+
+test("a gateway with no hosts starts only when adding hosts is on, and the first added host is served", async () => {
+  const empty = mkdtempSync(join(tmpdir(), "gateway-enroll-"));
+  try {
+    const path = join(empty, "client.json");
+    writeFileSync(path, JSON.stringify({ hosts: [] }), { mode: 0o600 });
+    // Without enrollment an empty list is still a config error, with a hint.
+    expect(String(await loadGatewayConfig(path).catch((e) => e))).toContain("an empty list needs FLEET_CONTROL_ENROLL=1");
+
+    // The real entry point: refused without the flag, starts with it.
+    const run = (env: Record<string, string>) => Bun.spawn(["bun", "client.ts", path], {
+      cwd: join(import.meta.dir, ".."), env: { ...process.env, PORT: "0", ...env }, stdout: "pipe", stderr: "pipe",
+    });
+    const off = run({ FLEET_CONTROL_ENROLL: "" });
+    expect(await off.exited).toBe(1);
+    expect(await new Response(off.stderr).text()).toContain("an empty list needs FLEET_CONTROL_ENROLL=1");
+    const on = run({ FLEET_CONTROL_ENROLL: "1" });
+    try {
+      const reader = on.stdout.getReader();
+      let out = "";
+      const until = Date.now() + 10000;
+      while (!out.includes("Fleet Control client on") && Date.now() < until) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += new TextDecoder().decode(value);
+      }
+      expect(out).toContain("no hosts yet; add one at /add-host");
+      const url = /Fleet Control client on (http:\/\/127\.0\.0\.1:\d+\/)/.exec(out)![1]!;
+      expect(await (await fetch(`${url}api/hosts`)).json()).toEqual({ hosts: [], enroll: true });
+      expect((await fetch(`${url}add-host`)).status).toBe(200);
+    } finally { on.kill(); await on.exited; }
+
+    // In process: the first host added to the empty config is listed and routed at once.
+    const cfg = await loadGatewayConfig(path, { allowNoHosts: true });
+    const tokenFile = join(empty, "token-first");
+    writeFileSync(tokenFile, "first-host-token-000000000\n", { mode: 0o600 });
+    const server = startGateway(cfg, { port: 0 });
+    try {
+      await gatewayHostAdder(path, cfg)({ id: "first", name: "First", url: host.url.origin, tokenFile }, "first-host-token-000000000");
+      expect((await (await fetch(`${server.url}api/hosts`)).json()).hosts.map((h: { id: string }) => h.id)).toEqual(["first"]);
+      // The gateway forwards to the host, which does not know this token: proof the route reached it.
+      const routed = await fetch(`${server.url}api/hosts/first/sessions`);
+      expect(routed.status).toBe(502);
+      expect((await routed.json()).error.kind).toBe("upstream_unauthorized");
+      expect((await loadGatewayConfig(path)).hosts.map((h) => h.id)).toEqual(["first"]);
+    } finally { server.stop(true); }
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});

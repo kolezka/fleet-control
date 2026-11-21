@@ -129,11 +129,17 @@ async function readCentralToken(path: string): Promise<string> {
 }
 
 // Pure validation. Token files are read separately so this can be tested without a disk.
-export function parseGatewayConfig(input: unknown, baseDir: string): RawHost[] {
+// An empty host list is allowed only when the caller can add hosts later (FLEET_CONTROL_ENROLL=1).
+export type GatewayConfigRules = { allowNoHosts?: boolean };
+
+export function parseGatewayConfig(input: unknown, baseDir: string, rules: GatewayConfigRules = {}): RawHost[] {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new GatewayConfigError("config must be a JSON object");
   const top = input as Record<string, unknown>;
   for (const k of Object.keys(top)) if (k !== "hosts" && k !== "central") throw new GatewayConfigError(`config: unknown key "${k}"`);
-  if (!Array.isArray(top.hosts) || top.hosts.length === 0) throw new GatewayConfigError("config: hosts must be a non-empty array");
+  if (!Array.isArray(top.hosts)) throw new GatewayConfigError("config: hosts must be an array");
+  if (top.hosts.length === 0 && !rules.allowNoHosts) {
+    throw new GatewayConfigError("config: hosts must be a non-empty array (an empty list needs FLEET_CONTROL_ENROLL=1, to add the first host from the page)");
+  }
   const central = parseGatewayCentralConfig(input, baseDir);
   const seen = new Set<string>();
   return top.hosts.map((raw, i): RawHost => {
@@ -157,7 +163,7 @@ export function parseGatewayConfig(input: unknown, baseDir: string): RawHost[] {
   });
 }
 
-export async function loadGatewayConfig(path: string): Promise<GatewayConfig> {
+export async function loadGatewayConfig(path: string, rules: GatewayConfigRules = {}): Promise<GatewayConfig> {
   const abs = resolve(path);
   let json: unknown;
   try {
@@ -165,7 +171,7 @@ export async function loadGatewayConfig(path: string): Promise<GatewayConfig> {
   } catch (e) {
     throw new GatewayConfigError(`cannot read config ${abs}: ${e instanceof SyntaxError ? "not valid JSON" : "unreadable"}`);
   }
-  const raw = parseGatewayConfig(json, dirname(abs));
+  const raw = parseGatewayConfig(json, dirname(abs), rules);
   const tokens = new Map<string, string>();
   const owners = new Map<string, string>();
   for (const h of raw) {
