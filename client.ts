@@ -20,14 +20,16 @@ try {
 
 let installer: Awaited<ReturnType<typeof createInstaller>> | undefined;
 try {
-  const config = await loadGatewayConfig(configPath);
+  // Adding hosts from the page writes token files and this config. Off unless asked for.
+  // With it on, the gateway may start with no hosts and the first one is added from the page.
+  const enrolling = process.env.FLEET_CONTROL_ENROLL === "1";
+  const config = await loadGatewayConfig(configPath, { allowNoHosts: enrolling });
   // Off unless asked for. Installed services do not set this.
   if (process.env.FLEET_CONTROL_INSTALLER === "1") installer = await createInstaller(localContext());
-  // Adding hosts from the page writes token files and this config. Off unless asked for.
-  const enroll = process.env.FLEET_CONTROL_ENROLL === "1" ? gatewayEnrollment(configPath, config) : undefined;
+  const enroll = enrolling ? gatewayEnrollment(configPath, config) : undefined;
   const server = startGateway(config, { port, log: (l) => console.warn(l), installer: installer?.handle, enroll });
   if (enroll) console.log("Adding hosts from the page is on; new token files go next to the config.");
-  console.log(`Fleet Control client on http://127.0.0.1:${server.port}/ (${config.hosts.map((h) => h.id).join(", ")})`);
+  console.log(`Fleet Control client on http://127.0.0.1:${server.port}/ (${config.hosts.map((h) => h.id).join(", ") || "no hosts yet; add one at /add-host"})`);
   if (installer) {
     // The apply code must not outlive this process.
     const stop = () => { server.stop(true); void installer!.dispose().finally(() => process.exit(0)); };

@@ -271,7 +271,8 @@ function renderPanes(h: HostState | undefined) {
     renderedPanes = key;
     stopPanes();
     if (!h) {
-      box.innerHTML = `<div class="empty"><span>${hostListError ? "No host list" : "Loading hosts"}</span></div>`;
+      const text = enroll && fleet.order.length === 0 && hostListError.startsWith("No hosts yet") ? "No hosts yet" : hostListError ? "No host list" : "Loading hosts";
+      box.innerHTML = `<div class="empty"><span>${text}</span></div>`;
     } else if (running.length === 0) {
       const r = h.sessionsRead;
       box.innerHTML = r.status === "loading"
@@ -802,10 +803,10 @@ async function loadHostList() {
     const body = res.ok ? await res.json().catch(() => null) : null;
     const list = parseHostList(body);
     if (!list) { hostListError = `Cannot read the host list (${res.status}). Host state is unknown.`; render(); return; }
-    hostListError = list.hosts.length ? "" : "The gateway lists no hosts.";
     mode = list.mode;
     installer = body.installer === true;
     enroll = body.enroll === true;
+    hostListError = list.hosts.length ? "" : enroll ? "No hosts yet. Use Add a host at the bottom of the host list." : "The gateway lists no hosts.";
     peers = list.peers;
     apply(setHosts(fleet, list.hosts));
     render();
