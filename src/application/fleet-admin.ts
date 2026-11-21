@@ -7,6 +7,7 @@ import { requirePermission, type Caller } from "../domain/roles.ts";
 // What sourcing a fleet.conf gives: the values the service depends on and the sessions it lists.
 export type ConfFacts = { fleet: string; dir: string; socket: string; remote: string; sessions: string[] };
 
+export type RestartResult = { ok: true; output: string } | { ok: false; stage: "kill" | "start" | "timeout"; output: string };
 export type FleetHost = {
   path: string;
   read(): Promise<string>;
@@ -18,7 +19,9 @@ export type FleetHost = {
   replace(current: string, text: string): Promise<string>;
   log(source: LogSource, lines: number): Promise<string>;
   // Ends the session on the fleet's tmux socket and starts it again from fleet.conf.
-  restart(session: string, socket: string): Promise<{ ok: boolean; output: string }>;
+  // stage says where a failed restart stopped: kill (the old session may still run), start (it ended and the
+  // start failed) or timeout (it ended and the start was cut off; the session may be loading).
+  restart(session: string, socket: string): Promise<RestartResult>;
 };
 
 export type AdminDeps = { host: FleetHost };
@@ -95,7 +98,12 @@ export function adminUseCases(deps: AdminDeps, caller?: Caller) {
         if (f.remote) throw new AdminError("unavailable", "this fleet runs over REMOTE_SSH; restart its sessions on that host");
         if (!PLAIN_SOCKET.test(f.socket)) throw new AdminError("unavailable", `fleet.conf names a tmux socket the page does not use: ${JSON.stringify(f.socket)}`);
         const r = await host.restart(session, f.socket);
-        if (!r.ok) throw new AdminError("failed", `the old ${session} session ended, and it did not start again: ${r.output.trim().split("\n").slice(-3).join(" ") || "no output"}`);
+        if (!r.ok) {
+          const why = r.output.trim().split("\n").slice(-3).join(" ") || "no output";
+          if (r.stage === "kill") throw new AdminError("unavailable", `${session} was not restarted; the old session may still be running: ${why}`);
+          if (r.stage === "timeout") throw new AdminError("unavailable", `the old ${session} session ended, and its start did not finish in time; check its terminal: ${why}`);
+          throw new AdminError("failed", `the old ${session} session ended, and it did not start again: ${why}`);
+        }
         return { session, output: r.output };
       });
     },

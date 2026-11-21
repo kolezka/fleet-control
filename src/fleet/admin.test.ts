@@ -176,6 +176,19 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     expect(id(after)).not.toBe(id(before));
   });
 
+  test("the host tells a failed kill, a failed start and a start cut off by time apart", async () => {
+    const tmuxStub = join(fleet.dir, "tmux-refuses");
+    await writeFile(tmuxStub, `#!/bin/bash\necho "permission denied on socket" >&2\nexit 1\n`);
+    await chmod(tmuxStub, 0o755);
+    const killFails = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin: join(fleet.dir, "fake-fleet"), tmuxBin: tmuxStub }).restart("nothing-here", "");
+    expect(killFails).toEqual({ ok: false, stage: "kill", output: "tmux kill-session failed: permission denied on socket" });
+    const slow = join(fleet.dir, "slow-fleet");
+    await writeFile(slow, `#!/bin/bash\necho starting\nexec sleep 30\n`);
+    await chmod(slow, 0o755);
+    const cut = await new FleetAdminHost({ confPath: fleet.confPath, fleetBin: slow, restartTimeoutMs: 500 }).restart("nothing-here", fleet.socket);
+    expect([cut.ok, cut.ok ? null : cut.stage]).toEqual([false, "timeout"]);
+  });
+
   test("a start that fails after the restart is a definite answer on the page, not an unknown one", async () => {
     // The stand-in refuses to start this session, as fleet start does on a trust dialog.
     const failing = join(fleet.dir, "failing-fleet");

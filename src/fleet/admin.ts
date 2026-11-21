@@ -2,7 +2,7 @@
 import { chmod, copyFile, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ConfFacts, FleetHost } from "../application/fleet-admin.ts";
+import type { ConfFacts, FleetHost, RestartResult } from "../application/fleet-admin.ts";
 import { AdminError, type LogSource } from "../domain/fleet-admin.ts";
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -130,16 +130,19 @@ export class FleetAdminHost implements FleetHost {
     return r.stdout;
   }
 
-  async restart(session: string, fleetSocket: string) {
+  async restart(session: string, fleetSocket: string): Promise<RestartResult> {
     const env = { FLEET_CONF: this.opts.confPath };
     const tmux = this.opts.tmuxBin ?? "tmux";
     const socket = fleetSocket ? ["-L", fleetSocket] : [];
     // Ending a session that is not running is fine: the start below brings it up either way.
     const k = await run([tmux, ...socket, "kill-session", "-t", `=${session}`], { timeoutMs: 10_000 });
     if (k.exitCode !== 0 && !/can't find session|no server running|error connecting to/.test(k.stderr)) {
-      return { ok: false, output: `tmux kill-session failed: ${k.stderr.trim()}` };
+      return { ok: false, stage: "kill", output: `tmux kill-session failed: ${k.stderr.trim()}` };
     }
     const s = await run([this.opts.fleetBin, "start", session], { env, timeoutMs: this.opts.restartTimeoutMs ?? 150_000 });
-    return { ok: s.exitCode === 0, output: `${s.stdout}${s.stderr}` };
+    const output = `${s.stdout}${s.stderr}`;
+    if (s.exitCode === 0) return { ok: true, output };
+    // 124: run() cut the start off at its time limit; the session may be up and still loading.
+    return { ok: false, stage: s.exitCode === 124 ? "timeout" : "start", output };
   }
 }
