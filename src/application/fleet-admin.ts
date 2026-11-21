@@ -95,7 +95,7 @@ export function adminUseCases(deps: AdminDeps, caller?: Caller) {
         if (f.remote) throw new AdminError("unavailable", "this fleet runs over REMOTE_SSH; restart its sessions on that host");
         if (!PLAIN_SOCKET.test(f.socket)) throw new AdminError("unavailable", `fleet.conf names a tmux socket the page does not use: ${JSON.stringify(f.socket)}`);
         const r = await host.restart(session, f.socket);
-        if (!r.ok) throw new AdminError("unavailable", `${session} did not start again: ${r.output.trim().split("\n").slice(-3).join(" ") || "no output"}`);
+        if (!r.ok) throw new AdminError("failed", `the old ${session} session ended, and it did not start again: ${r.output.trim().split("\n").slice(-3).join(" ") || "no output"}`);
         return { session, output: r.output };
       });
     },

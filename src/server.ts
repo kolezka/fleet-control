@@ -87,7 +87,7 @@ function pageQuery(req: Request): { limit?: number; cursor?: string } | null | R
   if (cursor !== null && (cursor.length === 0 || cursor.length > 4096)) return bad("invalid cursor or cursor filter mismatch");
   return { ...(limit !== null ? { limit: Number(limit) } : {}), ...(cursor !== null ? { cursor } : {}) };
 }
-const adminStatus: Record<AdminError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, unavailable: 503 };
+const adminStatus: Record<AdminError["kind"], number> = { invalid: 400, conflict: 409, not_found: 404, unavailable: 503, failed: 422 };
 // Admin calls touch host files and programs; their plain failures (a missing log, a failed read) go back
 // to the operator as 503 with the reason, since only an operator can reach them.
 function adminError(e: unknown): Response {

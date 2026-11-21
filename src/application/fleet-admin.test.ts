@@ -112,7 +112,7 @@ test("a restart takes a fleet.conf session typed in full, never a managed agent,
   expect(await use.restart("probe-shell", { confirm: "probe-shell" })).toEqual({ session: "probe-shell", output: "probe-shell: started\n" });
   state.restartOk = false;
   const e = await fail(use.restart("probe-shell", { confirm: "probe-shell" }));
-  expect([e.kind, e.message]).toEqual(["unavailable", "probe-shell did not start again: probe-shell: start FAILED: claude UI not detected after 90 s"]);
+  expect([e.kind, e.message]).toEqual(["failed", "the old probe-shell session ended, and it did not start again: probe-shell: start FAILED: claude UI not detected after 90 s"]);
   expect(calls).toEqual(["restart probe-shell fleet-t", "restart probe-shell fleet-t"]);
 });
 

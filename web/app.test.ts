@@ -610,3 +610,19 @@ test("a refresh where the host briefly refuses the section keeps the unsaved edi
   expect(b.element("adminBox").hidden).toBe(false);
   expect(b.element("confText").value).toBe("FLEET=t\nMINE=1\n");
 });
+
+test("a restart whose start failed says the session is down, not that the outcome is unknown", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  const b = await browser([host], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/restart")) return { __status: 422, error: { kind: "failed", message: "the old probe-shell session ended, and it did not start again: probe-shell: start FAILED: workspace trust dialog", host: "a" } };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  b.element("restartConfirm").value = "probe-shell";
+  await b.listeners.get("restartConfirm:input")!({});
+  await b.listeners.get("restartGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminStatus").textContent).toBe("A: the old probe-shell session ended, and it did not start again: probe-shell: start FAILED: workspace trust dialog");
+});
