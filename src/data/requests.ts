@@ -287,7 +287,7 @@ export class Requests {
     ).all(runId ?? null, filter.status ?? null).map(decode);
   }
 
-  // What the page shows: the run updated last (ties by id), its approvals for the current phase and revision,
+  // What the page shows: the run registered or given a phase update last (updated_at; ties by id), its approvals for the current phase and revision,
   // every open request and the newest one. Each part is capped at limit rows, newest kept; requests come oldest first.
   current(limit = 1000): { runs: Run[]; requests: SupervisorRequest[] } {
     const run = this.db.query<Run, []>(`${runSelect} ORDER BY updated_at DESC, id DESC LIMIT 1`).get();

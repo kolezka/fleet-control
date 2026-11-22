@@ -255,7 +255,8 @@ export function describeSessions(h: HostState): SessionsView {
   return { kind: "loading" };
 }
 
-/** The run the panel shows: the one updated last. Hosts list runs by id, so the last row can be an old run. */
+/** The run the panel shows: the one registered or moved to a new phase last (runs.updated_at; requests do not
+ *  touch it). Hosts list runs by id, so the last row can be an old run. Same order as view=current's SQL. */
 export function currentRun<R extends { id: string; updatedAt: string }>(runs: readonly R[]): R | undefined {
   let best: R | undefined;
   for (const r of runs) if (!best || r.updatedAt > best.updatedAt || (r.updatedAt === best.updatedAt && r.id > best.id)) best = r;

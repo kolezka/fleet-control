@@ -64,6 +64,8 @@ test("current view matches what the page shows from the full list as history gro
   requests.updatePhase({ runId: "run-a", actor: "orch", expectedRevision: 1, phase: "two", phaseStatus: "working", newRevision: false });
   const later = await check();
   expect(later.runs.map((r: any) => r.id)).toEqual(["run-a"]);
+  // Anchor the page side too, so a wrong rule shared by both sides cannot pass.
+  expect(shown((await get("/api/requests")).body).run).toBe("run-a");
 });
 
 test("view refuses other values and mixing with paging", async () => {
