@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, emptyAdmin, parseConf, restartable, restartGate, saveGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, emptyAdmin, hostGate, parseConf, parseTokens, restartable, restartGate, saveGate, tokenGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -61,6 +61,8 @@ let peers: Peer[] = [];
 let hostListError = "";
 let installer = false;
 let enroll = false;
+// The gateway can rotate its own token for a host and remove a host.
+let manage = false;
 let inspectorOpen = true;
 const apply = (f: Fleet) => { fleet = f; };
 
@@ -647,6 +649,30 @@ function renderAdmin(h: HostState | undefined) {
   ($("logSource") as HTMLSelectElement).value = v.logSource;
   ($("logRead") as HTMLButtonElement).disabled = v.busy;
   $("logText").textContent = v.logText;
+  const tokens = changeable(v.tokens);
+  $("tokenPart").hidden = v.tokens === null;
+  setHtml($("tokenRows"), (v.tokens ?? []).map((t) => '<li>' + esc(t.name) + ' <small>' + esc(t.role) + (t.self ? ' · this gateway' : '') + (t.managed ? ' · managed agent' : '') + '</small></li>').join(''));
+  if (!tokens.some((t) => t.name === v.tokenName)) { v.tokenName = tokens[0]?.name ?? ""; v.tokenConfirm = ""; }
+  setHtml($("tokenName"), tokens.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + '</option>').join('') || '<option value="">No tokens to change</option>');
+  ($("tokenName") as HTMLSelectElement).value = v.tokenName;
+  ($("tokenAction") as HTMLSelectElement).value = v.tokenAction;
+  const tc = $("tokenConfirm") as HTMLInputElement;
+  if (tc.value !== v.tokenConfirm) tc.value = v.tokenConfirm;
+  const tg = tokenGate(v);
+  $("tokenGate").textContent = tg.reason;
+  ($("tokenGo") as HTMLButtonElement).disabled = !tg.ok;
+  $("tokenGo").textContent = v.tokenAction === "rotate" ? "Rotate token" : "Revoke token";
+  $("newTokenBox").hidden = !v.newToken;
+  $("newTokenName").textContent = v.tokenName;
+  $("newTokenText").textContent = v.newToken;
+  $("hostPart").hidden = !manage || mode !== "gateway";
+  const hc = $("hostConfirm") as HTMLInputElement;
+  if (hc.value !== v.hostConfirm) hc.value = v.hostConfirm;
+  ($("hostRevoke") as HTMLInputElement).checked = v.hostRevoke;
+  const hg = hostGate(v, h.info.id);
+  $("hostGate").textContent = hg.reason;
+  ($("hostRotate") as HTMLButtonElement).disabled = !hg.ok;
+  ($("hostRemove") as HTMLButtonElement).disabled = !hg.ok;
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
 }
 
@@ -670,7 +696,66 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
   // An agent or viewer token sees nothing here; the host refuses it.
   else if (status === 403) { v.status = "absent"; }
   else { v.status = "unknown"; v.error = outcome.message; }
+  // Tokens: hidden where the host does not offer them (older releases, no fleet administration).
+  if (v.status === "ready") {
+    const t = await hostCall(host, "/tokens");
+    v.tokens = t.outcome.ok ? parseTokens(t.outcome.data) : null;
+  }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
+}
+
+async function changeToken(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !tokenGate(v).ok) return;
+  const name = v.tokenName, action = v.tokenAction;
+  v.busy = true; v.newToken = ""; v.notice = `${action === "rotate" ? "Rotating" : "Revoking"} ${name} on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, `/tokens/${encodeURIComponent(name)}/${action}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: v.tokenConfirm }),
+  }, WRITE_TIMEOUT_MS);
+  v.busy = false; v.tokenConfirm = "";
+  const token = outcome.ok ? (outcome.data as { token?: unknown }).token : undefined;
+  if (outcome.ok && action === "rotate" && typeof token === "string") {
+    v.newToken = token;
+    v.notice = `${host.name}: ${name} rotated. Give the new token to whoever uses ${name}.`;
+  } else v.notice = outcome.ok ? `${host.name}: ${name} ${action === "rotate" ? "rotated, but no token came back" : "revoked"}.`
+    : status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether ${name} was ${action === "rotate" ? "rotated" : "revoked"}.`
+    : `${host.name}: ${name} not changed: ${outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+  await refreshAdmin(hostId);
+}
+
+// This gateway's link to a host. Not a host route: the gateway itself does it, at /api/manage.
+async function manageHost(hostId: string, action: "rotate" | "remove") {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !hostGate(v, hostId).ok) return;
+  v.busy = true; v.notice = action === "rotate" ? `Rotating this gateway's token for ${host.name}` : `Removing ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  let status: number | null = null, body: unknown = null;
+  try {
+    const res = await fetch(`./api/manage/${encodeURIComponent(hostId)}/${action}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(action === "rotate" ? { confirm: v.hostConfirm } : { confirm: v.hostConfirm, revoke: v.hostRevoke }),
+      signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+    });
+    status = res.status; body = await res.json().catch(() => null);
+  } catch { status = null; }
+  v.busy = false; v.hostConfirm = "";
+  const message = (body as { error?: { message?: unknown } } | null)?.error?.message;
+  const why = typeof message === "string" ? message : `the gateway answered ${status}`;
+  if (status === 200 && action === "remove") {
+    const r = body as { revokedOnHost?: boolean };
+    adminViews.delete(hostId);
+    await loadHostList();
+    $("status").textContent = r.revokedOnHost ? `${host.name} removed; its line for this gateway is revoked.` : `${host.name} removed. Its line for this gateway stays on the host; revoke it there.`;
+    return;
+  }
+  v.notice = status === 200 ? `${host.name}: this gateway now uses a new token; the old one stopped working.`
+    : status === null ? `The gateway did not answer. Unknown whether ${host.name} was ${action === "rotate" ? "given a new token" : "removed"}; reload the page.`
+    : `${host.name}: ${why}`;
+  renderAdmin(selectedHostState(fleet));
 }
 
 async function saveConf(hostId: string) {
@@ -806,6 +891,7 @@ async function loadHostList() {
     mode = list.mode;
     installer = body.installer === true;
     enroll = body.enroll === true;
+    manage = body.manage === true;
     hostListError = list.hosts.length ? "" : enroll ? "No hosts yet. Use Add a host at the bottom of the host list." : "The gateway lists no hosts.";
     peers = list.peers;
     apply(setHosts(fleet, list.hosts));
@@ -884,7 +970,21 @@ adminField("confConfirm", (v, x) => { v.saveConfirm = x; });
 adminField("restartSession", (v, x) => { v.restartSession = x; v.restartConfirm = ""; });
 adminField("restartConfirm", (v, x) => { v.restartConfirm = x; });
 adminField("logSource", (v, x) => { if (x === "watchdog" || x === "service") v.logSource = x; });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog]] as const) {
+adminField("tokenName", (v, x) => { v.tokenName = x; v.tokenConfirm = ""; v.newToken = ""; });
+adminField("tokenAction", (v, x) => { if (x === "rotate" || x === "revoke") v.tokenAction = x; });
+adminField("tokenConfirm", (v, x) => { v.tokenConfirm = x; });
+adminField("hostConfirm", (v, x) => { v.hostConfirm = x; });
+$("hostRevoke").addEventListener("change", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  adminView(h.info.id).hostRevoke = ($("hostRevoke") as HTMLInputElement).checked;
+  renderAdmin(h);
+});
+$("newTokenDone").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) { adminView(h.info.id).newToken = ""; renderAdmin(h); } });
+$("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
+$("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
+$("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 $("confReload").addEventListener("click", () => {

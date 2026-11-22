@@ -3,6 +3,7 @@
 import { GatewayConfigError, loadGatewayConfig, startGateway } from "./src/client-gateway.ts";
 import { createInstaller, localContext } from "./src/install/web.ts";
 import { gatewayEnrollment } from "./src/gateway-enroll.ts";
+import { gatewayHostManager } from "./src/gateway-hosts.ts";
 import { portFromEnv } from "./src/config.ts";
 
 const configPath = process.argv[2] ?? process.env.FLEET_CONTROL_CLIENT_CONFIG;
@@ -27,8 +28,10 @@ try {
   // Off unless asked for. Installed services do not set this.
   if (process.env.FLEET_CONTROL_INSTALLER === "1") installer = await createInstaller(localContext());
   const enroll = enrolling ? gatewayEnrollment(configPath, config) : undefined;
-  const server = startGateway(config, { port, log: (l) => console.warn(l), installer: installer?.handle, enroll });
-  if (enroll) console.log("Adding hosts from the page is on; new token files go next to the config.");
+  // The same switch lets the page rotate this gateway's token for a host and remove a host.
+  const manage = enrolling ? gatewayHostManager(configPath, config) : undefined;
+  const server = startGateway(config, { port, log: (l) => console.warn(l), installer: installer?.handle, enroll, manage });
+  if (enroll) console.log("Adding, rotating and removing hosts from the page is on; token files go next to the config.");
   console.log(`Fleet Control client on http://127.0.0.1:${server.port}/ (${config.hosts.map((h) => h.id).join(", ") || "no hosts yet; add one at /add-host"})`);
   if (installer) {
     // The apply code must not outlive this process.

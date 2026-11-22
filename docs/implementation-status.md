@@ -2,6 +2,14 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Tokens from the page (2026-11-23, branch `feat/token-admin`, not released)
+
+With `FLEET_CONTROL_ADMIN=1` the fleet section also lists the host's tokens file: names and roles only, never hashes. An operator can rotate a line (the new token is shown once on the page, kept nowhere, and only its hash goes into the file) or revoke it, each after typing the name. The file is changed under the same lock as `scripts/tokens.ts`, written atomically with mode 0600, and the running service takes the new file at once (no SIGHUP); sockets of a revoked token close. Refused: the caller's own line (the gateway changes its own link, below), managed `fc-` agent lines (they end with the agent), unknown names, and revoking the last operator. Each check runs again on the file as it is under the lock.
+
+The gateway (with `FLEET_CONTROL_ENROLL=1`, the same switch as adding hosts) can also rotate its own token for a host and remove a host, at `/api/manage/<id>/rotate|remove` after typing the host id. Rotate makes the new token on the gateway, writes it beside the old file, sends the host only the SHA-256 (`POST /api/token/replace`), and puts it in place only after the host took it; a refusal or a missed answer leaves the old token working (with no answer it asks the host which token it knows). Only a `token-<id>` file the gateway made next to its config is rotated or deleted; a hand-named token file is left alone. Remove with revoke first deletes the gateway's line on the host (`POST /api/token/revoke`, refused for the last operator); a host that cannot answer is removed only without revoke, and the page says the line stays on the host.
+
+Tests: `src/token-admin.test.ts` (real host service on a real tokens file, real gateway with its config and token files: list without hashes, viewer and agent 403, rotate and revoke effects and refusals, last operator, gateway rotate and remove, host down, a held lock refusing the rotate, a hand-named token file), `web/app.test.ts` (tokens part and gateway link part, typed confirm, new token shown once, revoke choice posted). Each refusal and each file step was removed one at a time and its test failed. Not yet reviewed, deployed or tried on the live hosts.
+
 ## Stage 9: whole scenario through a gateway (2026-11-22)
 
 Owner decision (2026-11-22): the run uses a gateway on the Mac mini (.4) in a headless browser; the owner moves the gateway to the MacBook later ([macbook-gateway.md](macbook-gateway.md)). The MacBook itself has not been checked.

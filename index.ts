@@ -18,6 +18,7 @@ import { Leases } from "./src/data/leases.ts";
 import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
+import { HostTokenFile } from "./src/token-file.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -91,6 +92,8 @@ const deps = {
   control: { commands, deliverer, requests: new Requests(store.db) },
   input,
   admin,
+  // With fleet administration on, an operator also lists, rotates and revokes tokens from the page.
+  tokens: admin && options.auth ? { file: new HostTokenFile(process.env.FLEET_CONTROL_TOKENS!, options.auth) } : undefined,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),

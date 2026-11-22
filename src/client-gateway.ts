@@ -52,7 +52,13 @@ export class Credentials {
     if (!TOKEN.test(token) || [...this.#tokens.values()].includes(token)) throw new GatewayConfigError(`host "${id}": token is malformed or shared`);
     this.#tokens.set(id, token);
   }
-  // Undoes add when the config file could not be written.
+  // A rotated token for a host already here. The new token may not be another host's.
+  replace(id: string, token: string) {
+    if (!this.#tokens.has(id)) throw new GatewayConfigError(`no host ${id} in this gateway`);
+    if (!TOKEN.test(token) || [...this.#tokens].some(([other, t]) => other !== id && t === token)) throw new GatewayConfigError(`host "${id}": token is malformed or shared`);
+    this.#tokens.set(id, token);
+  }
+  // Undoes add when the config file could not be written, and forgets a removed host.
   remove(id: string) {
     this.#tokens.delete(id);
   }
@@ -211,6 +217,7 @@ export type GatewayOptions = {
   log?: (line: string) => void;
   installer?: InstallerHandler; // local installer API and page; off unless supplied
   enroll?: EnrollHandler; // adding hosts from the page; off unless supplied
+  manage?: EnrollHandler; // rotating this gateway's token for a host and removing hosts; off unless supplied
 };
 // Handles /api/enroll after the same Host, Origin and body checks as the installer.
 export type EnrollHandler = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: unknown }>;
@@ -251,6 +258,9 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 2 && a === "fleet" && b === "logs") return http("/api/fleet/logs", ["GET"], { source: /^[a-z]{1,16}$/, lines: NUM });
   // A restart waits for the session to start again, which for an agent can take minutes.
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "restart") return { ...http(`/api/sessions/${b}/restart`, ["POST"]), timeoutMs: RESTART_TIMEOUT_MS };
+  // The host's tokens file. The gateway's own line changes only through /api/manage, never from here.
+  if (seg.length === 1 && a === "tokens") return http("/api/tokens", ["GET"]);
+  if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;
 }
@@ -616,14 +626,15 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}), ...(opts.manage ? { manage: true } : {}) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
       }
 
-      const enrolling = url.pathname === "/api/enroll" || url.pathname.startsWith("/api/enroll/");
-      if (enrolling || url.pathname === "/api/install" || url.pathname.startsWith("/api/install/")) {
-        const handler = enrolling ? opts.enroll : opts.installer;
+      const under = (p: string) => url.pathname === p || url.pathname.startsWith(`${p}/`);
+      const prefix = under("/api/enroll") ? "/api/enroll" : under("/api/manage") ? "/api/manage" : under("/api/install") ? "/api/install" : null;
+      if (prefix) {
+        const handler = prefix === "/api/enroll" ? opts.enroll : prefix === "/api/manage" ? opts.manage : opts.installer;
         if (!handler) return fail(404, "not_found", "not found");
         if (req.method !== "GET" && req.method !== "POST") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET, POST" });
         if (url.search) return fail(400, "invalid", "query parameters are not accepted");
@@ -636,7 +647,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
           bytes = await readBounded(req.body, maxReq);
           if (!bytes) return fail(413, "too_large", "request body too large");
         }
-        const reply = await handler(req.method, url.pathname.slice(enrolling ? "/api/enroll".length : "/api/install".length), bytes);
+        const reply = await handler(req.method, url.pathname.slice(prefix.length), bytes);
         return Response.json(reply.body, { status: reply.status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
       }
 

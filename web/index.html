@@ -59,6 +59,20 @@
                 <div class="composerfooter"><select id="logSource" aria-label="Log"><option value="watchdog">Watchdog</option><option value="service">Service</option></select><button type="button" id="logRead">Show last 200 lines</button></div>
                 <pre id="logText" class="logtext" tabindex="0" aria-label="Log lines"></pre>
               </div>
+              <div class="adminpart" id="tokenPart" hidden><div class="sectionheading"><h4>Tokens on this host</h4></div>
+                <ul id="tokenRows" class="tokenrows"></ul>
+                <label for="tokenName">Token</label><select id="tokenName"></select>
+                <label for="tokenAction">Action</label><select id="tokenAction"><option value="rotate">Rotate: new token, old one stops</option><option value="revoke">Revoke: stops at once</option></select>
+                <label for="tokenConfirm">Type the token name to confirm</label><input id="tokenConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="tokenGate"></span><button type="button" id="tokenGo" class="destructive" disabled>Apply</button></div>
+                <div id="newTokenBox" class="newtoken" hidden><p class="fineprint">New token for <strong id="newTokenName"></strong>. Copy it now; it is not shown again and not kept on this host.</p><code id="newTokenText"></code><div class="composerfooter"><button type="button" id="newTokenCopy">Copy</button><button type="button" id="newTokenDone">Done</button></div></div>
+              </div>
+              <div class="adminpart" id="hostPart" hidden><div class="sectionheading"><h4>This gateway's link</h4></div>
+                <p class="fineprint">Rotate gives this host a new token for this gateway. Remove drops the host from this gateway; with revoke the host forgets this gateway's token first.</p>
+                <label for="hostConfirm">Type the host id to confirm</label><input id="hostConfirm" autocomplete="off" spellcheck="false">
+                <label class="checkrow"><input type="checkbox" id="hostRevoke" checked> Revoke this gateway's token on the host before removing</label>
+                <div class="composerfooter"><span id="hostGate"></span><button type="button" id="hostRotate" disabled>Rotate gateway token</button><button type="button" id="hostRemove" class="destructive" disabled>Remove host</button></div>
+              </div>
               <p id="adminStatus" role="status"></p>
             </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
