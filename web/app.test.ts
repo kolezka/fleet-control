@@ -267,6 +267,15 @@ test("browser reads the current request view and falls back to the full list on 
     expect(b.element("phaseState").textContent).toContain("one · revision 1");
   }
 });
+test("the workflow panel shows the run updated last even when an older run sorts after it by id", async () => {
+  const fresh = { id: "gw-run", orchestrator: "fc-gwrun", phase: "phase-2", revision: 2, phaseStatus: "review", updatedAt: "2026-11-22T14:09:54.192Z" };
+  const old = { id: "ping-1", orchestrator: "fc-chum", phase: "ping", revision: 1, phaseStatus: "done", updatedAt: "2026-11-21T02:12:14.770Z" };
+  // An older host answers the full list, sorted by id.
+  const b = await browser([direct], path => path.endsWith("/sessions") ? { sessions: [] } : path.includes("/commands") ? { commands: [] }
+    : path.includes("view=") ? { __status: 400, error: { kind: "invalid", message: "unknown query parameter view" } } : { runs: [fresh, old], requests: [] });
+  expect(b.element("runName").textContent).toBe("gw-run");
+  expect(b.element("phaseState").textContent).toContain("phase-2 · revision 2");
+});
 
 // Every value a host or gateway sends can be hostile. None may become markup or break out of an attribute.
 test("host-provided strings never become markup anywhere on the page", async () => {

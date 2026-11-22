@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand,
-  beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
+  beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
   type Fleet, type HostInfo, type Session,
 } from "./host-state.ts";
@@ -204,6 +204,18 @@ test("composer target follows the selected host's own orchestrator and selection
   expect(composerTarget(f.hosts.a!)).toBe("orch");
   expect(composerTarget(f.hosts.b!)).toBe("main");
   expect(selectedHostState(selectHost(f, "b"))?.info.id).toBe("b");
+});
+
+test("the current run is the one updated last, not the last by id", () => {
+  const run = (id: string, orchestrator: string, updatedAt: string) => ({ id, orchestrator, phase: "p", revision: 1, phaseStatus: "s", updatedAt });
+  // The host lists runs by id: an old "ping-1" sorts after a new "gw-run".
+  const runs = [run("gw-run", "fresh", "2026-11-22T14:09:54.192Z"), run("ping-1", "old", "2026-11-21T02:12:14.770Z")];
+  expect(currentRun(runs)?.id).toBe("gw-run");
+  expect(currentRun([run("b", "x", "2026-01-01T00:00:00.000Z"), run("a", "y", "2026-01-01T00:00:00.000Z")])?.id).toBe("b");
+  expect(currentRun([])).toBeUndefined();
+  let f = ready(["a"], { a: [sess("main"), sess("fresh"), sess("old")] });
+  f = read(f, "a", "coord", { ok: true, data: { runs, requests: [], commands: [] } });
+  expect(composerTarget(f.hosts.a!)).toBe("fresh");
 });
 
 test("host list refresh keeps state for unchanged hosts and drops removed ones", () => {
