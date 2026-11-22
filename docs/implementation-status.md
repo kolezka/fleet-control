@@ -2,6 +2,22 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Stage 9: whole scenario through a gateway (2026-11-22)
+
+Owner decision (2026-11-22): the run uses a gateway on the Mac mini (.4) in a headless browser; the owner moves the gateway to the MacBook later ([macbook-gateway.md](macbook-gateway.md)). The MacBook itself has not been checked.
+
+- Gateway: fresh clone of main `292c04e`, empty config, `FLEET_CONTROL_ENROLL=1`, `127.0.0.1:4870` on the Mac mini. Hosts run release `69a08a4`.
+- Add host: `.4` and `.15` added from `/add-host` in Connect mode as principal `macbook-gateway` (operator). Check failed before the paste command ran and passed after it. Screens 00 to 06 in [stage9/](stage9/).
+- `.4`: Claude Code agent `fc-gw4` (haiku) started from the page and answered `READY-GW4 /Users/me/fleet-agents/sandbox`; command to `probe-shell` delivered; typing under the lease reached the pane; lease released; agent stopped, no process left (07 to 13).
+- `.15`: `fc-gw15` the same (`READY-GW15`), command and typed text in the pane, stopped, no process left (14 to 17).
+- DSH: `fc-gwdsh` (`cliproxyapi/claude-haiku-5-5`) on `.4` answered and was stopped (18 to 20).
+- Phased run: orchestrator `fc-gwrun` registered run `gw-run`; phase 1 and phase 2 (revision 2) approved on the page and acknowledged by the agent; a page command to the agent was answered; agent stopped and its token line removed (21 to 26).
+- Fleet section: `fleet.conf` and the service log read on both hosts (27).
+- Found: the Workflow panel showed an older run (`ping-1`) instead of `gw-run` because hosts list runs by id. Fix in PR #203. Commands to an agent came back "delivery unknown" while the `.4` test-fleet tmux server had `NO_COLOR=1` in its environment (Claude's grey suggestion then reads as typed text); unset in that server. The first orchestrator stopped instead of polling for the answer; the prompt used for `fc-gwrun` tells it to sleep and poll.
+- Paid use: five haiku agents, about 1 to 6 minutes each.
+- These are run notes. The screens show the page; process checks, token lines and the tmux environment were checked on the hosts by shell, not in the screens.
+- Release `997bab3` (PR #203) deployed on `.4` and `.15` on 2026-11-22 with backups in `~/.config/fleet-control/rollback-997bab3` and a copy on the other host. Through the gateway, `view=current` on `.4` now names `gw-run`. Rollback: stop the service, swap `fleet-control-service.before-997bab3` back, start it.
+
 ## Current local central backend prototype
 
 The central backend is separate from the existing host service and decentralized client. The legacy central entry point `src/central/main.ts` binds to loopback, uses PostgreSQL and mounts an authenticated inventory-only host socket at `/api/host/socket`. Operator-only `GET /api/hosts` lists process-local observations of accepted authenticated sockets and their self-reported session names. Sessions are `null` until inventory arrives; entries disappear on disconnect and are lost on restart. There is no heartbeat or freshness guarantee, so a listed socket does not prove host or session health. The separate client can publish inventory on connection and reconnect, but no running host-agent integration is wired in. Receipts are rejected and dispatch remains disabled.
