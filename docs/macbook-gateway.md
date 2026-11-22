@@ -51,10 +51,13 @@ On each host, revoke its token and reload the service:
 # .4
 cd ~/Development/fleet-control-service && bun scripts/tokens.ts revoke macbook-gateway ~/.config/fleet-control/tokens
 launchctl kill HUP gui/$(id -u)/pl.raqz.fleet-control
-# .15
+# .15 (ssh -p 27022 me@192.168.50.15; bun is in ~/.bun/bin)
+export PATH=$HOME/.bun/bin:$PATH
 cd ~/Development/fleet-control-service && bun scripts/tokens.ts revoke macbook-gateway ~/.config/fleet-control/tokens
-systemctl --user kill -s HUP fleet-control
+systemctl --user kill --kill-whom=main -s HUP fleet-control
 ```
+
+The tokens file is the one named by `FLEET_CONTROL_TOKENS` in the plist (.4) or the unit (.15); on 2026-11-22 both were `~/.config/fleet-control/tokens`. Signal only the main process on .15: the default sends HUP to the whole unit, tmux and agents included.
 
 Afterwards a request with the old Mac mini gateway token answers 401.
 
@@ -62,5 +65,5 @@ Afterwards a request with the old Mac mini gateway token answers 401.
 
 - The gateway keeps no state other than its config and token files. Closing the MacBook stops nothing on the hosts.
 - Typing into a terminal needs **Type…**, then **Confirm** within 8 s; the lease lasts 5 minutes and ends when the pane closes.
-- If the panel shows an old run instead of the current one, the host is older than PR #203 (fix: the panel shows the run updated last).
+- If the panel shows an old run instead of the current one, the host does not yet run a release with PR #203 (the panel shows the run updated last).
 - A test-fleet tmux server started from a shell with `NO_COLOR=1` makes Claude Code's grey suggestion look like typed text, and the watchdog then refuses to send commands. On .4 this was fixed with `tmux -L fleet-fctrl-test set-environment -g -u NO_COLOR`; start fleet tmux servers from a normal terminal.

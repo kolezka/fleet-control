@@ -15,6 +15,8 @@ Owner decision (2026-11-22): the run uses a gateway on the Mac mini (.4) in a he
 - Fleet section: `fleet.conf` and the service log read on both hosts (27).
 - Found: the Workflow panel showed an older run (`ping-1`) instead of `gw-run` because hosts list runs by id. Fix in PR #203. Commands to an agent came back "delivery unknown" while the `.4` test-fleet tmux server had `NO_COLOR=1` in its environment (Claude's grey suggestion then reads as typed text); unset in that server. The first orchestrator stopped instead of polling for the answer; the prompt used for `fc-gwrun` tells it to sleep and poll.
 - Paid use: five haiku agents, about 1 to 6 minutes each.
+- These are run notes. The screens show the page; process checks, token lines and the tmux environment were checked on the hosts by shell, not in the screens.
+- Release `997bab3` (PR #203) deployed on `.4` and `.15` on 2026-11-22 with backups in `~/.config/fleet-control/rollback-997bab3` and a copy on the other host. Through the gateway, `view=current` on `.4` now names `gw-run`. Rollback: stop the service, swap `fleet-control-service.before-997bab3` back, start it.
 
 ## Current local central backend prototype
 
