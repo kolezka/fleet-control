@@ -4,6 +4,7 @@ import { Requests } from "./data/requests.ts";
 import { Deliverer } from "./application/delivery.ts";
 import { serve } from "./server.ts";
 import { Store } from "./data/store.ts";
+import { currentRun } from "../web/host-state.ts";
 
 // view=current must give the page exactly what it renders from the full list, without the history.
 const fleet = { screen: async () => "", status: async () => ({ sessions: [] }) } as never;
@@ -12,9 +13,9 @@ let requests: Requests;
 let tick = 0;
 const clock = () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0, tick++));
 
-// What web/app.ts derives from { runs, requests }: last run, approvals of its phase and revision, open or newest request.
+// What web/app.ts derives from { runs, requests }: the run updated last, approvals of its phase and revision, open or newest request.
 function shown(body: { runs: any[]; requests: any[] }) {
-  const run = body.runs.at(-1);
+  const run = currentRun(body.runs);
   const open = body.requests.filter((q) => q.status === "open");
   return {
     run: run?.id ?? null,
@@ -59,6 +60,10 @@ test("current view matches what the page shows from the full list as history gro
   expect(shown(none).requests).toEqual([ids[11]]);
   requests.updatePhase({ runId: "run-b", actor: "orch", expectedRevision: 1, phase: "two", phaseStatus: "working", newRevision: true });
   await check();
+  // A run updated later wins even when its id sorts first.
+  requests.updatePhase({ runId: "run-a", actor: "orch", expectedRevision: 1, phase: "two", phaseStatus: "working", newRevision: false });
+  const later = await check();
+  expect(later.runs.map((r: any) => r.id)).toEqual(["run-a"]);
 });
 
 test("view refuses other values and mixing with paging", async () => {

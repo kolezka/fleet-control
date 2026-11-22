@@ -255,10 +255,17 @@ export function describeSessions(h: HostState): SessionsView {
   return { kind: "loading" };
 }
 
+/** The run the panel shows: the one updated last. Hosts list runs by id, so the last row can be an old run. */
+export function currentRun<R extends { id: string; updatedAt: string }>(runs: readonly R[]): R | undefined {
+  let best: R | undefined;
+  for (const r of runs) if (!best || r.updatedAt > best.updatedAt || (r.updatedAt === best.updatedAt && r.id > best.id)) best = r;
+  return best;
+}
+
 /** The session an instruction goes to: the run's orchestrator when it is running, else the selected one. */
 export function composerTarget(h: HostState): string {
   if (h.info.supervisor) return h.info.supervisor.session;
-  const orch = h.coord.runs.at(-1)?.orchestrator;
+  const orch = currentRun(h.coord.runs)?.orchestrator;
   if (orch && h.sessions.some((s) => s.name === orch && s.running)) return orch;
   return h.sessions.find((s) => s.name === h.selectedSession && s.running)?.name ?? "";
 }

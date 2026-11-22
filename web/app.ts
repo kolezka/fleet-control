@@ -8,7 +8,7 @@ import { CONFIRM_MS, leaseButton, leaseStatus, mayType, noLease, onControlFrame,
 import {
   type Command, type CommandIntent, type Fleet, type HostInfo, type HostState, type Model, type Outcome, type Peer, type ReadKind, type Req, type Session,
   beginPageRead, finishPageRead, parseCommandPage, parseInspection, selectCommand, isCommand,
-  answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
+  answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
 import { type AdminView, emptyAdmin, parseConf, restartable, restartGate, saveGate } from "./fleet-admin.ts";
@@ -378,7 +378,7 @@ function renderWorkflow(h: HostState | undefined) {
     return;
   }
   const known = h?.coordRead.status === "ready";
-  const run = known ? h!.coord.runs.at(-1) : undefined;
+  const run = known ? currentRun(h!.coord.runs) : undefined;
   const name = h ? h.info.name : "";
   $("coordContext").textContent = !h ? "No host selected"
     : run ? `${name} · ${run.id} · ${run.orchestrator}`
