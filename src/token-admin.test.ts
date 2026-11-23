@@ -418,7 +418,7 @@ test("a host that took the token while the gateway could not switch to it gets a
     discard: async () => { throw new Error("must not discard"); },
     forget: async () => ({ tokenFileRemoved: false }),
   });
-  const err = await use.rotate("h", { confirm: "h" }).catch((e) => e as Error);
+  const err = (await use.rotate("h", { confirm: "h" }).then(() => new Error("rotate succeeded"), (e) => e)) as Error;
   expect(err.message).toContain("took the new token but the gateway could not switch to it (disk full)");
   expect(err.message).toContain("/g/token-h.new-2");
 });
