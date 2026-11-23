@@ -48,8 +48,9 @@ export function rootOf(path: string, roots: readonly string[]): string {
 // look-alike letters such as U+017F (long s) or U+212A (Kelvin sign) are one file, also before it exists.
 // Refusing a few extra names on a case-sensitive disk costs nothing.
 export const PROTECTED_NAME = /^(fc-[a-z0-9-]+\.mcp\.json|tokens|tokens\.lock|token-.+|settings\.json)$/;
-// Upper then lower case folds the letters plain toLowerCase leaves alone (long s to s, Kelvin sign to k, sharp s to ss).
-export const foldName = (s: string) => s.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
+// Lower, upper, lower case folds the letters plain toLowerCase leaves alone (long s to s, Kelvin sign to k, the fl
+// ligature to fl, capital sharp s to ss). NFC is defensive: APFS ignores normalization form anyway.
+export const foldName = (s: string) => s.normalize("NFC").toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
 export function refuseProtected(path: string, protectedPaths: readonly string[]): void {
   const refuse = () => { throw new AdminError("invalid", `${path} belongs to the Fleet Control service; this editor does not change it`); };
   const low = foldName(path);

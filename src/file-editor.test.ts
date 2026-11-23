@@ -214,7 +214,7 @@ test("review 2: names are compared without case, also for protected files that d
   const fleetDir = join(dir, "fleet2");
   mkdirSync(fleetDir);
   const u = filesUseCases({ host: new DiskFiles(), roots: [fleetDir], protectedPaths: [join(fleetDir, "fleet.conf"), join(fleetDir, "fleet-control-agents.conf")] }, { name: "op", role: "operator" });
-  for (const name of ["FLEET.CONF", "Fleet-Control-Agents.conf", "Settings.json", "TOKENS", "Token-mini", "fleet-control-agent\u017f.conf", "to\u212Aen-x", "fleet.conf".normalize("NFD"), "ſettings.json"]) {
+  for (const name of ["FLEET.CONF", "Fleet-Control-Agents.conf", "Settings.json", "TOKENS", "Token-mini", "fleet-control-agent\u017f.conf", "to\u212Aen-x", "\uFB02eet.conf", "ſettings.json"]) {
     await expect(u.save({ path: join(fleetDir, name), text: "x\n", revision: "new", confirm: name })).rejects.toThrow("belongs to the Fleet Control service");
   }
   expect(readdirSync(fleetDir)).toEqual([]);
