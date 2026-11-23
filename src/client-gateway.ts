@@ -262,6 +262,8 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "agents") return http("/api/agents", ["GET", "POST"]);
   if (seg.length === 3 && a === "agents" && ok(b) && c === "stop") return http(`/api/agents/${b}/stop`, ["POST"]);
   if (seg.length === 2 && a === "fleet" && b === "conf") return http("/api/fleet/conf", ["GET", "PUT"]);
+  if (seg.length === 2 && a === "fleet" && b === "sessions") return http("/api/fleet/sessions", ["GET"]);
+  if (seg.length === 3 && a === "sessions" && ok(b) && c === "start") return http(`/api/sessions/${b}/start`, ["PUT", "DELETE"], { confirm: /^[A-Za-z0-9._-]{1,64}$/ });
   if (seg.length === 2 && a === "fleet" && b === "logs") return http("/api/fleet/logs", ["GET"], { source: /^[a-z]{1,16}$/, lines: NUM });
   // A restart waits for the session to start again, which for an agent can take minutes.
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "restart") return { ...http(`/api/sessions/${b}/restart`, ["POST"]), timeoutMs: RESTART_TIMEOUT_MS };

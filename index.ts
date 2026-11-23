@@ -18,6 +18,7 @@ import { Leases } from "./src/data/leases.ts";
 import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
+import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
 import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
@@ -107,7 +108,7 @@ if (input) {
 // FLEET_CONTROL_SERVICE_LOG names this service's own log: a file, or journal:<unit> for systemd.
 const adminSetup = () => {
   try {
-    return { host: new FleetAdminHost({ confPath, fleetBin, serviceLog: serviceLogFromEnv(process.env.FLEET_CONTROL_SERVICE_LOG), tmuxBin: findTmux() }) };
+    return { host: new FleetAdminHost({ confPath, fleetBin, serviceLog: serviceLogFromEnv(process.env.FLEET_CONTROL_SERVICE_LOG), tmuxBin: findTmux() }), starts: new SessionStarts(store.db) };
   } catch (e) {
     console.error(`FLEET_CONTROL_ADMIN: ${e instanceof Error ? e.message : e}`);
     process.exit(1);

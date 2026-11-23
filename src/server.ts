@@ -116,7 +116,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -338,6 +338,32 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!admin) return noAdmin();
           const q = new URL(req.url).searchParams;
           try { return Response.json(await admin.log(q.get("source"), q.get("lines"))); } catch (e) { return adminError(e); }
+        }),
+      },
+      // Restartable sessions with their saved start commands and what tmux reports for the running ones.
+      "/api/fleet/sessions": {
+        GET: guard(async (_req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          try { return Response.json(await admin.sessions()); } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/sessions/:name/start": {
+        PUT: guard(async (req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          if (!originAllowed(req)) return forbidden();
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await admin.saveStart(req.params.name, body));
+          } catch (e) { return adminError(e); }
+        }),
+        DELETE: guard(async (req, _s, who) => {
+          const admin = adminFor(who);
+          if (!admin) return noAdmin();
+          if (!originAllowed(req)) return forbidden();
+          try { return Response.json(await admin.removeStart(req.params.name, new URL(req.url).searchParams.get("confirm"))); } catch (e) { return adminError(e); }
         }),
       },
       "/api/sessions/:name/restart": {
