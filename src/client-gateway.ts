@@ -65,8 +65,9 @@ export class Credentials {
   }
   // Told when a host's credential goes, so open terminal relays to it can close.
   readonly #removed = new Set<(id: string) => void>();
-  onRemove(fn: (id: string) => void) {
+  onRemove(fn: (id: string) => void): () => void {
     this.#removed.add(fn);
+    return () => this.#removed.delete(fn);
   }
   toJSON() {
     return {};
@@ -322,7 +323,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   // Open terminal relays, so a host removed from the page loses them at once.
   const relays = new Set<Relay>();
-  config.credentials.onRemove((id) => { for (const r of [...relays]) if (r.host === id) teardown(r, 1001, "host removed from the gateway"); });
+  const offRemove = config.credentials.onRemove((id) => { for (const r of [...relays]) if (r.host === id) teardown(r, 1001, "host removed from the gateway"); });
   const maxReq = opts.maxRequestBytes ?? 64 * 1024;
   const maxRes = opts.maxResponseBytes ?? 8 * 1024 * 1024;
   const maxPre = opts.maxPreOpenBytes ?? 1024 * 1024;
@@ -713,5 +714,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   });
 
   allowedHosts = new Set([`127.0.0.1:${server.port}`, `localhost:${server.port}`]);
+  const stop = server.stop.bind(server);
+  server.stop = ((closeActive?: boolean) => { offRemove(); return stop(closeActive); }) as typeof server.stop;
   return server;
 }

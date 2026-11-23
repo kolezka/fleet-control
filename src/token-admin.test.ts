@@ -304,6 +304,8 @@ test("token changes by callers who may not operate, from another origin or not a
   expect((await post(gw, "/api/tokens/watcher/revoke", { confirm: "watcher" }, { origin: "https://evil.example" })).status).toBe(403);
   const plain = await fetch(`${host.url.origin}/api/tokens/watcher/revoke`, { method: "POST", headers: { authorization: `Bearer ${gw}`, "content-type": "text/plain" }, body: JSON.stringify({ confirm: "watcher" }) });
   expect(plain.status).toBe(415);
+  const jsonp = await fetch(`${host.url.origin}/api/tokens/watcher/revoke`, { method: "POST", headers: { authorization: `Bearer ${gw}`, "content-type": "application/jsonp" }, body: JSON.stringify({ confirm: "watcher" }) });
+  expect(jsonp.status).toBe(415);
   // A hash another line already has is refused and nothing changes.
   const dup = await post(gw, "/api/token/replace", { hash: require("node:crypto").createHash("sha256").update(other).digest("hex") });
   expect(dup.status).toBe(400);
@@ -379,4 +381,44 @@ test("the running service takes each change while the tokens file lock is still 
   await agents.issue("fc-new");
   await agents.revoke("fc-new");
   expect(held).toEqual([true, true, true]);
+});
+
+test("a 200 without the host's confirmation is checked: a host that did not take the hash keeps the old token", async () => {
+  const { gatewayHostUseCases } = await import("./application/gateway-hosts.ts");
+  const calls: string[] = [];
+  let discarded = "", committed = false;
+  const use = gatewayHostUseCases({
+    known: () => ({ name: "H", url: "https://h" }),
+    tokenFile: async () => ({ file: "/g/token-h", own: true }),
+    bearer: () => "old",
+    newToken: () => "new",
+    // The host answers 200 {} and never learns the new token.
+    call: async (_u, token, path) => { calls.push(`${token} ${path}`); return path === "/api/whoami" ? (token === "old" ? { status: 200, body: { principal: "gw" } } : { status: 401, body: null }) : { status: 200, body: {} }; },
+    stage: async () => "/g/token-h.new-1",
+    commit: async () => { committed = true; },
+    discard: async (f) => { discarded = f; },
+    forget: async () => ({ tokenFileRemoved: false }),
+  });
+  await expect(use.rotate("h", { confirm: "h" })).rejects.toThrow("did not take the new token");
+  expect(committed).toBe(false);
+  expect(discarded).toBe("/g/token-h.new-1");
+  expect(calls).toContain("new /api/whoami");
+});
+
+test("a host that took the token while the gateway could not switch to it gets a message naming the staged file", async () => {
+  const { gatewayHostUseCases } = await import("./application/gateway-hosts.ts");
+  const use = gatewayHostUseCases({
+    known: () => ({ name: "H", url: "https://h" }),
+    tokenFile: async () => ({ file: "/g/token-h", own: true }),
+    bearer: () => "old",
+    newToken: () => "new",
+    call: async (_u, _t, path) => path === "/api/whoami" ? { status: 200, body: { principal: "gw" } } : { status: 200, body: { replaced: true } },
+    stage: async () => "/g/token-h.new-2",
+    commit: async () => { throw new Error("disk full"); },
+    discard: async () => { throw new Error("must not discard"); },
+    forget: async () => ({ tokenFileRemoved: false }),
+  });
+  const err = await use.rotate("h", { confirm: "h" }).catch((e) => e as Error);
+  expect(err.message).toContain("took the new token but the gateway could not switch to it (disk full)");
+  expect(err.message).toContain("/g/token-h.new-2");
 });

@@ -23,7 +23,7 @@ export class FileAgentTokens implements AgentTokens {
       if (out !== null) writeAtomic(this.file, out);
       // Loaded under the lock from the text on disk, so a slower reload of an earlier change can never
       // bring back a line a later change removed.
-      this.auth.replace(new Auth(parseTokens(out ?? text)));
+      if (out !== null) this.auth.replace(new Auth(parseTokens(out)));
     });
   }
 

@@ -748,4 +748,10 @@ test("a token refusal the gateway relays as upstream_forbidden reads as not chan
   await b.click({ host: "a" });
   expect(b.element("newTokenBox").hidden).toBe(true);
   expect(b.element("newTokenText").textContent).toBe("");
+  // Picking a session on the other host also switches host, so it clears the shown token too.
+  await rotate();
+  expect(b.element("newTokenText").textContent).toBe("T".repeat(43));
+  await b.click({ host: "c", session: "s" });
+  await b.click({ host: "a", session: "s" });
+  expect(b.element("newTokenText").textContent).toBe("");
 });

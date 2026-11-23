@@ -927,6 +927,7 @@ document.addEventListener("click", (e) => {
   if (b.dataset.answer) { void answer(b.dataset.host!, b.dataset.request!, b.dataset.answer, Number(b.dataset.revision)); return; }
   if (b.id === "inspectorToggle") { setInspector(!inspectorOpen); return; }
   if (b.dataset.host && b.dataset.session) {
+    if (b.dataset.host !== fleet.selectedHost) for (const v of adminViews.values()) v.newToken = "";
     apply(selectSession(fleet, b.dataset.host, b.dataset.session));
     render();
   } else if (b.dataset.host) {
