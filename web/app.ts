@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseService, parseSettings, parseTokens, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -43,6 +43,8 @@ const WRITE_TIMEOUT_MS = 15000;
 // An update downloads, backs up, starts a scratch copy and swaps; ten minutes covers it with room.
 const SERVICE_POLL_MS = 3000;
 const SERVICE_POLLS = 200;
+// The gateway gives a watchdog start 60 s; the page waits a little longer.
+const WATCHDOG_TIMEOUT_MS = 65000;
 const SHOWN_COMMANDS = 6;
 
 // One call to one host. A 401 from a single host service means this page has no sign-in: go to /login.
@@ -734,6 +736,19 @@ function renderAdmin(h: HostState | undefined) {
     const j = s.running ?? s.jobs[0];
     $("serviceSteps").innerHTML = j ? `<li><strong>${esc(j.action === "update" ? `Update to ${j.tag}` : "Restart")} · ${esc(j.state)}</strong> · ${esc(j.by)} · ${esc(j.startedAt)}</li>${j.steps.map((x) => `<li>${esc(x)}</li>`).join("")}` : "";
   }
+  $("watchdogPart").hidden = v.watchdog === null;
+  if (v.watchdog) {
+    const w = v.watchdog;
+    $("watchdogState").textContent = (!w.manager ? "This host has neither launchd nor systemd." : w.running && w.inTmux ? `On: ${w.name} runs (pid ${w.pid}), and a second watchdog runs by hand in tmux session ${w.fleet}-watchdog. Stop that one with fleet watchdog stop.` : w.running ? `On: ${w.name} runs (pid ${w.pid}). It checks every agent every 60 s and starts again at login.` : w.inTmux ? `Off as a service. A watchdog started by hand runs in tmux session ${w.fleet}-watchdog.` : w.inTmux === null ? "Off as a service." : `Off: no watchdog checks the agents of ${w.fleet}.`) + (w.inTmux === null ? ` Cannot tell whether a watchdog runs in tmux: ${w.inTmuxError ?? "tmux did not answer"}.` : "");
+    const wc = $("watchdogConfirm") as HTMLInputElement;
+    if (wc.value !== v.watchdogConfirm) wc.value = v.watchdogConfirm;
+    const wg = watchdogGate(v);
+    $("watchdogGate").textContent = wg.reason;
+    const go = $("watchdogGo") as HTMLButtonElement;
+    go.textContent = wg.on ? "Turn on" : "Turn off";
+    go.classList.toggle("danger", !wg.on);
+    go.disabled = !wg.ok;
+  }
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
 }
 
@@ -781,6 +796,9 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
     // Service restart and update: hidden where the host does not offer them.
     const sv = await hostCall(host, "/service");
     v.service = sv.outcome.ok ? parseService(sv.outcome.data) : null;
+    // Watchdog: hidden where the host does not offer it.
+    const wd = await hostCall(host, "/watchdog");
+    v.watchdog = wd.outcome.ok ? parseWatchdog(wd.outcome.data) : null;
   }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }
@@ -846,6 +864,24 @@ async function runService(hostId: string) {
   }
   v.notice = `${host.name}: ${action} ${id} has not ended after ${Math.round(SERVICE_POLLS * SERVICE_POLL_MS / 60000)} min; its steps show where it is.`;
   renderAdmin(selectedHostState(fleet));
+}
+
+async function setWatchdog(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  const g = watchdogGate(v);
+  if (!host || !g.ok) return;
+  v.busy = true; v.notice = `${g.on ? "Starting" : "Stopping"} the watchdog on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/watchdog", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ on: g.on, confirm: v.watchdogConfirm }),
+  }, WATCHDOG_TIMEOUT_MS);
+  v.busy = false; v.watchdogConfirm = "";
+  const read = outcome.ok ? parseWatchdog(outcome.data) : null;
+  if (read) { v.watchdog = read; v.notice = `${host.name}: watchdog ${read.running ? "on" : "off"}.`; }
+  else v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the watchdog is ${g.on ? "on" : "off"}; read it again.` : `${host.name}: watchdog not ${g.on ? "started" : "stopped"}: ${outcome.ok ? "malformed answer" : outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+  if (!read) await refreshAdmin(hostId);
 }
 
 async function saveSettings(hostId: string) {
@@ -1148,6 +1184,7 @@ adminField("setRoots", (v, x) => { v.settingsDraft.agentRoots = x; });
 adminField("setModels", (v, x) => { v.settingsDraft.agentModels = x; });
 adminField("setDsh", (v, x) => { v.settingsDraft.agentDshModels = x; });
 adminField("setMcp", (v, x) => { v.settingsDraft.agentMcpUrl = x; });
+adminField("watchdogConfirm", (v, x) => { v.watchdogConfirm = x; });
 adminField("settingsConfirm", (v, x) => { v.settingsConfirm = x; });
 $("setInput").addEventListener("change", () => {
   const h = selectedHostState(fleet);
@@ -1165,7 +1202,7 @@ $("newTokenDone").addEventListener("click", () => { const h = selectedHostState(
 $("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
 $("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
 $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService]] as const) {
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 $("confReload").addEventListener("click", () => {

@@ -100,6 +100,10 @@
                 <label for="serviceConfirm" id="serviceConfirmLabel">Type restart to confirm</label><input id="serviceConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="serviceGate"></span><button type="button" id="serviceGo" class="destructive" disabled>Restart</button></div>
                 <ol class="servicesteps" id="serviceSteps"></ol>
+              <div class="adminpart" id="watchdogPart" hidden><div class="sectionheading"><h4>Watchdog</h4></div>
+                <p class="fineprint" id="watchdogState"></p>
+                <label for="watchdogConfirm">Type watchdog to confirm</label><input id="watchdogConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="watchdogGate"></span><button type="button" id="watchdogGo" disabled>Turn on</button></div>
               </div>
               <p id="adminStatus" role="status"></p>
             </details>
