@@ -1340,3 +1340,40 @@ test("host part: hidden on a host without it", async () => {
   for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("infraPart").hidden).toBe(true);
 });
+
+test("service: the page waits past the gateway's 60 s for restart, update and the release list, so a slow GitHub is not an unknown outcome", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const now = "a".repeat(40), next = "b".repeat(40);
+  const job = { id: "upd-20261123T120000Z-0000abcd", action: "update", tag: "v2", commit: next, by: "op", state: "running", steps: [], startedAt: "2026-11-23T12:00:00Z", endedAt: null };
+  const service = { current: { commit: now, tag: "v1" }, unavailable: null, releaseError: null, running: null, jobs: [], releases: [{ tag: "v2", commit: next, publishedAt: "x" }] };
+  const waits: number[] = [];
+  const timeout = AbortSignal.timeout;
+  const order: string[] = [];
+  AbortSignal.timeout = (ms: number) => { waits.push(ms); return timeout.call(AbortSignal, ms); };
+  try {
+    const timers: { fn: () => void; ms: number }[] = [];
+    const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+      if (path.endsWith("/fleet/conf")) return conf;
+      if (path.includes("/service")) { order.push(`${init?.method ?? "GET"} ${path}`); }
+      if (path.includes("/service/") && init?.method === "POST") return { __status: 202, job };
+      if (path.endsWith("/service")) return service;
+      if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 404 };
+      return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+    }, [], timers);
+    const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+    await settle();
+    const set = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+    await set("serviceAction", "update", "change");
+    await set("serviceTag", "v2", "change");
+    await set("serviceConfirm", "v2");
+    waits.length = 0;
+    await b.listeners.get("serviceGo:click")!({});
+    await settle();
+    timers.splice(0).find((t) => t.ms === 3000)!.fn();
+    await settle();
+    // The POST and the poll that follows it each waited at least 60 s.
+    expect(order.slice(-2)).toEqual(["POST /api/hosts/a/service/update", "GET /api/hosts/a/service"]);
+    expect(waits.length).toBeGreaterThanOrEqual(2);
+    expect(Math.min(...waits.slice(0, 2))).toBeGreaterThan(60_000);
+  } finally { AbortSignal.timeout = timeout; }
+});

@@ -140,6 +140,8 @@ export const MAX_VIEWERS = 16;
 export const RESTART_IDLE_SECONDS = 200;
 // A watchdog start: unload wait, bootstrap retries, settle, cleanup on failure. The gateway waits 60 s.
 export const WATCHDOG_IDLE_SECONDS = 70;
+// The gateway gives restart and update 60 s, since they ask GitHub first; the host keeps the connection a little longer.
+export const SERVICE_IDLE_SECONDS = 70;
 // A certificate renewal or a restart of another service (docker compose may take a while). The gateway waits 190 s.
 export const INFRA_IDLE_SECONDS = 200;
 
@@ -426,14 +428,16 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
       },
       // Restart or update this service through the separate updater process.
       "/api/service": {
-        GET: guard(async (_req, _s, who) => {
+        GET: guard(async (req, srv, who) => {
           const u = updatesFor(who);
           if (!u) return noUpdates();
+          // A cold release list from GitHub can take longer than Bun's default 10 s idle limit.
+          srv.timeout(req, SERVICE_IDLE_SECONDS);
           try { return Response.json(await u.get(), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
         }),
       },
-      "/api/service/restart": { POST: guard((req, _s, who) => serviceJob(req, who, "restart")) },
-      "/api/service/update": { POST: guard((req, _s, who) => serviceJob(req, who, "update")) },
+      "/api/service/restart": { POST: guard((req, srv, who) => { srv.timeout(req, SERVICE_IDLE_SECONDS); return serviceJob(req, who, "restart"); }) },
+      "/api/service/update": { POST: guard((req, srv, who) => { srv.timeout(req, SERVICE_IDLE_SECONDS); return serviceJob(req, who, "update"); }) },
       // The tokens file: operator only. Names and roles, never hashes.
       "/api/settings": {
         GET: guard(async (_req, _s, who) => {

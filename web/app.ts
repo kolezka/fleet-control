@@ -43,6 +43,8 @@ const WRITE_TIMEOUT_MS = 15000;
 // An update downloads, backs up, starts a scratch copy and swaps; ten minutes covers it with room.
 const SERVICE_POLL_MS = 3000;
 const SERVICE_POLLS = 200;
+// The gateway waits 60 s for restart and update and for the release list (the host asks GitHub first).
+const SERVICE_TIMEOUT_MS = 65000;
 // The gateway gives a watchdog start 60 s; the page waits a little longer.
 const WATCHDOG_TIMEOUT_MS = 65000;
 // The gateway gives a renewal or a service restart 190 s; the page waits a little longer.
@@ -932,7 +934,7 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
       else { v.settings = read; v.settingsDraft = draftOf(read.next); v.settingsChangedOnHost = false; }
     } else if (!dirty) { v.settings = null; v.settingsChangedOnHost = false; }
     // Service restart and update: hidden where the host does not offer them.
-    const sv = await hostCall(host, "/service");
+    const sv = await hostCall(host, "/service", {}, SERVICE_TIMEOUT_MS);
     v.service = sv.outcome.ok ? parseService(sv.outcome.data) : null;
     // Watchdog: hidden where the host does not offer it.
     const wd = await hostCall(host, "/watchdog");
@@ -981,7 +983,7 @@ async function runService(hostId: string) {
   const body = action === "restart" ? { confirm: v.serviceConfirm } : { tag: v.serviceTag, confirm: v.serviceConfirm };
   v.busy = true; v.notice = action === "restart" ? `Restarting ${host.name}` : `Updating ${host.name} to ${v.serviceTag}`;
   renderAdmin(selectedHostState(fleet));
-  const { status, outcome } = await hostCall(host, `/service/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, WRITE_TIMEOUT_MS);
+  const { status, outcome } = await hostCall(host, `/service/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, SERVICE_TIMEOUT_MS);
   v.busy = false; v.serviceConfirm = "";
   const id = outcome.ok ? ((outcome.data as { job?: { id?: unknown } }).job?.id) : undefined;
   if (typeof id !== "string") {
@@ -993,7 +995,7 @@ async function runService(hostId: string) {
   renderAdmin(selectedHostState(fleet));
   for (let i = 0; i < SERVICE_POLLS; i++) {
     await new Promise((r) => setTimeout(r, SERVICE_POLL_MS));
-    const sv = await hostCall(host, "/service");
+    const sv = await hostCall(host, "/service", {}, SERVICE_TIMEOUT_MS);
     const read = sv.outcome.ok ? parseService(sv.outcome.data) : null;
     if (!read) { v.notice = `${host.name}: ${action} ${id} running; the service is not answering yet.`; renderAdmin(selectedHostState(fleet)); continue; }
     v.service = read;

@@ -3,11 +3,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, renameSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "./auth.ts";
 import { Store } from "./data/store.ts";
 import { serve } from "./server.ts";
-import { startGateway, loadGatewayConfig } from "./client-gateway.ts";
+import { Credentials, startGateway, loadGatewayConfig } from "./client-gateway.ts";
 import { detectManager, HostUpdates } from "./update-host.ts";
 import { checkJobRequest } from "./domain/updates.ts";
 import type { JobFile, Manager } from "./domain/updates.ts";
@@ -317,3 +318,30 @@ test("review round 3: putting a replaced lock back never overwrites a lock a thi
   expect(readdirSync(jobs).filter((f) => f.startsWith("lock.stale-"))).toEqual([]);
   expect(launched).toHaveLength(0);
 });
+
+test("the gateway waits for an update that first asks a slow GitHub, instead of answering 504 after its usual 10 s", async () => {
+  const dir2 = await mkdtemp(join(tmpdir(), "fleet-control-svc-slow-"));
+  const op = newToken();
+  await writeFile(join(dir2, "tokens"), `${tokenLine("op", op, "operator")}\n`);
+  const commit = "c".repeat(40);
+  const release = { tag: "v9", commit, publishedAt: "x", url: "https://github.com/x", sha256Url: "https://github.com/x.sha256" };
+  const job = { id: "upd-20261123T120000Z-0000abcd", action: "update" as const, tag: "v9", commit, by: "op", state: "starting" as const, steps: [], startedAt: "2026-11-23T12:00:00Z", endedAt: null };
+  const slow = {
+    current: () => ({ commit: "a".repeat(40), tag: "v1" }), unavailable: () => null,
+    // A cold release list took 9.3 s on .4 and the tag lookup 4.7 s more; both a little slower here.
+    releases: async () => { await Bun.sleep(11_000); return [release]; },
+    tagCommit: async () => { await Bun.sleep(5_000); return commit; },
+    jobs: async () => [], start: async () => job,
+  };
+  const server = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store: new Store(":memory:"), updates: { host: slow } }, 0, { auth: await Auth.fromFile(join(dir2, "tokens")) });
+  const gw = startGateway({ hosts: [{ id: "h", name: "H", origin: server.url.origin }], credentials: new Credentials(new Map([["h", op]])) }, { port: 0 });
+  try {
+    const r = await fetch(`${gw.url.origin}/api/hosts/h/service/update`, { method: "POST", headers: { origin: gw.url.origin, "content-type": "application/json" }, body: JSON.stringify({ tag: "v9", confirm: "v9" }) });
+    expect(r.status).toBe(202);
+    expect((await r.json()).job.id).toBe(job.id);
+    // The read that lists releases waits for the cold list too.
+    const g = await fetch(`${gw.url.origin}/api/hosts/h/service`);
+    expect(g.status).toBe(200);
+    expect((await g.json()).releases.map((x: { tag: string }) => x.tag)).toEqual(["v9"]);
+  } finally { gw.stop(true); server.stop(true); await rm(dir2, { recursive: true, force: true }); }
+}, 60_000);
