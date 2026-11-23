@@ -65,7 +65,10 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       // The page sends every setting; the file keeps only those that differ from the plist or unit, and only
       // those are checked, so a plist value the page cannot set (an empty model list) does not block a save.
       const base = settingsOf(deps.baseEnv);
-      const sent = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : settings;
+      const raw = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : settings;
+      // fleetConf comes back as read; only Move fleet changes it. Checked against the file below.
+      const sentConf = raw && typeof raw === "object" && Object.hasOwn(raw, "fleetConf") ? (raw as Record<string, unknown>).fleetConf : undefined;
+      const sent = raw && typeof raw === "object" ? Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k]) => k !== "fleetConf")) : raw;
       const changed = sent && typeof sent === "object" && !Array.isArray(sent)
         ? Object.fromEntries(Object.entries(sent).filter(([k, x]) => !Object.hasOwn(base, k) || JSON.stringify(x) !== JSON.stringify(base[k as keyof typeof base])))
         : sent;
@@ -79,7 +82,10 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       return serial(async () => {
         const current = await deps.file.read();
         if (settingsRevision(current) !== revision) throw new AdminError("conflict", "the settings file changed on the host since you read it; reload and edit again");
-        const text = `${JSON.stringify(next, null, 2)}\n`;
+        // A moved fleet's fleet.conf stays: the form does not show it, and dropping it would move the fleet back.
+        const kept = parseSettingsFile(current).fleetConf;
+        if (sentConf !== undefined && sentConf !== (kept ?? base.fleetConf)) throw new AdminError("invalid", "fleetConf changes only through Move fleet");
+        const text = `${JSON.stringify(kept === undefined ? next : { ...next, fleetConf: kept }, null, 2)}\n`;
         if (!(await deps.file.write(current, text))) throw new AdminError("conflict", "the settings file changed on the host during the save; nothing was written. Reload and edit again");
         return view(text);
       });

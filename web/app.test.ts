@@ -1378,3 +1378,53 @@ test("service: the page waits past the gateway's 60 s for restart and update, an
     for (const p of [parsed[0]!, parsed[2]!]) expect(p.ms).toBeGreaterThan(20_000);
   } finally { AbortSignal.timeout = timeout; }
 });
+
+test("move fleet: blockers are named, every field and the typed word are needed, and the page follows the move job to its end", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const now = "a".repeat(40);
+  const job = { id: "upd-20261123T120000Z-0000beef", action: "move", tag: null, commit: null, by: "op", state: "running", steps: ["t fleet folder copied"], startedAt: "2026-11-23T12:00:00Z", endedAt: null as string | null };
+  let service: Record<string, unknown> = { current: { commit: now, tag: "v1" }, unavailable: null, releaseError: null, running: null, jobs: [], releases: [] };
+  let move: Record<string, unknown> = { from: { fleet: "old", dir: "/srv/fleets/old", socket: "fleet-old" }, unavailable: null, blockers: ["stop the managed agents first: fc-a"] };
+  let posted = null as { path: string; body: unknown } | null;
+  const timers: { fn: () => void; ms: number }[] = [];
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/fleet/move") && init?.method === "POST") { posted = { path, body: JSON.parse(String(init.body)) }; return { __status: 202, job }; }
+    if (path.endsWith("/fleet/move")) return move;
+    if (path.endsWith("/service")) return service;
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 404 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  }, [], timers);
+  const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await settle();
+  expect(b.element("movePart").hidden).toBe(false);
+  expect(b.element("moveFrom").textContent).toBe("Now: fleet old in /srv/fleets/old, tmux socket fleet-old. Blocked: stop the managed agents first: fc-a.");
+  const set = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  await set("moveFleet", "new"); await set("moveDir", "/srv/fleets/new"); await set("moveSocket", "fleet-new"); await set("moveConfirm", "move");
+  expect([b.element("moveGo").disabled, b.element("moveGate").textContent]).toEqual([true, "Not now: stop the managed agents first: fc-a"]);
+  move = { ...move, blockers: [] };
+  await b.listeners.get("confReload:click")!({});
+  await settle();
+  await set("moveDir", "/srv");
+  expect(b.element("moveGate").textContent).toBe("The folder must be an absolute path at least two levels deep");
+  await set("moveDir", "/srv/fleets/old"); await set("moveFleet", "old"); await set("moveSocket", "fleet-old");
+  expect(b.element("moveGate").textContent).toBe("That is where the fleet is now");
+  await set("moveFleet", "new"); await set("moveDir", "/srv/fleets/new"); await set("moveSocket", "fleet-new"); await set("moveConfirm", "mov");
+  expect([b.element("moveGo").disabled, b.element("moveGate").textContent]).toEqual([true, "Type move to confirm"]);
+  await set("moveConfirm", "move");
+  expect(b.element("moveGo").disabled).toBe(false);
+  await b.listeners.get("moveGo:click")!({});
+  await settle();
+  expect(posted).toEqual({ path: "/api/hosts/a/fleet/move", body: { fleet: "new", dir: "/srv/fleets/new", socket: "fleet-new", confirm: "move" } });
+  expect(b.element("adminStatus").textContent).toBe(`A: move started (${job.id}).`);
+  service = { ...service, running: job, jobs: [job] };
+  timers.splice(0).find((t) => t.ms === 3000)!.fn();
+  await settle();
+  expect(b.element("moveGate").textContent).toBe("Moving the fleet: wait for it to end");
+  expect(b.element("serviceSteps").innerHTML).toContain("Move fleet · running");
+  const ended = { ...job, state: "done", endedAt: "2026-11-23T12:01:00Z", steps: [...job.steps, "t the service answers with fleet new in /srv/fleets/new"] };
+  service = { ...service, running: null, jobs: [ended] };
+  timers.splice(0).find((t) => t.ms === 3000)!.fn();
+  await settle();
+  expect(b.element("adminStatus").textContent).toBe("A: move done. t the service answers with fleet new in /srv/fleets/new");
+});

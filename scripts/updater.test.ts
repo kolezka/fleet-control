@@ -3,7 +3,7 @@
 // swaps, and rolls back to the old folder and database when the new code does not come up for real.
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -278,3 +278,80 @@ test("review round 4: a rollback stop that reports an error leaves the database 
   expect(rows).toEqual([{ v: "before" }, { v: "written by the new release" }]);
   expect(readFileSync(`${s.conf}.sync`, "utf8").trim().split("\n").map((l) => l.slice(0, 1))).toEqual(["7", "a"]);
 }, 150_000);
+
+// A stand-in service that, like index.ts, takes FLEET_CONF from the settings file and says which one it runs.
+async function moveSetup(name: string, rule: string) {
+  const base = join(root, name);
+  const dir = join(base, "service");
+  mkdirSync(base, { recursive: true });
+  const settings = join(base, "settings.json");
+  const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\nw(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ fleetConf: conf, startedAt: new Date().toISOString() }));`;
+  serviceCode(dir, "a".repeat(40), take);
+  const old = join(base, "fleets", "old");
+  mkdirSync(old, { recursive: true });
+  const conf = join(old, "fleet.conf");
+  writeFileSync(conf, `FLEET=old\nFLEET_DIR=${old}\nFLEET_TMUX_SOCKET=fleet-old\nAGENTS=()\n`, { mode: 0o640 });
+  writeFileSync(join(old, "fleet.conf.bak-20261101T000000Z-aaaaaaaa"), "old backup\n");
+  writeFileSync(join(old, "probe.txt"), "probe\n");
+  writeFileSync(settings, `${JSON.stringify({ input: true })}\n`, { mode: 0o600 });
+  const tokens = join(base, "tokens"); writeFileSync(tokens, "op abc operator\n", { mode: 0o600 });
+  const port = free();
+  const env = { PATH: process.env.PATH!, HOME: process.env.HOME!, PORT: String(port), FLEET_CONF: conf };
+  const manager = { kind: "test" as const, pidFile: join(base, "pid"), env, log: join(base, "service.log") };
+  managers.push(manager);
+  await startService(manager, dir);
+  const health = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 100 && !(await fetch(`${health}/api/whoami`).then((r) => r.status === 401, () => false)); i++) await Bun.sleep(100);
+  const jobs = join(base, "updates"); mkdirSync(jobs);
+  const to = { fleet: "prod", dir: join(base, "fleets", "prod"), socket: "fleet-prod" };
+  const data: JobFile = {
+    id: "upd-20261123T120000Z-0000abcd", action: "move", tag: null, commit: null, packageUrl: null, sha256Url: null, by: "op", state: "starting", steps: [], startedAt: new Date().toISOString(), endedAt: null, pid: null,
+    service: { dir, manager, db: null, files: [tokens, conf, settings], fleetConf: conf, rollbackRoot: base, health, env, waits: { scratch: 8, start: 8 } },
+    move: { from: { fleet: "old", dir: old, socket: "fleet-old" }, to, settingsFile: settings },
+  };
+  const f = join(jobs, `${data.id}.json`);
+  writeFileSync(f, JSON.stringify(data));
+  return { base, old, conf, settings, to, job: Job.read(f), health };
+}
+
+test("move: the fleet folder is copied, the copy's fleet.conf gets the new values, the settings file names it, and the restarted service runs it", async () => {
+  const s = await moveSetup("move-ok", "");
+  const before = readFileSync(s.conf, "utf8");
+  await runJob(s.job);
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("done");
+  expect(after.steps.at(-1)).toContain(`with fleet prod in ${s.to.dir}; the old folder ${s.old} is unchanged`);
+  const moved = join(s.to.dir, "fleet.conf");
+  expect(readFileSync(moved, "utf8")).toBe(`FLEET=prod\nFLEET_DIR=${s.to.dir}\nFLEET_TMUX_SOCKET=fleet-prod\nAGENTS=()\n`);
+  expect((statSync(moved).mode & 0o777).toString(8)).toBe("640");
+  expect(readdirSync(s.to.dir).sort()).toEqual(["fleet.conf", "fleet.conf.sync", "probe.txt"]);
+  // fleet sync ran for the new fleet.conf, not the old one.
+  expect(readFileSync(`${moved}.sync`, "utf8")).toContain("a synced");
+  expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true, fleetConf: moved });
+  expect(JSON.parse(readFileSync(`${s.settings}.running`, "utf8")).fleetConf).toBe(moved);
+  // The old folder is as it was.
+  expect(readFileSync(s.conf, "utf8")).toBe(before);
+  expect(readdirSync(s.old).sort()).toEqual(["fleet.conf", "fleet.conf.bak-20261101T000000Z-aaaaaaaa", "probe.txt"]);
+}, 60_000);
+
+test("move: a service that comes back on the old fleet.conf counts as a failed move, and the settings file goes back", async () => {
+  // This stand-in ignores the settings file, as index.ts does when it skips a file it cannot use.
+  const s = await moveSetup("move-skip", "conf = process.env.FLEET_CONF!;");
+  await runJob(s.job);
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("rolled_back");
+  expect(after.steps.join("\n")).toContain(`the service started on ${s.conf}, not ${join(s.to.dir, "fleet.conf")}; settings file put back`);
+  expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true });
+  expect(await fetch(`${s.health}/api/whoami`).then((r) => r.status)).toBe(401);
+}, 60_000);
+
+test("move: a target folder that filled up after the check is refused before anything stops", async () => {
+  const s = await moveSetup("move-used", "");
+  mkdirSync(s.to.dir, { recursive: true }); writeFileSync(join(s.to.dir, "x"), "x");
+  const pid = readFileSync(join(s.base, "pid"), "utf8");
+  await runJob(s.job);
+  const after = Job.read(s.job.file).data;
+  expect([after.state, after.steps.at(-1)?.replace(/^\S+ /, "")]).toEqual(["failed", `${s.to.dir} exists and is not empty; nothing moved`]);
+  expect(readFileSync(join(s.base, "pid"), "utf8")).toBe(pid);
+  expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true });
+}, 60_000);

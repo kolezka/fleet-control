@@ -46,6 +46,11 @@ export type AdminView = {
   serviceAction: "restart" | "update";
   serviceTag: string;
   serviceConfirm: string;
+  move: MoveRead | null;
+  moveFleet: string;
+  moveDir: string;
+  moveSocket: string;
+  moveConfirm: string;
   // agent-fleet's watchdog as a host service: null until read; hosts without it hide the part.
   watchdog: WatchdogRead | null;
   // The file editor: the allowed folders (null: the host has no editor), the folder or file open now, the draft.
@@ -73,7 +78,7 @@ export type SettingsRead = { path: string; revision: string; running: SettingsVa
 // One text field per list (one entry per line), as typed.
 export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
-export type ServiceJob = { id: string; action: "restart" | "update"; tag: string | null; commit: string | null; by: string; state: string; steps: string[]; startedAt: string; endedAt: string | null };
+export type ServiceJob = { id: string; action: "restart" | "update" | "move"; tag: string | null; commit: string | null; by: string; state: string; steps: string[]; startedAt: string; endedAt: string | null };
 export type ServiceRead = {
   current: { commit: string | null; tag: string | null };
   unavailable: string | null;
@@ -156,6 +161,7 @@ export const emptyAdmin = (): AdminView => ({
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
   service: null, serviceAction: "restart", serviceTag: "", serviceConfirm: "",
+  move: null, moveFleet: "", moveDir: "", moveSocket: "", moveConfirm: "",
   watchdog: null, watchdogConfirm: "",
   infra: null, infraService: "", infraConfirm: "",
   fileRoots: null, fileOpen: null, filePath: "", fileDraft: "", fileConfirm: "", fileNew: false, fileChangedOnHost: false, fileLeaving: "",
@@ -362,7 +368,7 @@ export function fileGate(v: AdminView): { ok: boolean; reason: string } {
 const job = (x: unknown): ServiceJob | null => {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  if (typeof o.id !== "string" || (o.action !== "restart" && o.action !== "update") || typeof o.state !== "string" || !strings(o.steps) || typeof o.startedAt !== "string") return null;
+  if (typeof o.id !== "string" || (o.action !== "restart" && o.action !== "update" && o.action !== "move") || typeof o.state !== "string" || !strings(o.steps) || typeof o.startedAt !== "string") return null;
   const s = (v: unknown) => (typeof v === "string" ? v : null);
   return { id: o.id, action: o.action, tag: s(o.tag), commit: s(o.commit), by: String(o.by ?? ""), state: o.state, steps: o.steps, startedAt: o.startedAt, endedAt: s(o.endedAt) };
 };
@@ -391,7 +397,7 @@ export function serviceGate(v: AdminView): { ok: boolean; reason: string } {
   if (v.busy) return { ok: false, reason: "Working…" };
   if (!s) return { ok: false, reason: "Read the service first" };
   if (s.unavailable) return { ok: false, reason: s.unavailable };
-  if (s.running) return { ok: false, reason: `${s.running.action === "update" ? `Updating to ${s.running.tag}` : "Restarting"}: wait for it to end` };
+  if (s.running) return { ok: false, reason: `${jobLabel(s.running)}: wait for it to end` };
   if (v.serviceAction === "update") {
     const r = s.releases.find((x) => x.tag === v.serviceTag);
     if (!r) return { ok: false, reason: s.releases.length ? "Choose a release" : "No release with a package yet" };
@@ -400,4 +406,46 @@ export function serviceGate(v: AdminView): { ok: boolean; reason: string } {
   const word = serviceWord(v);
   if (v.serviceConfirm !== word) return { ok: false, reason: `Type ${word} to confirm` };
   return { ok: true, reason: v.serviceAction === "restart" ? "Restarts the service; the page reconnects when it is back" : `Backs up, installs ${v.serviceTag}, and rolls back if it does not start` };
+}
+
+// What a running or finished updater job is, in a few words.
+export const jobLabel = (j: ServiceJob) => (j.action === "update" ? `Updating to ${j.tag}` : j.action === "move" ? "Moving the fleet" : "Restarting");
+
+// Move fleet: where the fleet is now, whether this host can move it, and what still blocks a move.
+export type MoveTargetRead = { fleet: string; dir: string; socket: string };
+export type MoveRead = { from: MoveTargetRead; unavailable: string | null; blockers: string[] };
+
+const moveTarget = (x: unknown): MoveTargetRead | null => {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  return typeof o.fleet === "string" && typeof o.dir === "string" && typeof o.socket === "string" ? { fleet: o.fleet, dir: o.dir, socket: o.socket } : null;
+};
+
+export function parseMove(body: unknown): MoveRead | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
+  const from = moveTarget(o.from);
+  if (!from || !strings(o.blockers)) return null;
+  return { from, unavailable: typeof o.unavailable === "string" ? o.unavailable : null, blockers: o.blockers };
+}
+
+const MOVE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+const MOVE_SOCKET = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MOVE_DIR = /^\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)+\/?$/;
+
+export function moveGate(v: AdminView): { ok: boolean; reason: string } {
+  const m = v.move;
+  if (v.busy) return { ok: false, reason: "Working…" };
+  if (!m) return { ok: false, reason: "Read the fleet first" };
+  if (m.unavailable) return { ok: false, reason: m.unavailable };
+  if (v.service?.running) return { ok: false, reason: `${jobLabel(v.service.running)}: wait for it to end` };
+  if (m.blockers.length) return { ok: false, reason: `Not now: ${m.blockers.join("; ")}` };
+  if (!MOVE_NAME.test(v.moveFleet.trim())) return { ok: false, reason: "The fleet name takes letters, digits, - and _" };
+  const dir = v.moveDir.trim();
+  if (!MOVE_DIR.test(dir) || dir.split("/").some((x) => x === "." || x === "..")) return { ok: false, reason: "The folder must be an absolute path at least two levels deep" };
+  if (!MOVE_SOCKET.test(v.moveSocket.trim())) return { ok: false, reason: "The socket takes letters, digits, ., - and _" };
+  const to = { fleet: v.moveFleet.trim(), dir: dir.replace(/\/+$/, ""), socket: v.moveSocket.trim() };
+  if (to.fleet === m.from.fleet && to.dir === m.from.dir && to.socket === m.from.socket) return { ok: false, reason: "That is where the fleet is now" };
+  if (v.moveConfirm !== "move") return { ok: false, reason: "Type move to confirm" };
+  return { ok: true, reason: `Copies ${m.from.dir} to ${to.dir}, restarts the service on it, and goes back if it does not start; the old folder stays` };
 }

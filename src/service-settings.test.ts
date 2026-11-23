@@ -43,7 +43,7 @@ test("settings are checked: known keys only, plain folders, model names, an MCP 
   // The file's values go over the plist's; what it leaves out stays.
   const env = settingsEnv({ FLEET_CONTROL_AGENT_ROOTS: "/x", FLEET_CONTROL_INPUT: "1", OTHER: "o" }, { agentModels: ["opus"], input: false });
   expect([env.FLEET_CONTROL_AGENT_ROOTS, env.FLEET_CONTROL_AGENT_MODELS, env.FLEET_CONTROL_INPUT, env.OTHER]).toEqual(["/x", "opus", "", "o"]);
-  expect(settingsOf({ FLEET_CONTROL_AGENT_ROOTS: "/x:/y" })).toEqual({ agentRoots: ["/x", "/y"], agentModels: ["sonnet", "opus", "haiku"], agentDshModels: [], agentMcpUrl: null, input: false });
+  expect(settingsOf({ FLEET_CONTROL_AGENT_ROOTS: "/x:/y" })).toEqual({ agentRoots: ["/x", "/y"], agentModels: ["sonnet", "opus", "haiku"], agentDshModels: [], agentMcpUrl: null, input: false, fleetConf: "" });
 });
 
 test("a save needs an operator, the typed confirm and the read revision, and a setting the service would refuse is not written", async () => {

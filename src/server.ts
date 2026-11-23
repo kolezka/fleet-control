@@ -22,6 +22,7 @@ import { adminUseCases, type AdminDeps } from "./application/fleet-admin.ts";
 import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./application/token-admin.ts";
 import { settingsUseCases, type SettingsDeps } from "./application/settings.ts";
 import { updateUseCases, type UpdateHost } from "./application/updates.ts";
+import { moveUseCases, type MoveDeps } from "./application/move.ts";
 import { watchdogUseCases, type WatchdogDeps } from "./application/watchdog.ts";
 import { infraUseCases, type InfraDeps } from "./application/infra.ts";
 import { filesUseCases, type FilesDeps } from "./application/files.ts";
@@ -120,7 +121,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/files" | "/api/infra" | "/api/infra/renew" | "/api/infra/services/:name/restart" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/fleet/move" | "/api/files" | "/api/infra" | "/api/infra/renew" | "/api/infra/services/:name/restart" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -166,7 +167,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; files?: FilesDeps; infra?: InfraDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; move?: MoveDeps; files?: FilesDeps; infra?: InfraDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -212,6 +213,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   if (deps.files && !auth) throw new Error("the file editor needs tokens; set FLEET_CONTROL_TOKENS");
   const filesFor = (who: Principal | null) => (deps.files ? filesUseCases(deps.files, who ?? undefined) : null);
   const noFiles = () => Response.json({ error: { kind: "unavailable", message: "the file editor is not set up on this host" } }, { status: 503 });
+  const moveFor = (who: Principal | null) => (deps.move ? moveUseCases(deps.move, who ?? undefined) : null);
+  const noMove = () => Response.json({ error: { kind: "unavailable", message: "moving the fleet is not set up on this host" } }, { status: 503 });
+  if (deps.move && !auth) throw new Error("moving the fleet needs tokens; set FLEET_CONTROL_TOKENS");
   const noWatchdog = () => Response.json({ error: { kind: "unavailable", message: "the watchdog service is not configured on this host" } }, { status: 503 });
   if (deps.infra && !auth) throw new Error("the infrastructure part needs tokens; set FLEET_CONTROL_TOKENS");
   const infraFor = (who: Principal | null) => (deps.infra ? infraUseCases(deps.infra, who ?? undefined) : null);
@@ -494,6 +498,25 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const body = await jsonBody(req);
             if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
             return Response.json(await w.set(body));
+          } catch (e) { return adminError(e); }
+        }),
+      },
+      // Move fleet: a new name, folder and tmux socket, carried out by the updater (it restarts the service).
+      "/api/fleet/move": {
+        GET: guard(async (_req, _s, who) => {
+          const m = moveFor(who);
+          if (!m) return noMove();
+          try { return Response.json(await m.get(), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
+        }),
+        POST: guard(async (req, _s, who) => {
+          const m = moveFor(who);
+          if (!m) return noMove();
+          if (!originAllowed(req)) return forbidden();
+          if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await m.move(body), { status: 202 });
           } catch (e) { return adminError(e); }
         }),
       },

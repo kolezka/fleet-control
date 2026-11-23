@@ -2,7 +2,7 @@
 // cases check who asks and what, and hand a job to it.
 import { AdminError } from "../domain/fleet-admin.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
-import { checkJobRequest, JOB_FINAL, type JobAction, type Release, type UpdateJob } from "../domain/updates.ts";
+import { checkJobRequest, JOB_FINAL, type JobAction, type JobFile, type Release, type UpdateJob } from "../domain/updates.ts";
 
 export type UpdateHost = {
   // The commit the running code was built from, and the release tag if it came from one.
@@ -14,7 +14,7 @@ export type UpdateHost = {
   tagCommit(tag: string): Promise<string>;
   jobs(): Promise<UpdateJob[]>;
   // Writes the job and starts the updater. Throws AdminError conflict while another job runs.
-  start(action: JobAction, release: Release | null, by: string): Promise<UpdateJob>;
+  start(action: JobAction, release: Release | null, by: string, move?: JobFile["move"]): Promise<UpdateJob>;
 };
 
 export function updateUseCases(deps: { host: UpdateHost }, caller?: Caller) {

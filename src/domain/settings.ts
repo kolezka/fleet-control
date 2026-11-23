@@ -10,8 +10,10 @@ export type ServiceSettings = {
   agentDshModels?: string[];
   agentMcpUrl?: string | null;
   input?: boolean;
+  // The fleet.conf the service runs, written only by Move fleet (the page's settings form never sends it).
+  fleetConf?: string;
 };
-export const SETTING_KEYS = ["agentRoots", "agentModels", "agentDshModels", "agentMcpUrl", "input"] as const;
+export const SETTING_KEYS = ["agentRoots", "agentModels", "agentDshModels", "agentMcpUrl", "input", "fleetConf"] as const;
 export const SETTINGS_CONFIRM = "settings";
 // The environment variable each setting stands in for.
 export const SETTING_ENV: Record<(typeof SETTING_KEYS)[number], string> = {
@@ -20,7 +22,10 @@ export const SETTING_ENV: Record<(typeof SETTING_KEYS)[number], string> = {
   agentDshModels: "FLEET_CONTROL_AGENT_DSH_MODELS",
   agentMcpUrl: "FLEET_CONTROL_AGENT_MCP_URL",
   input: "FLEET_CONTROL_INPUT",
+  fleetConf: "FLEET_CONF",
 };
+// A fleet.conf the move wrote: a plain absolute path to a file named fleet.conf.
+export const FLEET_CONF_PATH = /^\/[A-Za-z0-9._\/-]{1,250}\/fleet\.conf$/;
 const ROOT = /^\/[A-Za-z0-9._\/-]+$/;
 const MAX_ITEMS = 32;
 
@@ -61,6 +66,11 @@ export function checkSettings(input: unknown): ServiceSettings {
     if (typeof o.input !== "boolean") throw new AdminError("invalid", "input must be true or false");
     out.input = o.input;
   }
+  if (o.fleetConf !== undefined) {
+    if (typeof o.fleetConf !== "string" || !FLEET_CONF_PATH.test(o.fleetConf) || o.fleetConf.split("/").some((p) => p === "." || p === ".."))
+      throw new AdminError("invalid", "fleetConf must be a plain absolute path to a fleet.conf");
+    out.fleetConf = o.fleetConf;
+  }
   return out;
 }
 
@@ -72,6 +82,7 @@ export function settingsEnv(env: Record<string, string | undefined>, s: ServiceS
   if (s.agentDshModels) out.FLEET_CONTROL_AGENT_DSH_MODELS = s.agentDshModels.join(",");
   if (s.agentMcpUrl !== undefined) out.FLEET_CONTROL_AGENT_MCP_URL = s.agentMcpUrl ?? "";
   if (s.input !== undefined) out.FLEET_CONTROL_INPUT = s.input ? "1" : "";
+  if (s.fleetConf !== undefined) out.FLEET_CONF = s.fleetConf;
   return out;
 }
 
@@ -102,5 +113,6 @@ export function settingsOf(env: Record<string, string | undefined>): Required<Se
     agentDshModels: split(env.FLEET_CONTROL_AGENT_DSH_MODELS, ","),
     agentMcpUrl: env.FLEET_CONTROL_AGENT_MCP_URL?.trim() || null,
     input: env.FLEET_CONTROL_INPUT === "1",
+    fleetConf: env.FLEET_CONF ?? "",
   };
 }
