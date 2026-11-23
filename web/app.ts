@@ -674,9 +674,12 @@ function renderAdmin(h: HostState | undefined) {
   $("hostGate").textContent = hg.reason;
   ($("hostRotate") as HTMLButtonElement).disabled = !hg.ok;
   ($("hostRemove") as HTMLButtonElement).disabled = !hg.ok;
-  $("settingsPart").hidden = v.settings === null;
+  $("settingsPart").hidden = v.settings === null && v.settingsError === "";
+  $("settingsError").textContent = v.settingsError ? `The settings file cannot be used: ${v.settingsError}` : v.settings?.skipped ? `This start skipped the settings file: ${v.settings.skipped}` : "";
+  $("settingsError").hidden = $("settingsError").textContent === "";
+  $("settingsForm").hidden = v.settings === null;
   if (v.settings) {
-    $("settingsPath").textContent = `Kept in ${v.settings.path}. The service reads it when it starts; the running service keeps what it started with.`;
+    $("settingsPath").textContent = `Kept in ${v.settings.path}. The service reads it when it starts; the running service keeps what it started with. The file keeps only what differs from the service's plist or unit.`;
     for (const [id, value] of [["setRoots", v.settingsDraft.agentRoots], ["setModels", v.settingsDraft.agentModels], ["setDsh", v.settingsDraft.agentDshModels], ["setMcp", v.settingsDraft.agentMcpUrl], ["settingsConfirm", v.settingsConfirm]] as const) {
       const el = $(id) as HTMLInputElement;
       if (el.value !== value) el.value = value;
@@ -717,9 +720,13 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
     // Settings: hidden where the host does not offer them. An unsaved edit stays through a refresh.
     const st = await hostCall(host, "/settings");
     const read = st.outcome.ok ? parseSettings(st.outcome.data) : null;
-    const clean = !v.settings || JSON.stringify(settingsBody(v.settingsDraft)) === JSON.stringify(settingsBody(draftOf(v.settings.next)));
-    if (read && (clean || read.revision === v.settings?.revision)) { if (clean) v.settingsDraft = draftOf(read.next); v.settings = read; }
-    else if (!read) v.settings = null;
+    const dirty = keepDraft && v.settings !== null && JSON.stringify(settingsBody(v.settingsDraft)) !== JSON.stringify(settingsBody(draftOf(v.settings.next)));
+    v.settingsError = !st.outcome.ok && st.status === 400 ? st.outcome.message : "";
+    if (read) {
+      // Like fleet.conf: an unsaved edit keeps the revision it was made from; only Reload or a clean draft moves on.
+      if (dirty) { v.settingsChangedOnHost = read.revision !== v.settings!.revision; if (!v.settingsChangedOnHost) v.settings = read; }
+      else { v.settings = read; v.settingsDraft = draftOf(read.next); v.settingsChangedOnHost = false; }
+    } else if (!dirty) { v.settings = null; v.settingsChangedOnHost = false; }
   }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }
@@ -763,7 +770,10 @@ async function saveSettings(hostId: string) {
   if (read) {
     v.settings = read; v.settingsDraft = draftOf(read.next);
     v.notice = `${host.name}: settings saved. ${read.restartNeeded.length ? "They apply when the service restarts." : "Nothing to restart for."}`;
-  } else v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the settings were saved.` : `${host.name}: settings not saved: ${outcome.ok ? "malformed answer" : outcome.message}`;
+  } else {
+    if (status === 409) v.settingsChangedOnHost = true;
+    v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the settings were saved.` : `${host.name}: settings not saved: ${outcome.ok ? "malformed answer" : outcome.message}`;
+  }
   renderAdmin(selectedHostState(fleet));
 }
 

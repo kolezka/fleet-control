@@ -75,13 +75,30 @@ export function settingsEnv(env: Record<string, string | undefined>, s: ServiceS
   return out;
 }
 
+// What the file holds: only the settings that differ from the service's own environment, so a later plist or
+// unit change to any other setting still takes effect.
+export function settingsDiff(base: Required<ServiceSettings>, wanted: Required<ServiceSettings>): ServiceSettings {
+  const out: Record<string, unknown> = {};
+  for (const k of SETTING_KEYS) if (JSON.stringify(base[k]) !== JSON.stringify(wanted[k])) out[k] = wanted[k];
+  return out as ServiceSettings;
+}
+
+// Agent models, DSH models and the MCP address do nothing without agent folders; refuse them rather than
+// show them as taking effect.
+export function checkNeedsRoots(next: Required<ServiceSettings>, saved: ServiceSettings): void {
+  if (next.agentRoots.length) return;
+  const idle = (["agentModels", "agentDshModels", "agentMcpUrl"] as const).filter((k) => saved[k] !== undefined && saved[k] !== null && !(Array.isArray(saved[k]) && (saved[k] as string[]).length === 0));
+  if (idle.length) throw new AdminError("invalid", `${idle.join(", ")} need agent folders; set agentRoots too, or leave ${idle.length > 1 ? "them" : "it"} as the service has ${idle.length > 1 ? "them" : "it"}`);
+}
+
 // The settings as the running service took them from its environment, in the file's shape.
 export function settingsOf(env: Record<string, string | undefined>): Required<ServiceSettings> {
   const split = (v: string | undefined, sep: string) => (v ?? "").split(sep).map((x) => x.trim()).filter(Boolean);
   const roots = split(env.FLEET_CONTROL_AGENT_ROOTS, ":");
   return {
     agentRoots: roots,
-    agentModels: roots.length ? (env.FLEET_CONTROL_AGENT_MODELS === undefined ? ["sonnet", "opus", "haiku"] : split(env.FLEET_CONTROL_AGENT_MODELS, ",")) : split(env.FLEET_CONTROL_AGENT_MODELS, ","),
+    // The service's own default when the variable is unset, with or without folders.
+    agentModels: env.FLEET_CONTROL_AGENT_MODELS === undefined ? ["sonnet", "opus", "haiku"] : split(env.FLEET_CONTROL_AGENT_MODELS, ","),
     agentDshModels: split(env.FLEET_CONTROL_AGENT_DSH_MODELS, ","),
     agentMcpUrl: env.FLEET_CONTROL_AGENT_MCP_URL?.trim() || null,
     input: env.FLEET_CONTROL_INPUT === "1",

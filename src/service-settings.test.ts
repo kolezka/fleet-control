@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newToken, tokenLine } from "./auth.ts";
 import { settingsUseCases, settingsRevision, type SettingsFile } from "./application/settings.ts";
-import { checkSettings, settingsEnv, settingsOf } from "./domain/settings.ts";
+import { checkSettings, settingsDiff, settingsEnv, settingsOf } from "./domain/settings.ts";
 import { AdminError } from "./domain/fleet-admin.ts";
 import { HostSettingsFile, settingsPath } from "./settings-file.ts";
 
@@ -50,7 +50,7 @@ test("a save needs an operator, the typed confirm and the read revision, and a s
   let text: string | null = null;
   const file: SettingsFile = { path: "/s/settings.json", read: async () => text, write: async (expected, t) => { if (expected !== text) return false; text = t; return true; } };
   const running = settingsOf({ FLEET_CONTROL_AGENT_ROOTS: "/r" });
-  const deps = { file, baseEnv: { FLEET_CONTROL_AGENT_ROOTS: "/r" }, running, check: (env: Record<string, string | undefined>) => { if (env.FLEET_CONTROL_AGENT_ROOTS === "/nope") throw new Error("no such folder"); } };
+  const deps = { file, baseEnv: { FLEET_CONTROL_AGENT_ROOTS: "/r" }, running, check: async (env: Record<string, string | undefined>) => { if (env.FLEET_CONTROL_AGENT_ROOTS === "/nope") throw new Error("no such folder"); } };
   for (const role of ["agent", "viewer"] as const) expect((await fail(settingsUseCases(deps, { name: "x", role }).get())).constructor.name).toBe("RoleError");
   const use = settingsUseCases(deps, { name: "op", role: "operator" });
   const first = await use.get();
@@ -147,4 +147,77 @@ test("the settings file is replaced only if it still holds what was read, and li
   expect(settingsPath({ FLEET_CONTROL_TOKENS: "/c/fc/tokens", FLEET_CONTROL_SETTINGS: "/other/s.json" })).toBe("/other/s.json");
   expect(settingsPath({})).toBeNull();
   expect(() => settingsPath({ FLEET_CONTROL_SETTINGS: "rel.json" })).toThrow("FLEET_CONTROL_SETTINGS must be an absolute path");
+});
+
+test("review fixes: a host without agent folders can save, the file keeps only what differs, idle agent settings and a start check failure are refused", async () => {
+  // No folders and no model list in the plist: the page shows the service's default models and sends them back.
+  expect(settingsOf({}).agentModels).toEqual(["sonnet", "opus", "haiku"]);
+  let text: string | null = null;
+  const file: SettingsFile = { path: "/s/settings.json", read: async () => text, write: async (expected, t) => { if (expected !== text) return false; text = t; return true; } };
+  let refuse = "";
+  const deps = { file, baseEnv: {}, running: settingsOf({}), check: async () => { if (refuse) throw new Error(refuse); } };
+  const use = settingsUseCases(deps, { name: "op", role: "operator" });
+  const first = await use.get();
+  // No file has its own revision, never the one of an empty file.
+  expect(first.revision).not.toBe(settingsRevision(""));
+  const all = { ...settingsOf({}), input: true };
+  const saved = await use.save({ settings: all, revision: first.revision, confirm: "settings" });
+  expect(JSON.parse(text!)).toEqual({ input: true });
+  expect([saved.restartNeeded, saved.next.agentModels]).toEqual([["input"], ["sonnet", "opus", "haiku"]]);
+  expect(settingsDiff(settingsOf({ FLEET_CONTROL_AGENT_ROOTS: "/r" }), settingsOf({ FLEET_CONTROL_AGENT_ROOTS: "/r", FLEET_CONTROL_INPUT: "1" }))).toEqual({ input: true });
+  // Models, DSH models or an MCP address without folders would do nothing.
+  for (const [extra, names] of [[{ agentModels: ["haiku"] }, "agentModels"], [{ agentDshModels: ["p/m"] }, "agentDshModels"], [{ agentMcpUrl: "http://127.0.0.1:1/mcp" }, "agentMcpUrl"]] as const) {
+    const e = await fail(use.save({ settings: { ...all, ...extra }, revision: saved.revision, confirm: "settings" }));
+    expect(e.message.startsWith(`${names} need agent folders`)).toBe(true);
+  }
+  // The start's own checks (here: terminal input on a remote fleet) refuse the save up front.
+  refuse = "terminal input needs a local fleet (REMOTE_SSH is set)";
+  const e = await fail(use.save({ settings: { ...all, input: false }, revision: saved.revision, confirm: "settings" }));
+  expect(e.message).toBe("the service would not start with these settings: terminal input needs a local fleet (REMOTE_SSH is set)");
+  expect(JSON.parse(text!)).toEqual({ input: true });
+});
+
+test("review fixes on the real service: input on a fleet it cannot type into is refused on save, skipped at start with the reason shown, and the file is ignored without fleet administration", async () => {
+  const d = join(dir, "remote");
+  await mkdir(d, { recursive: true });
+  const op = newToken();
+  await writeFile(join(d, "tokens"), `${tokenLine("op", op, "operator")}\n`, { mode: 0o600 });
+  await writeFile(join(d, "fleet.conf"), `FLEET=settings-remote-${process.pid}\nFLEET_DIR=${d}\nREMOTE_SSH=me@example.invalid\nAGENTS=()\n`);
+  const start = async (admin: string) => {
+    const port = await freePort();
+    const proc = Bun.spawn(["bun", "index.ts"], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, PORT: String(port), FLEET_CONF: join(d, "fleet.conf"), FLEET_CONTROL_DB: join(d, "state.db"), FLEET_CONTROL_TOKENS: join(d, "tokens"), FLEET_CONTROL_ADMIN: admin, FLEET_CONTROL_AGENT_ROOTS: "", FLEET_CONTROL_INPUT: "", FLEET_CONTROL_SETTINGS: "" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    procs.push(proc);
+    const base = `http://127.0.0.1:${port}`;
+    for (let i = 0; i < 100; i++) {
+      if (proc.exitCode !== null) throw new Error(`service exited ${proc.exitCode}: ${await new Response(proc.stderr as ReadableStream).text()}`);
+      try { if ((await fetch(`${base}/api/whoami`, { headers: { authorization: `Bearer ${op}` } })).ok) return { base, proc }; } catch { await Bun.sleep(100); }
+    }
+    proc.kill();
+    throw new Error("service did not start");
+  };
+  const call = (base: string, path: string, init: RequestInit = {}) => fetch(`${base}/api${path}`, { ...init, headers: { authorization: `Bearer ${op}`, "content-type": "application/json", origin: base } });
+  let s = await start("1");
+  const read = await (await call(s.base, "/settings")).json();
+  const put = await call(s.base, "/settings", { method: "PUT", body: JSON.stringify({ settings: { ...read.next, input: true }, revision: read.revision, confirm: "settings" }) });
+  expect([put.status, (await put.json()).error.message]).toEqual([400, "the service would not start with these settings: terminal input needs a local fleet (REMOTE_SSH is set)"]);
+  s.proc.kill(); await s.proc.exited;
+  // Written by hand anyway: the service still starts, without input, and the page is told why.
+  await writeFile(join(d, "settings.json"), "{\"input\": true}\n", { mode: 0o600 });
+  s = await start("1");
+  const now = await (await call(s.base, "/settings")).json();
+  expect([now.running.input, now.skipped]).toEqual([false, "terminal input needs a local fleet (REMOTE_SSH is set)"]);
+  expect((await call(s.base, "/leases")).status).toBe(503);
+  s.proc.kill(); await s.proc.exited;
+  // Without fleet administration the file is not read at all (nothing on the page shows or edits it).
+  await writeFile(join(d, "fleet.conf"), `FLEET=settings-remote-${process.pid}\nFLEET_DIR=${d}\nAGENTS=()\n`);
+  s = await start("");
+  expect((await call(s.base, "/leases")).status).toBe(503);
+  s.proc.kill(); await s.proc.exited;
+  s = await start("1");
+  expect((await call(s.base, "/leases")).status).toBe(200);
+  s.proc.kill(); await s.proc.exited;
 });

@@ -38,21 +38,32 @@ const unknown = commands.reconcileAfterRestart();
 if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
 // Settings saved from the page (a JSON file beside the tokens file) override the plist's or unit's values.
-// A file that does not parse is skipped with a message, so a bad save can never keep the page from starting.
+// Only with fleet administration on: that is where the page shows and edits them. A file that does not load,
+// or that the start below could not use, is skipped with a message, so a bad save never keeps the page down.
 const baseEnv: Record<string, string | undefined> = { ...process.env };
-const settingsFile = (() => { try { return settingsPath(baseEnv); } catch (e) { console.error(`${e instanceof Error ? e.message : e}`); process.exit(1); } })();
+const settingsFile = process.env.FLEET_CONTROL_ADMIN === "1"
+  ? (() => { try { return settingsPath(baseEnv); } catch (e) { console.error(`${e instanceof Error ? e.message : e}`); process.exit(1); } })()
+  : null;
+// The checks a start runs on these settings, beyond parsing: managed agents' values, and a fleet that terminal
+// input can use. A save from the page runs them too.
+const startCheck = async (next: Record<string, string | undefined>) => {
+  agentSettingsFromEnv(next);
+  if (next.FLEET_CONTROL_INPUT === "1") { await fleetSocket(confPath); findTmux(); }
+};
 let env = baseEnv;
+let settingsSkipped: string | null = null;
 if (settingsFile) {
   try {
     const text = HostSettingsFile.readSync(settingsFile);
     if (text !== null) {
       const next = settingsEnv(baseEnv, parseSettingsFile(text));
-      agentSettingsFromEnv(next);
+      await startCheck(next);
       env = next;
       console.log(`settings from ${settingsFile}`);
     }
   } catch (e) {
-    console.error(`settings file ${settingsFile} skipped: ${e instanceof Error ? e.message : e}`);
+    settingsSkipped = e instanceof Error ? e.message : String(e);
+    console.error(`settings file ${settingsFile} skipped: ${settingsSkipped}`);
   }
 }
 const options = await serveOptionsFromEnv();
@@ -121,9 +132,8 @@ const deps = {
       file: new HostSettingsFile(settingsFile),
       baseEnv,
       running: settingsOf(env),
-      check: (next: Record<string, string | undefined>) => {
-        if (agentSettingsFromEnv(next) && !options.auth) throw new Error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
-      },
+      skipped: settingsSkipped,
+      check: startCheck,
     }
     : undefined,
   agents: agentSettings

@@ -805,3 +805,45 @@ test("a host without service settings hides the part", async () => {
   expect(b.element("adminBox").hidden).toBe(false);
   expect(b.element("settingsPart").hidden).toBe(true);
 });
+
+test("service settings review fixes: a broken file is named, a skipped file is named, and a draft whose file changed on the host waits for Reload", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const running = { agentRoots: [], agentModels: ["sonnet", "opus", "haiku"], agentDshModels: [], agentMcpUrl: null, input: false };
+  let answer: unknown = { __status: 400, error: { kind: "invalid", message: "the settings file is not JSON; fix or remove it on the host" } };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings") && init?.method === "PUT") return { __status: 409, error: { kind: "conflict", message: "the settings file changed on the host since you read it; reload and edit again" } };
+    if (path.endsWith("/settings")) return answer;
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await settle();
+  expect([b.element("settingsPart").hidden, b.element("settingsError").hidden, b.element("settingsForm").hidden]).toEqual([false, false, true]);
+  expect(b.element("settingsError").textContent).toBe("The settings file cannot be used: the settings file is not JSON; fix or remove it on the host");
+  // Fixed on the host, but this start skipped it.
+  answer = { path: "/c/settings.json", revision: "b".repeat(64), saved: {}, running, next: running, restartNeeded: [], skipped: "terminal input needs a local fleet (REMOTE_SSH is set)" };
+  await b.listeners.get("confReload:click")!({});
+  await settle();
+  expect([b.element("settingsForm").hidden, b.element("settingsError").textContent]).toEqual([false, "This start skipped the settings file: terminal input needs a local fleet (REMOTE_SSH is set)"]);
+  expect(b.element("setModels").value).toBe("sonnet\nopus\nhaiku");
+  // An unsaved edit, then the file moves on the host: a background refresh keeps the edit and blocks the save.
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  answer = { ...(answer as object), revision: "c".repeat(64), skipped: null };
+  await b.click({ host: "a" });
+  await settle();
+  expect([b.element("setInput").checked, b.element("settingsGate").textContent, b.element("settingsSave").disabled]).toEqual([true, "The settings file changed on the host; copy your edit, then Reload", true]);
+  // Reload takes the host's file and clears the edit.
+  await b.listeners.get("confReload:click")!({});
+  await settle();
+  expect([b.element("setInput").checked, b.element("settingsGate").textContent]).toEqual([false, "No changes"]);
+  // A 409 on save blocks the save too.
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  b.element("settingsConfirm").value = "settings";
+  await b.listeners.get("settingsConfirm:input")!({});
+  await b.listeners.get("settingsSave:click")!({});
+  await settle();
+  expect(b.element("settingsGate").textContent).toBe("The settings file changed on the host; copy your edit, then Reload");
+});

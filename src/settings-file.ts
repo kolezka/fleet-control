@@ -26,7 +26,7 @@ export class HostSettingsFile implements SettingsFile {
       });
     } catch (e) {
       // Another change holds the lock: nothing written, the reason goes to the operator.
-      if (e instanceof AuthConfigError) throw new AdminError("conflict", e.message);
+      if (e instanceof AuthConfigError) throw new AdminError("conflict", `${e.message}. Nothing was written; if no other change is running, remove ${this.path}.lock on the host`);
       throw e;
     }
     return wrote;

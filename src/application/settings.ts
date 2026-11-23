@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { AdminError } from "../domain/fleet-admin.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
-import { checkSettings, settingsEnv, settingsOf, SETTINGS_CONFIRM, type ServiceSettings } from "../domain/settings.ts";
+import { checkNeedsRoots, checkSettings, settingsDiff, settingsEnv, settingsOf, SETTINGS_CONFIRM, type ServiceSettings } from "../domain/settings.ts";
 
 export type SettingsFile = {
   path: string;
@@ -20,11 +20,15 @@ export type SettingsDeps = {
   baseEnv: Record<string, string | undefined>;
   // The settings the running service started with.
   running: Required<ServiceSettings>;
-  // Throws when the service would not start with this environment (the same check index.ts runs).
-  check(env: Record<string, string | undefined>): void;
+  // Throws when the service would not start with this environment, or would start without part of it
+  // (the same checks index.ts runs at start).
+  check(env: Record<string, string | undefined>): Promise<void>;
+  // Why the file was skipped at this start, or null when it was taken (or absent).
+  skipped?: string | null;
 };
 
-export const settingsRevision = (text: string | null) => createHash("sha256").update(text ?? "").digest("hex");
+// No file has its own revision, so it never equals the revision of an empty file.
+export const settingsRevision = (text: string | null) => (text === null ? "0".repeat(64) : createHash("sha256").update(text).digest("hex"));
 
 export function parseSettingsFile(text: string | null): ServiceSettings {
   if (text === null) return {};
@@ -43,7 +47,7 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
     const saved = parseSettingsFile(text);
     const next = settingsOf(settingsEnv(deps.baseEnv, saved));
     const differs = (Object.keys(next) as (keyof typeof next)[]).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(deps.running[k]));
-    return { path: deps.file.path, revision: settingsRevision(text), saved, running: deps.running, next, restartNeeded: differs };
+    return { path: deps.file.path, revision: settingsRevision(text), saved, base: settingsOf(deps.baseEnv), running: deps.running, next, restartNeeded: differs, skipped: deps.skipped ?? null };
   };
   return {
     async get() {
@@ -58,9 +62,12 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       if (extra.length) throw new AdminError("invalid", `unknown field ${extra[0]}`);
       if (typeof revision !== "string" || !/^[0-9a-f]{64}$/.test(revision)) throw new AdminError("invalid", "revision must be the 64-hex revision the settings were read at");
       if (confirm !== SETTINGS_CONFIRM) throw new AdminError("invalid", `type ${SETTINGS_CONFIRM} to confirm`);
-      const next = checkSettings(settings);
+      // The page sends every setting; the file keeps only those that differ from the plist or unit.
+      const full = settingsOf(settingsEnv(deps.baseEnv, checkSettings(settings)));
+      const next = settingsDiff(settingsOf(deps.baseEnv), full);
+      checkNeedsRoots(full, next);
       // A file the service could not start with would take the page down at the next restart.
-      try { deps.check(settingsEnv(deps.baseEnv, next)); } catch (e) {
+      try { await deps.check(settingsEnv(deps.baseEnv, next)); } catch (e) {
         throw new AdminError("invalid", `the service would not start with these settings: ${e instanceof Error ? e.message : e}`);
       }
       return serial(async () => {
