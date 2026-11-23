@@ -54,6 +54,13 @@
                 <label for="restartSession">Session</label><select id="restartSession"></select>
                 <label for="restartConfirm">Type the session name to confirm</label><input id="restartConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="restartGate"></span><button type="button" id="restartGo" class="destructive" disabled>Restart</button></div>
+                <div id="startPart" hidden>
+                  <p class="fineprint" id="startSource"></p>
+                  <label for="startCommand">Start command (empty opens the default shell)</label><input id="startCommand" autocomplete="off" spellcheck="false">
+                  <label for="startCwd">Folder</label><input id="startCwd" autocomplete="off" spellcheck="false">
+                  <label for="startConfirm">Type the session name to save</label><input id="startConfirm" autocomplete="off" spellcheck="false">
+                  <div class="composerfooter"><button type="button" id="startRemove" disabled>Forget saved command</button><span id="startGate"></span><button type="button" id="startSave" disabled>Save start command</button></div>
+                </div>
               </div>
               <div class="adminpart"><div class="sectionheading"><h4>Logs</h4></div>
                 <div class="composerfooter"><select id="logSource" aria-label="Log"><option value="watchdog">Watchdog</option><option value="service">Service</option></select><button type="button" id="logRead">Show last 200 lines</button></div>

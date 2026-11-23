@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { adminUseCases, revisionOf, type ConfFacts, type FleetHost } from "./fleet-admin.ts";
+import { adminUseCases, revisionOf, type ConfFacts, type FleetHost, type PaneStart } from "./fleet-admin.ts";
+import { Store } from "../data/store.ts";
+import { SessionStarts } from "../data/session-starts.ts";
 import { AdminError, MANAGED_INCLUDE } from "../domain/fleet-admin.ts";
 
 const BASE = `FLEET=t\nFLEET_DIR=/f\nAGENTS=("probe-shell|Probe|p.txt")\n${MANAGED_INCLUDE}\n`;
@@ -7,7 +9,7 @@ const BASE = `FLEET=t\nFLEET_DIR=/f\nAGENTS=("probe-shell|Probe|p.txt")\n${MANAG
 // A host whose file lives in memory. facts() reads FLEET, FLEET_DIR and the session names the way bash would for these simple files.
 function fakeHost(initial = BASE) {
   const calls: string[] = [];
-  const state = { text: initial, backups: [] as string[], restartOk: true, restartStage: "start" as "kill" | "start" | "timeout", logs: "", managed: [] as string[] };
+  const state = { text: initial, backups: [] as string[], restartOk: true, restartStage: "start" as "kill" | "start" | "timeout", logs: "", managed: [] as string[], panes: [] as PaneStart[] };
   const facts = (text: string): ConfFacts => {
     if (text.includes("exit 7")) throw new Error("sourcing it failed");
     const get = (k: string) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1] ?? "";
@@ -20,7 +22,8 @@ function fakeHost(initial = BASE) {
     facts: async (t) => facts(t),
     replace: async (current, t) => { calls.push("replace"); expect(current).toBe(state.text); state.backups.push(state.text); state.text = t; return `/f/fleet.conf.bak-${state.backups.length}`; },
     log: async (source, lines) => { calls.push(`log ${source} ${lines}`); return state.logs; },
-    restart: async (s, socket) => { calls.push(`restart ${s} ${socket}`); return state.restartOk ? { ok: true, output: `${s}: started\n` } : { ok: false, stage: state.restartStage, output: state.restartStage === "kill" ? "tmux kill-session failed: permission denied" : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
+    panes: async () => state.panes,
+    restart: async (s, socket, start) => { calls.push(`restart ${s} ${socket}${start ? ` [${start.cwd}] ${start.command}` : ""}`); return state.restartOk ? { ok: true, output: `${s}: started\n` } : { ok: false, stage: state.restartStage, output: state.restartStage === "kill" ? "tmux kill-session failed: permission denied" : `${s}: start FAILED: claude UI not detected after 90 s\n` }; },
   };
   return { host, state, calls };
 }
@@ -101,7 +104,7 @@ test("a restart takes a fleet.conf session typed in full, never a managed agent,
     ["probe-shell", {}, "invalid", "type probe-shell to confirm the restart"],
     ["probe-shell", { confirm: "probe" }, "invalid", "type probe-shell to confirm the restart"],
     ["fc-x", { confirm: "fc-x" }, "invalid", "fc-x is a managed agent; stop and start it from the agent list"],
-    ["nobody", { confirm: "nobody" }, "not_found", "nobody is not a session in fleet.conf"],
+    ["nobody", { confirm: "nobody" }, "not_found", "nobody is not in fleet.conf, not running on the fleet's tmux server and has no saved start command"],
     ["../x", { confirm: "../x" }, "invalid", "bad session name"],
   ];
   for (const [s, body, kind, message] of refusals) {
@@ -161,4 +164,94 @@ test("a save that keeps the include line last but loses a managed agent is refus
   const e = await fail(use.saveConf({ text: BASE.replace("AGENTS=(", "# DROP\nAGENTS=("), revision: revisionOf(BASE), confirm: "fleet.conf" }));
   expect(e.message).toBe("this edit drops the managed agents fc-a; keep the managed agents line last and do not reset AGENTS after it");
   expect(calls).toEqual([]);
+});
+
+test("a session that is not in fleet.conf restarts with the command an operator saved for it", async () => {
+  const { host, state, calls } = fakeHost();
+  const starts = new SessionStarts(new Store(":memory:").db);
+  const now = () => new Date("2026-11-23T01:00:00Z");
+  const use = adminUseCases({ host, starts, now }, operator);
+  // probe-shell is in fleet.conf; hand is only running on the fleet's tmux server; fc-a is an agent and never listed.
+  state.panes = [{ session: "probe-shell", command: "exec cat", cwd: "/f" }, { session: "hand", command: "", cwd: "/w" }, { session: "fc-a", command: "claude", cwd: "/a" }];
+  expect(await use.sessions()).toEqual({ starts: true, sessions: [
+    { session: "hand", inConf: false, running: true, saved: null, pane: { command: "", cwd: "/w" } },
+    { session: "probe-shell", inConf: true, running: true, saved: null, pane: { command: "exec cat", cwd: "/f" } },
+  ] });
+  // Without a saved command a session outside fleet.conf cannot come back: fleet start would not know it.
+  let e = await fail(use.restart("hand", { confirm: "hand" }));
+  expect([e.kind, e.message]).toEqual(["invalid", "hand has no saved start command and is not in fleet.conf; save its start command first"]);
+  const refusals: [string, unknown, string, string][] = [
+    ["hand", { command: "x", cwd: "/w" }, "invalid", "type hand to confirm the start command"],
+    ["hand", { command: "x", cwd: "w", confirm: "hand" }, "invalid", "folder must be an absolute path on the host"],
+    ["hand", { command: "a\nb", cwd: "/w", confirm: "hand" }, "invalid", "command must be one line without control characters"],
+    ["hand", { command: "x".repeat(1001), cwd: "/w", confirm: "hand" }, "invalid", "command may be at most 1000 characters"],
+    ["hand", { command: "x", cwd: "/w", confirm: "hand", env: {} }, "invalid", "unknown field env"],
+    ["fc-a", { command: "x", cwd: "/w", confirm: "fc-a" }, "invalid", "fc-a is a managed agent; stop and start it from the agent list"],
+    ["ghost", { command: "x", cwd: "/w", confirm: "ghost" }, "not_found", "ghost is not in fleet.conf and not running on the fleet's tmux server"],
+  ];
+  for (const [s, body, kind, message] of refusals) {
+    const r = await fail(use.saveStart(s, body));
+    expect([r.kind, r.message]).toEqual([kind, message]);
+  }
+  expect(starts.list()).toEqual([]);
+  const saved = await use.saveStart("hand", { command: "  exec sleep 600 ", cwd: "/w", confirm: "hand" });
+  expect(saved).toEqual({ saved: { session: "hand", command: "exec sleep 600", cwd: "/w", savedBy: "op", savedAt: "2026-11-23T01:00:00.000Z" } });
+  expect(await use.restart("hand", { confirm: "hand" })).toEqual({ session: "hand", output: "hand: started\n" });
+  // A saved session stays restartable after it died: it is still listed.
+  state.panes = [];
+  expect((await use.sessions()).sessions.map((r) => [r.session, r.running, r.saved?.command ?? null])).toEqual([["hand", false, "exec sleep 600"], ["probe-shell", false, null]]);
+  expect(await use.restart("hand", { confirm: "hand" })).toEqual({ session: "hand", output: "hand: started\n" });
+  // A fleet.conf session starts with fleet start; no start command is kept for it.
+  e = await fail(use.saveStart("probe-shell", { command: "exec cat", cwd: "/f", confirm: "probe-shell" }));
+  expect([e.kind, e.message]).toEqual(["invalid", "probe-shell is in fleet.conf; it restarts with fleet start, so change its start in fleet.conf"]);
+  await use.restart("probe-shell", { confirm: "probe-shell" });
+  e = await fail(use.removeStart("hand", "han"));
+  expect(e.message).toBe("type hand to confirm removing its start command");
+  expect(await use.removeStart("hand", "hand")).toEqual({ removed: "hand" });
+  expect((await fail(use.removeStart("hand", "hand"))).kind).toBe("not_found");
+  expect(calls).toEqual(["restart hand fleet-t [/w] exec sleep 600", "restart hand fleet-t [/w] exec sleep 600", "restart probe-shell fleet-t"]);
+  // Only an operator sees or changes saved starts.
+  for (const role of ["agent", "viewer"] as const) {
+    const other = adminUseCases({ host, starts, now }, { name: "x", role });
+    expect((await fail(other.sessions())).constructor.name).toBe("RoleError");
+    expect((await fail(other.saveStart("hand", { command: "x", cwd: "/w", confirm: "hand" }))).constructor.name).toBe("RoleError");
+    expect((await fail(other.removeStart("hand", "hand"))).constructor.name).toBe("RoleError");
+  }
+  // A host without the store says so instead of pretending.
+  const bare = adminUseCases({ host }, operator);
+  expect((await bare.sessions()).starts).toBe(false);
+  expect((await fail(bare.saveStart("hand", { command: "x", cwd: "/w", confirm: "hand" }))).message).toBe("saved start commands are not set up on this host");
+});
+
+test("review fixes: an empty socket offers only fleet.conf names, and a start saved before a session joined fleet.conf is not used", async () => {
+  const { host, state, calls } = fakeHost(BASE.replace("FLEET=t\n", "FLEET=t\nFLEET_TMUX_SOCKET=\n"));
+  const starts = new SessionStarts(new Store(":memory:").db);
+  starts.save({ session: "other", command: "exec cat", cwd: "/w", savedBy: "op", savedAt: "x" });
+  const realFacts = host.facts;
+  host.facts = async (t) => ({ ...(await realFacts(t)), socket: "" });
+  let paneReads = 0;
+  host.panes = async () => { paneReads++; return [{ session: "tv-x", command: "x", cwd: "/" }]; };
+  const use = adminUseCases({ host, starts }, operator);
+  // tmux's default server is shared with sessions outside the fleet: it is not read, and saved starts are not offered.
+  expect((await use.sessions()).sessions.map((r) => r.session)).toEqual(["probe-shell"]);
+  expect(paneReads).toBe(0);
+  expect((await fail(use.restart("tv-x", { confirm: "tv-x" }))).kind).toBe("not_found");
+  expect((await fail(use.restart("other", { confirm: "other" }))).kind).toBe("not_found");
+  const e = await fail(use.saveStart("probe-shell", { command: "x", cwd: "/w", confirm: "probe-shell" }));
+  expect(e.message).toBe("this fleet has no tmux socket of its own (FLEET_TMUX_SOCKET is empty), so the page does not keep start commands for it");
+  expect(calls).toEqual([]);
+  // A start saved while probe-shell was not in fleet.conf: once it is, restart uses fleet start.
+  const own = fakeHost();
+  const s2 = new SessionStarts(new Store(":memory:").db);
+  s2.save({ session: "probe-shell", command: "exec cat", cwd: "/w", savedBy: "op", savedAt: "x" });
+  await adminUseCases({ host: own.host, starts: s2 }, operator).restart("probe-shell", { confirm: "probe-shell" });
+  expect(own.calls).toEqual(["restart probe-shell fleet-t"]);
+  void state;
+});
+
+test("a folder with #{ is refused: tmux would expand it into another folder", async () => {
+  const { host, state } = fakeHost();
+  state.panes = [{ session: "hand", command: "", cwd: "/w" }];
+  const use = adminUseCases({ host, starts: new SessionStarts(new Store(":memory:").db) }, operator);
+  expect((await fail(use.saveStart("hand", { command: "x", cwd: "/w#{session_name}", confirm: "hand" }))).message).toBe("folder must not contain #{");
 });
