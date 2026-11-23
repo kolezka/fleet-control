@@ -675,7 +675,7 @@ function renderAdmin(h: HostState | undefined) {
   ($("hostRotate") as HTMLButtonElement).disabled = !hg.ok;
   ($("hostRemove") as HTMLButtonElement).disabled = !hg.ok;
   $("settingsPart").hidden = v.settings === null && v.settingsError === "";
-  $("settingsError").textContent = v.settingsError ? `The settings file cannot be used: ${v.settingsError}` : v.settings?.skipped ? `At its last start the service skipped the settings file: ${v.settings.skipped}. ${v.settings.restartNeeded.length ? "The current file passes the start checks; it applies at the next restart." : ""}`.trim() : "";
+  $("settingsError").textContent = v.settingsError ? `The settings file cannot be used: ${v.settingsError}` : v.settings?.skipped ? `At its last start the service skipped the settings file: ${v.settings.skipped}. The file has not changed since; fix it on the host, or save from here to replace it.` : "";
   $("settingsError").hidden = $("settingsError").textContent === "";
   $("settingsForm").hidden = v.settings === null;
   if (v.settings) {
@@ -688,7 +688,8 @@ function renderAdmin(h: HostState | undefined) {
     // Which settings the file sets, and what the plist or unit has for them.
     const set = v.settings.saved;
     $("settingsSource").textContent = set.length ? `Set here (over the plist or unit): ${set.join(", ")}. Put a value back to the plist's to drop it from the file.` : "Nothing set here; every value comes from the plist or unit.";
-    $("settingsPending").textContent = v.settings.restartNeeded.length ? `Waiting for a restart of the service: ${v.settings.restartNeeded.join(", ")}.` : "The running service uses these settings.";
+    // A file the start skipped would be skipped again, so do not promise a restart applies it.
+    $("settingsPending").textContent = v.settings.skipped ? "The running service uses the plist's or unit's values." : v.settings.restartNeeded.length ? `Waiting for a restart of the service: ${v.settings.restartNeeded.join(", ")}.` : "The running service uses these settings.";
     const sg = settingsGate(v);
     $("settingsGate").textContent = sg.reason;
     ($("settingsSave") as HTMLButtonElement).disabled = !sg.ok;

@@ -64,7 +64,8 @@ if (settingsFile) {
       console.log(`settings from ${settingsFile}`);
     }
   } catch (e) {
-    settingsSkipped = { reason: e instanceof Error ? e.message : String(e), revision: settingsRevision(text) };
+    // A file that could not even be read gets no revision any file can have, so its reason never shows for another.
+    settingsSkipped = { reason: e instanceof Error ? e.message : String(e), revision: text === null ? "unreadable" : settingsRevision(text) };
     console.error(`settings file ${settingsFile} skipped: ${settingsSkipped.reason}`);
   }
 }

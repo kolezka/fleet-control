@@ -67,7 +67,7 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       const base = settingsOf(deps.baseEnv);
       const sent = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : settings;
       const changed = sent && typeof sent === "object" && !Array.isArray(sent)
-        ? Object.fromEntries(Object.entries(sent).filter(([k, x]) => !(k in base) || JSON.stringify(x) !== JSON.stringify(base[k as keyof typeof base])))
+        ? Object.fromEntries(Object.entries(sent).filter(([k, x]) => !Object.hasOwn(base, k) || JSON.stringify(x) !== JSON.stringify(base[k as keyof typeof base])))
         : sent;
       const full = settingsOf(settingsEnv(deps.baseEnv, checkSettings(changed)));
       const next = settingsDiff(base, full);

@@ -1,7 +1,7 @@
 // Service settings saved from the page: checked, written owner-only beside the tokens file, and taken by the
 // real entry point at its next start. A file that does not load is skipped, so the page still comes up.
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat, writeFile, readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,6 +212,14 @@ test("review fixes on the real service: input on a fleet it cannot type into is 
   expect([now.running.input, now.skipped]).toEqual([false, "terminal input needs a local fleet (REMOTE_SSH is set)"]);
   expect((await call(s.base, "/leases")).status).toBe(503);
   s.proc.kill(); await s.proc.exited;
+  // A file the service cannot read is skipped too; once it is gone, its reason no longer shows.
+  await chmod(join(d, "settings.json"), 0o000);
+  s = await start("1");
+  expect((await (await call(s.base, "/settings")).json()).error.kind).toBe("unavailable");
+  await rm(join(d, "settings.json"));
+  expect((await (await call(s.base, "/settings")).json()).skipped).toBeNull();
+  s.proc.kill(); await s.proc.exited;
+  await writeFile(join(d, "settings.json"), "{\"input\": true}\n", { mode: 0o600 });
   // Without fleet administration the file is not read at all (nothing on the page shows or edits it).
   await writeFile(join(d, "fleet.conf"), `FLEET=settings-remote-${process.pid}\nFLEET_DIR=${d}\nAGENTS=()\n`);
   s = await start("");
@@ -233,6 +241,9 @@ test("review round 2: a plist value the page cannot set does not block a save, a
   expect([first.next.agentModels, first.skipped]).toEqual([[], "terminal input needs a local fleet (REMOTE_SSH is set)"]);
   const saved = await use.save({ settings: { ...first.base, input: false }, revision: first.revision, confirm: "settings" });
   expect(JSON.parse(text!)).toEqual({});
+  // An own __proto__ key is an unknown setting, not dropped as equal to the plist.
+  const proto = await fail(use.save(JSON.parse(`{"settings": {"__proto__": {}}, "revision": "${first.revision}", "confirm": "settings"}`)));
+  expect(proto.message).toBe("unknown setting __proto__");
   // The file the start skipped is gone, so its reason no longer shows.
   expect(saved.skipped).toBeNull();
   expect((await use.get()).skipped).toBeNull();

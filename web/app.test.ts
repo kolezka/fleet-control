@@ -828,12 +828,16 @@ test("service settings review fixes: a broken file is named, a skipped file is n
   await settle();
   expect([b.element("settingsPart").hidden, b.element("settingsError").hidden, b.element("settingsForm").hidden]).toEqual([false, false, true]);
   expect(b.element("settingsError").textContent).toBe("The settings file cannot be used: the settings file is not JSON; fix or remove it on the host");
-  // Fixed on the host, but this start skipped it.
-  answer = { path: "/c/settings.json", revision: "b".repeat(64), saved: {}, base: running, running, next: running, restartNeeded: [], skipped: "terminal input needs a local fleet (REMOTE_SSH is set)" };
+  // A file the start skipped (it turns on input the fleet cannot take): named, and no restart promised.
+  answer = { path: "/c/settings.json", revision: "b".repeat(64), saved: { input: true }, base: running, running, next: { ...running, input: true }, restartNeeded: ["input"], skipped: "terminal input needs a local fleet (REMOTE_SSH is set)" };
   await b.listeners.get("settingsReload:click")!({});
   await settle();
-  expect([b.element("settingsForm").hidden, b.element("settingsError").textContent]).toEqual([false, "At its last start the service skipped the settings file: terminal input needs a local fleet (REMOTE_SSH is set)."]);
+  expect([b.element("settingsForm").hidden, b.element("settingsError").textContent]).toEqual([false, "At its last start the service skipped the settings file: terminal input needs a local fleet (REMOTE_SSH is set). The file has not changed since; fix it on the host, or save from here to replace it."]);
+  expect(b.element("settingsPending").textContent).toBe("The running service uses the plist's or unit's values.");
   expect(b.element("setModels").value).toBe("sonnet\nopus\nhaiku");
+  answer = { ...(answer as object), saved: {}, next: running, restartNeeded: [], skipped: null };
+  await b.listeners.get("settingsReload:click")!({});
+  await settle();
   // An unsaved edit, then the file moves on the host: a background refresh keeps the edit and blocks the save.
   b.element("setInput").checked = true;
   await b.listeners.get("setInput:change")!({});
