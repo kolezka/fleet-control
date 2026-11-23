@@ -84,7 +84,8 @@ test("an update checks the package, backs up, tries it on a scratch port, swaps 
   expect(JSON.parse(readFileSync(join(`${s.dir}.before-bbbbbbb`, "MANIFEST.json"), "utf8")).commit).toBe("a".repeat(40));
   const backup = join(s.base, "rollback-bbbbbbb");
   expect(readdirSync(backup).sort()).toEqual(["SHA256SUMS", "at-stop", "fleet.conf", "state.before-upgrade.db", "tokens"]);
-  expect(readdirSync(join(backup, "at-stop")).sort()).toEqual(["fleet.conf", "state.db", "tokens"]);
+  expect(readdirSync(join(backup, "at-stop")).sort()).toEqual(["SHA256SUMS", "fleet.conf", "state.db", "tokens"]);
+  expect(readFileSync(join(backup, "at-stop", "SHA256SUMS"), "utf8")).toMatch(/^[0-9a-f]{64}  fleet\.conf\n[0-9a-f]{64}  state\.db\n[0-9a-f]{64}  tokens\n$/);
   expect(readFileSync(join(backup, "SHA256SUMS"), "utf8")).toContain("  state.before-upgrade.db");
   // fleet sync ran from the new code with the service's PATH, not the updater's.
   expect(readFileSync(`${s.conf}.sync`, "utf8")).toMatch(/^b synced PATH=\/service\/path:/);
@@ -210,7 +211,7 @@ test("review round 2: a stop that ends the service but reports an error still en
   await runJob(j);
   const after = Job.read(j.file).data;
   expect(after.state).toBe("rolled_back");
-  expect(after.steps.join("\n")).toMatch(/Boot-out failed: 5[^\n]*; rolling back[\s\S]*the old code never left its folder[\s\S]*the new code never ran; database and files left as they are[\s\S]*the old release answers again/);
+  expect(after.steps.join("\n")).toMatch(/Boot-out failed: 5[^\n]*; rolling back[\s\S]*the new code never ran; database and files left as they are[\s\S]*the old code never left its folder[\s\S]*the old release answers again/);
   expect(after.steps.join("\n")).toContain(`the new code was left in ${s.dir}.new-4444444; remove it by hand`);
   expect(await s.running()).toBe("a".repeat(40));
 }, 90_000);
