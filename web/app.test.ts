@@ -755,3 +755,59 @@ test("a token refusal the gateway relays as upstream_forbidden reads as not chan
   await b.click({ host: "a", session: "s" });
   expect(b.element("newTokenText").textContent).toBe("");
 });
+
+test("a hand-made session is offered for restart only after its start command, pre-filled from tmux, is saved", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  let saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null = null;
+  const rows = () => ({ starts: true, sessions: [
+    { session: "hand", inConf: false, running: true, saved, pane: { command: "exec cat", cwd: "/w" } },
+    { session: "probe-shell", inConf: true, running: true, saved: null, pane: { command: "", cwd: "/f" } },
+  ] });
+  const b = await browser([host], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/fleet/sessions")) return rows();
+    if (path.endsWith("/sessions/hand/start") && init?.method === "PUT") { const body = JSON.parse(String(init.body)); saved = { command: body.command, cwd: body.cwd, savedBy: "gw", savedAt: "2026-11-23T01:00:00Z" }; return { saved }; }
+    if (path.includes("/sessions/hand/start") && init?.method === "DELETE") { saved = null; return { removed: "hand" }; }
+    if (path.endsWith("/restart")) return { session: "hand", output: "hand: started with its saved command\n" };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("restartSession").innerHTML).toBe('<option value="hand">hand · no start command</option><option value="probe-shell">probe-shell · fleet.conf</option>');
+  expect(b.element("startPart").hidden).toBe(false);
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  // The form follows the chosen session: probe-shell has no saved command, so tmux's folder is shown.
+  expect([b.element("restartSession").value, b.element("startCwd").value]).toEqual(["probe-shell", "/f"]);
+  await type("restartSession", "hand", "change");
+  // Filled from tmux, not saved: Restart is blocked until a command is saved.
+  expect([b.element("startCommand").value, b.element("startCwd").value]).toEqual(["exec cat", "/w"]);
+  await type("restartConfirm", "hand");
+  expect([b.element("restartGo").disabled, b.element("restartGate").textContent]).toEqual([true, "Save a start command for hand first"]);
+  expect([b.element("startSave").disabled, b.element("startGate").textContent]).toEqual([true, "Type hand to confirm"]);
+  await type("startCwd", "w");
+  await type("startConfirm", "hand");
+  expect([b.element("startSave").disabled, b.element("startGate").textContent]).toEqual([true, "The folder must be an absolute path"]);
+  await type("startCwd", "/w");
+  expect(b.element("startSave").disabled).toBe(false);
+  await b.listeners.get("startSave:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/sessions/hand/start" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ command: "exec cat", cwd: "/w", confirm: "hand" });
+  expect(b.element("adminStatus").textContent).toBe("A: start command for hand saved.");
+  expect(b.element("startGate").textContent).toBe("Saved");
+  expect(b.element("restartSession").innerHTML).toContain('hand · saved command');
+  await type("restartConfirm", "hand");
+  expect([b.element("restartGo").disabled, b.element("restartGate").textContent]).toEqual([false, "Ends hand and starts it again with its saved command"]);
+  await b.listeners.get("restartGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/sessions/hand/restart")).toBe(true);
+  // Forgetting needs the name typed too.
+  expect(b.element("startRemove").disabled).toBe(true);
+  await type("startConfirm", "hand");
+  expect(b.element("startRemove").disabled).toBe(false);
+  await b.listeners.get("startRemove:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/sessions/hand/start?confirm=hand" && c.init?.method === "DELETE")).toBe(true);
+  expect(b.element("adminStatus").textContent).toBe("A: saved start command for hand forgotten.");
+});

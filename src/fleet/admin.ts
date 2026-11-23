@@ -2,7 +2,7 @@
 import { chmod, copyFile, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ConfFacts, FleetHost, RestartResult } from "../application/fleet-admin.ts";
+import type { ConfFacts, FleetHost, PaneStart, RestartResult } from "../application/fleet-admin.ts";
 import { AdminError, type LogSource } from "../domain/fleet-admin.ts";
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -49,8 +49,14 @@ const facts = (nonce: string) => `set -euo pipefail; . "$0" >/dev/null 2>&1; [ "
 const endLine = (nonce: string) => `__fc_status=$?; __FLEET_CONTROL_END=${nonce}; return "$__fc_status"`;
 const EARLY_STOP = "it stops before its end (return or exit), so the lines after it, the managed agents among them, never load";
 
+// tmux shows a pane's start command in double quotes with backslash escapes; this gives back what was typed.
+export function unquoteTmux(shown: string): string {
+  if (!(shown.length >= 2 && shown.startsWith('"') && shown.endsWith('"'))) return shown;
+  return shown.slice(1, -1).replace(/\\(.)/g, "$1");
+}
+
 export class FleetAdminHost implements FleetHost {
-  constructor(readonly opts: { confPath: string; fleetBin: string; serviceLog?: ServiceLog; tmuxBin?: string; restartTimeoutMs?: number }) {}
+  constructor(readonly opts: { confPath: string; fleetBin: string; serviceLog?: ServiceLog; tmuxBin?: string; restartTimeoutMs?: number; settleMs?: number }) {}
   get path() { return this.opts.confPath; }
 
   read() { return readFile(this.opts.confPath, "utf8"); }
@@ -130,7 +136,23 @@ export class FleetAdminHost implements FleetHost {
     return r.stdout;
   }
 
-  async restart(session: string, fleetSocket: string): Promise<RestartResult> {
+  // One line per session: its active pane's folder and start command. The command comes last, so a "|" in it
+  // stays in it; tmux prints it quoted ("exec cat") with \" and \$ escapes, or empty for the default shell.
+  async panes(fleetSocket: string): Promise<PaneStart[]> {
+    const tmux = this.opts.tmuxBin ?? "tmux";
+    const socket = fleetSocket ? ["-L", fleetSocket] : [];
+    const r = await run([tmux, ...socket, "list-sessions", "-F", "#{session_name}|#{pane_start_path}|#{pane_start_command}"], { timeoutMs: 10_000 });
+    if (r.exitCode !== 0) {
+      if (/no server running|error connecting to/.test(r.stderr)) return [];
+      throw new Error(`tmux list-sessions failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
+    }
+    return r.stdout.split("\n").filter(Boolean).map((line) => {
+      const [session = "", cwd = "", ...rest] = line.split("|");
+      return { session, cwd, command: unquoteTmux(rest.join("|")) };
+    });
+  }
+
+  async restart(session: string, fleetSocket: string, start?: { command: string; cwd: string }): Promise<RestartResult> {
     const env = { FLEET_CONF: this.opts.confPath };
     const tmux = this.opts.tmuxBin ?? "tmux";
     const socket = fleetSocket ? ["-L", fleetSocket] : [];
@@ -138,6 +160,16 @@ export class FleetAdminHost implements FleetHost {
     const k = await run([tmux, ...socket, "kill-session", "-t", `=${session}`], { timeoutMs: 10_000 });
     if (k.exitCode !== 0 && !/can't find session|no server running|error connecting to/.test(k.stderr)) {
       return { ok: false, stage: "kill", output: `tmux kill-session failed: ${k.stderr.trim()}` };
+    }
+    if (start) {
+      // The saved command runs the way tmux runs any session command: through the default shell, in the folder.
+      const n = await run([tmux, ...socket, "new-session", "-d", "-s", session, "-c", start.cwd, ...(start.command ? [start.command] : [])], { timeoutMs: 10_000 });
+      if (n.exitCode !== 0) return { ok: false, stage: "start", output: `tmux new-session failed: ${n.stderr.trim() || `exit ${n.exitCode}`}` };
+      // A command that ends at once takes its session with it; that is a failed start, not a restart.
+      await Bun.sleep(this.opts.settleMs ?? 1_000);
+      const h = await run([tmux, ...socket, "has-session", "-t", `=${session}`], { timeoutMs: 10_000 });
+      if (h.exitCode !== 0) return { ok: false, stage: "start", output: "the session ended right after it started; check its command and folder" };
+      return { ok: true, output: `${session}: started with its saved command\n` };
     }
     const s = await run([this.opts.fleetBin, "start", session], { env, timeoutMs: this.opts.restartTimeoutMs ?? 150_000 });
     const output = `${s.stdout}${s.stderr}`;

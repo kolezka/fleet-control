@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, emptyAdmin, hostGate, parseConf, parseTokens, restartable, restartGate, saveGate, tokenGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseTokens, restartable, restartGate, saveGate, startCommandGate, tokenGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -638,15 +638,30 @@ function renderAdmin(h: HostState | undefined) {
   $("confGate").textContent = save.reason;
   ($("confSave") as HTMLButtonElement).disabled = !save.ok;
   ($("confReload") as HTMLButtonElement).disabled = v.busy;
-  const sessions = restartable(v.conf);
+  const sessions = restartable(v.conf, v.sessions);
   if (!sessions.includes(v.restartSession)) v.restartSession = sessions[0] ?? "";
-  setHtml($("restartSession"), sessions.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('') || '<option value="">No sessions</option>');
+  const label = (s: string) => { const r = v.sessions?.find((x) => x.session === s); return r ? s + (r.saved ? " · saved command" : r.inConf ? " · fleet.conf" : " · no start command") + (r.running ? "" : " · not running") : s; };
+  setHtml($("restartSession"), sessions.map(s => '<option value="' + esc(s) + '">' + esc(label(s)) + '</option>').join('') || '<option value="">No sessions</option>');
   ($("restartSession") as HTMLSelectElement).value = v.restartSession;
   const rc = $("restartConfirm") as HTMLInputElement;
   if (rc.value !== v.restartConfirm) rc.value = v.restartConfirm;
   const restart = restartGate(v);
   $("restartGate").textContent = restart.reason;
   ($("restartGo") as HTMLButtonElement).disabled = !restart.ok;
+  $("startPart").hidden = v.sessions === null || !v.restartSession;
+  if (v.sessions) {
+    fillStart(v);
+    const row = v.sessions.find((r) => r.session === v.restartSession);
+    $("startSource").textContent = row?.saved ? `Saved by ${row.saved.savedBy} at ${row.saved.savedAt}.` : row?.pane ? "Not saved yet. Filled in from what tmux reports for the running session; check it before saving." : "Not saved yet.";
+    for (const [id, value] of [["startCommand", v.startCommand], ["startCwd", v.startCwd], ["startConfirm", v.startConfirm]] as const) {
+      const el = $(id) as HTMLInputElement;
+      if (el.value !== value) el.value = value;
+    }
+    const sg = startCommandGate(v);
+    $("startGate").textContent = sg.reason;
+    ($("startSave") as HTMLButtonElement).disabled = !sg.ok;
+    ($("startRemove") as HTMLButtonElement).disabled = v.busy || !row?.saved || v.startConfirm !== row.session;
+  }
   ($("logSource") as HTMLSelectElement).value = v.logSource;
   ($("logRead") as HTMLButtonElement).disabled = v.busy;
   $("logText").textContent = v.logText;
@@ -697,6 +712,11 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
   // An agent or viewer token sees nothing here; the host refuses it.
   else if (status === 403) { v.status = "absent"; }
   else { v.status = "unknown"; v.error = outcome.message; }
+  // Sessions with saved start commands: hosts without them keep the fleet.conf list.
+  if (v.status === "ready") {
+    const listed = await hostCall(host, "/fleet/sessions");
+    v.sessions = listed.outcome.ok ? parseRestartable(listed.outcome.data) : null;
+  }
   // Tokens: hidden where the host does not offer them (older releases, no fleet administration).
   if (v.status === "ready") {
     const t = await hostCall(host, "/tokens");
@@ -806,6 +826,24 @@ async function restartSession(hostId: string) {
     : `${host.name}: ${s} not restarted: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
   void refresh(hostId, "sessions");
+}
+
+async function changeStart(hostId: string, remove: boolean) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  const s = v.restartSession;
+  if (!host || !s || (!remove && !startCommandGate(v).ok) || (remove && v.startConfirm !== s)) return;
+  v.busy = true;
+  renderAdmin(selectedHostState(fleet));
+  const path = `/sessions/${encodeURIComponent(s)}/start`;
+  const { outcome } = remove
+    ? await hostCall(host, `${path}?confirm=${encodeURIComponent(v.startConfirm)}`, { method: "DELETE" })
+    : await hostCall(host, path, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ command: v.startCommand, cwd: v.startCwd, confirm: v.startConfirm }) });
+  v.busy = false;
+  v.notice = outcome.ok ? `${host.name}: ${remove ? `saved start command for ${s} forgotten` : `start command for ${s} saved`}.` : `${host.name}: ${s} not changed: ${outcome.message}`;
+  // Re-read so the form shows what the host now has.
+  if (outcome.ok) v.startFor = "";
+  await refreshAdmin(hostId);
 }
 
 async function readLog(hostId: string) {
@@ -975,6 +1013,11 @@ adminField("confText", (v, x) => { v.draft = x; });
 adminField("confConfirm", (v, x) => { v.saveConfirm = x; });
 adminField("restartSession", (v, x) => { v.restartSession = x; v.restartConfirm = ""; });
 adminField("restartConfirm", (v, x) => { v.restartConfirm = x; });
+adminField("startCommand", (v, x) => { v.startCommand = x; });
+adminField("startCwd", (v, x) => { v.startCwd = x; });
+adminField("startConfirm", (v, x) => { v.startConfirm = x; });
+$("startSave").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void changeStart(h.info.id, false); });
+$("startRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void changeStart(h.info.id, true); });
 adminField("logSource", (v, x) => { if (x === "watchdog" || x === "service") v.logSource = x; });
 adminField("tokenName", (v, x) => { v.tokenName = x; v.tokenConfirm = ""; v.newToken = ""; });
 adminField("tokenAction", (v, x) => { if (x === "rotate" || x === "revoke") v.tokenAction = x; });

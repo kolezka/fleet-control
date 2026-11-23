@@ -57,11 +57,38 @@ export function logQuery(source: string | null, lines: string | null): { source:
   return { source: source as LogSource, lines: n };
 }
 
-// Restart takes a session from fleet.conf, confirmed by typing its name. Managed agents are refused.
+// Restart takes a known session, confirmed by typing its name. Managed agents are refused.
+// listed: the sessions the page may restart, from fleet.conf, the fleet's tmux server and the saved starts.
 export function checkRestart(session: string, input: unknown, listed: readonly string[]): void {
-  if (!SESSION.test(session)) throw new AdminError("invalid", "bad session name");
-  if (MANAGED_SESSION.test(session)) throw new AdminError("invalid", `${session} is a managed agent; stop and start it from the agent list`);
-  if (!listed.includes(session)) throw new AdminError("not_found", `${session} is not a session in fleet.conf`);
+  checkSessionName(session);
+  if (!listed.includes(session)) throw new AdminError("not_found", `${session} is not in fleet.conf, not running on the fleet's tmux server and has no saved start command`);
   const confirm = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>).confirm : undefined;
   if (confirm !== session) throw new AdminError("invalid", `type ${session} to confirm the restart`);
+}
+
+// A session that is not an agent comes back with the command and folder an operator saved for it.
+// The command runs as the service user through tmux, like typing it in the session's own terminal.
+export type SessionStart = { session: string; command: string; cwd: string; savedBy: string; savedAt: string };
+export const MAX_START_COMMAND = 1000;
+const MAX_START_CWD = 1024;
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+export function checkSessionName(session: string): void {
+  if (!SESSION.test(session)) throw new AdminError("invalid", "bad session name");
+  if (MANAGED_SESSION.test(session)) throw new AdminError("invalid", `${session} is a managed agent; stop and start it from the agent list`);
+}
+
+// Save takes the command (empty means the default shell), an absolute folder and the session name typed in full.
+export function checkStartSave(session: string, input: unknown): { command: string; cwd: string } {
+  checkSessionName(session);
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new AdminError("invalid", "body must be an object");
+  const { command, cwd, confirm, ...rest } = input as Record<string, unknown>;
+  const extra = Object.keys(rest);
+  if (extra.length) throw new AdminError("invalid", `unknown field ${extra[0]}`);
+  if (typeof command !== "string") throw new AdminError("invalid", "command must be a string");
+  if (command.length > MAX_START_COMMAND) throw new AdminError("invalid", `command may be at most ${MAX_START_COMMAND} characters`);
+  if (CONTROL.test(command)) throw new AdminError("invalid", "command must be one line without control characters");
+  if (typeof cwd !== "string" || !cwd.startsWith("/") || cwd.length > MAX_START_CWD || CONTROL.test(cwd)) throw new AdminError("invalid", "folder must be an absolute path on the host");
+  if (confirm !== session) throw new AdminError("invalid", `type ${session} to confirm the start command`);
+  return { command: command.trim(), cwd };
 }

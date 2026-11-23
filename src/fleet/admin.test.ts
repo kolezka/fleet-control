@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "../auth.ts";
 import { Store } from "../data/store.ts";
 import { createTestFleet, type TestFleet } from "./fixture.ts";
-import { FleetAdminHost, serviceLogFromEnv } from "./admin.ts";
+import { FleetAdminHost, serviceLogFromEnv, unquoteTmux } from "./admin.ts";
+import { SessionStarts } from "../data/session-starts.ts";
 import { resolveFleetBin } from "./path.ts";
 import { serve } from "../server.ts";
 import { Credentials, startGateway } from "../client-gateway.ts";
@@ -42,8 +43,10 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     const host = new FleetAdminHost({ confPath: fleet.confPath, fleetBin, serviceLog: { file: serviceLog() } });
     // Logs through the real CLI, restarts through the stand-in.
     const restarter = new FleetAdminHost({ confPath: fleet.confPath, fleetBin: join(fleet.dir, "fake-fleet") });
-    host.restart = (s, socket) => restarter.restart(s, socket);
-    const deps = { fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store: new Store(":memory:"), admin: { host } };
+    // Saved starts go to the real host: real tmux new-session. fleet start goes to the stand-in.
+    host.restart = (s, socket, start) => (start ? new FleetAdminHost({ confPath: fleet.confPath, fleetBin, settleMs: 300 }).restart(s, socket, start) : restarter.restart(s, socket));
+    const store = new Store(":memory:");
+    const deps = { fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store, admin: { host, starts: new SessionStarts(store.db) } };
     server = serve(deps, 0, { auth: await Auth.fromFile(tokens) });
     gateway = startGateway({ hosts: [{ id: "h", name: "H", origin: server.url.origin }], credentials: new Credentials(new Map([["h", op]])) }, { port: 0 });
   });
@@ -174,6 +177,52 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     const after = (await fleet.tmux("list-sessions", "-F", "#{session_name} #{session_id}")).stdout;
     expect(id(after)).toBeDefined();
     expect(id(after)).not.toBe(id(before));
+  });
+
+  test("a hand-made session comes back with its saved command and folder, read first from tmux", async () => {
+    // Started by hand on the fleet's tmux server: not in fleet.conf, so fleet start does not know it.
+    const work = join(fleet.dir, "work dir");
+    await mkdir(work);
+    await fleet.tmux("new-session", "-d", "-s", "hand", "-c", work, `exec sleep 600 # it's "quoted" $HOME`);
+    const listed = await (await page("/fleet/sessions")).json();
+    const hand = listed.sessions.find((r: { session: string }) => r.session === "hand");
+    expect(hand).toEqual({ session: "hand", inConf: false, running: true, saved: null, pane: { command: `exec sleep 600 # it's "quoted" $HOME`, cwd: work } });
+    expect(listed.sessions.some((r: { session: string }) => r.session.startsWith("fc-"))).toBe(false);
+    // No saved command yet: refused, the session keeps running.
+    const id = async () => (await fleet.tmux("list-sessions", "-F", "#{session_name} #{session_id}")).stdout.split("\n").find((l) => l.startsWith("hand "))?.split(" ")[1];
+    const first = await id();
+    const unsaved = await page("/sessions/hand/restart", { method: "POST", body: JSON.stringify({ confirm: "hand" }) });
+    expect(unsaved.status).toBe(400);
+    expect(await id()).toBe(first);
+    // Saved as the page pre-fills it from tmux, then restarted: a new session with the same command and folder.
+    const save = await page("/sessions/hand/start", { method: "PUT", body: JSON.stringify({ command: hand.pane.command, cwd: hand.pane.cwd, confirm: "hand" }) });
+    expect(save.status).toBe(200);
+    const r = await page("/sessions/hand/restart", { method: "POST", body: JSON.stringify({ confirm: "hand" }) });
+    expect([r.status, (await r.json()).output]).toEqual([200, "hand: started with its saved command\n"]);
+    const second = await id();
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    const pane = (await fleet.tmux("list-panes", "-t", "=hand", "-F", "#{pane_start_path}|#{pane_current_command}")).stdout.trim();
+    expect(pane).toBe(`${work}|sleep`);
+    // The stand-in fleet CLI was not asked to start it.
+    expect((await readFile(join(fleet.dir, "fake-calls"), "utf8").catch(() => "")).includes("start hand")).toBe(false);
+    // A command that ends at once is a failed start, said as such.
+    await page("/sessions/hand/start", { method: "PUT", body: JSON.stringify({ command: "true", cwd: work, confirm: "hand" }) });
+    const dies = await page("/sessions/hand/restart", { method: "POST", body: JSON.stringify({ confirm: "hand" }) });
+    expect([dies.status, (await dies.json()).error.message]).toEqual([422, "the old hand session ended, and it did not start again: the session ended right after it started; check its command and folder"]);
+    // Removing the saved command needs the name typed; then hand (not running, not in fleet.conf) is gone from the list.
+    expect((await page("/sessions/hand/start?confirm=han", { method: "DELETE" })).status).toBe(400);
+    expect((await page("/sessions/hand/start?confirm=hand", { method: "DELETE" })).status).toBe(200);
+    expect((await (await page("/fleet/sessions")).json()).sessions.some((x: { session: string }) => x.session === "hand")).toBe(false);
+    // An agent token sees none of it.
+    expect((await direct(agent, "/fleet/sessions")).status).toBe(403);
+    expect((await direct(agent, "/sessions/hand/start", { method: "PUT", body: "{}" })).status).toBe(403);
+  });
+
+  test("tmux's quoted start command reads back as typed", () => {
+    expect(unquoteTmux('"exec cat"')).toBe("exec cat");
+    expect(unquoteTmux('"echo \\"hi \\$HOME\\" ; sleep 30"')).toBe('echo "hi $HOME" ; sleep 30');
+    expect(unquoteTmux("")).toBe("");
   });
 
   test("the host tells a failed kill, a failed start and a start cut off by time apart", async () => {
