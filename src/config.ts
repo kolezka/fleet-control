@@ -164,3 +164,14 @@ export function agentSettingsFromEnv(env: Record<string, string | undefined>): {
   }
   return { roots, models: dsh.length ? { claude: models, dsh } : { claude: models }, ...(mcp ? { mcpUrl: mcp } : {}) };
 }
+
+// FLEET_CONTROL_FILE_ROOTS="/Users/me/fleet-agents:/Users/me/notes" names the folders the page's file editor may
+// open. Unset: the given defaults (the fleet folder and the agent folders). "/" is never allowed.
+export function fileRootsFromEnv(env: Record<string, string | undefined>, defaults: string[]): string[] {
+  const raw = env.FLEET_CONTROL_FILE_ROOTS?.trim();
+  const given = (raw ? raw.split(":") : defaults).map((r) => r.trim()).filter(Boolean);
+  // "/" and "//" strip to nothing; they are refused, not dropped.
+  const roots = given.map((r) => { const t = r.replace(/\/+$/, ""); if (!t) throw new Error(`${r} is not allowed: the whole disk`); return t; });
+  for (const r of roots) if (!/^\/[A-Za-z0-9._\/-]+$/.test(r) || r.split("/").slice(1).some((p) => p === "" || p === "." || p === "..")) throw new Error(`${r} is not a plain absolute folder`);
+  return [...new Set(roots)];
+}

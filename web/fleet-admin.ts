@@ -48,6 +48,17 @@ export type AdminView = {
   serviceConfirm: string;
   // agent-fleet's watchdog as a host service: null until read; hosts without it hide the part.
   watchdog: WatchdogRead | null;
+  // The file editor: the allowed folders (null: the host has no editor), the folder or file open now, the draft.
+  fileRoots: string[] | null;
+  fileOpen: FileOpen | null;
+  filePath: string;
+  fileDraft: string;
+  fileConfirm: string;
+  // A file opened as new (not on the host yet) saves with revision "new".
+  fileNew: boolean;
+  fileChangedOnHost: boolean;
+  // A path the operator asked to open while the draft had unsaved changes; asking again for the same path discards it.
+  fileLeaving: string;
   watchdogConfirm: string;
 };
 
@@ -100,6 +111,7 @@ export const emptyAdmin = (): AdminView => ({
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
   service: null, serviceAction: "restart", serviceTag: "", serviceConfirm: "",
   watchdog: null, watchdogConfirm: "",
+  fileRoots: null, fileOpen: null, filePath: "", fileDraft: "", fileConfirm: "", fileNew: false, fileChangedOnHost: false, fileLeaving: "",
 });
 
 const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");
@@ -243,6 +255,61 @@ export function restartGate(v: AdminView): { ok: boolean; reason: string } {
   if (row && !row.saved && !row.inConf) return { ok: false, reason: `Save a start command for ${row.session} first` };
   if (v.restartConfirm !== v.restartSession) return { ok: false, reason: `Type ${v.restartSession} to confirm` };
   return { ok: true, reason: row?.saved && !row.inConf ? `Ends ${v.restartSession} and starts it again with its saved command` : `Ends ${v.restartSession} and starts it again from fleet.conf` };
+}
+
+export type FileEntryRead = { name: string; kind: "file" | "dir" | "other"; size: number; modifiedAt: string };
+export type FileOpen =
+  | { kind: "dir"; path: string; root: string; entries: FileEntryRead[]; truncated: boolean }
+  | { kind: "file"; path: string; root: string; text: string; revision: string; size: number };
+
+export function parseFileRoots(x: unknown): string[] | null {
+  if (!x || typeof x !== "object") return null;
+  const r = (x as Record<string, unknown>).roots;
+  return Array.isArray(r) && r.every((y) => typeof y === "string") ? r : null;
+}
+
+export function parseFileOpen(x: unknown): FileOpen | null {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.path !== "string" || typeof o.root !== "string") return null;
+  if (o.kind === "dir" && Array.isArray(o.entries)) {
+    const entries = o.entries.filter((e): e is FileEntryRead => !!e && typeof e === "object" && typeof (e as FileEntryRead).name === "string" && ["file", "dir", "other"].includes((e as FileEntryRead).kind));
+    return { kind: "dir", path: o.path, root: o.root, entries, truncated: o.truncated === true };
+  }
+  if (o.kind === "file" && typeof o.text === "string" && typeof o.revision === "string") return { kind: "file", path: o.path, root: o.root, text: o.text, revision: o.revision, size: typeof o.size === "number" ? o.size : 0 };
+  return null;
+}
+
+// The draft differs from what was opened (or a new file has text): leaving it needs a second click.
+export const fileDirty = (v: AdminView) => (v.fileNew ? v.fileDraft !== "" : v.fileOpen?.kind === "file" && v.fileDraft !== v.fileOpen.text);
+
+export const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+// The folder above a path, but never above the allowed folder it is in.
+export const parentIn = (path: string, root: string) => (path === root ? root : path.slice(0, path.lastIndexOf("/")) || "/");
+
+// Lines that differ between the file and the draft, for the confirm step: a short count, not a full diff view.
+export function changedLines(before: string, after: string): { removed: number; added: number } {
+  const a = before.split("\n"), b = after.split("\n");
+  const count = (xs: string[]) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<string, number>());
+  const ca = count(a), cb = count(b);
+  let removed = 0, added = 0;
+  for (const [x, n] of ca) removed += Math.max(0, n - (cb.get(x) ?? 0));
+  for (const [x, n] of cb) added += Math.max(0, n - (ca.get(x) ?? 0));
+  return { removed, added };
+}
+
+export function fileGate(v: AdminView): { ok: boolean; reason: string } {
+  if (v.busy) return { ok: false, reason: "Working…" };
+  const open = v.fileOpen;
+  if (!v.fileNew && (!open || open.kind !== "file")) return { ok: false, reason: "Open a file first" };
+  if (v.fileChangedOnHost) return { ok: false, reason: "The file changed on the host; copy your edit, then Open it again" };
+  const name = fileName(v.fileNew ? v.filePath : open!.path);
+  if (v.fileNew && (!v.filePath.startsWith("/") || !name || name === "." || name === "..")) return { ok: false, reason: "Write the new file's full path, ending in its name" };
+  if (!v.fileNew && open!.kind === "file" && v.fileDraft === open!.text) return { ok: false, reason: "No changes" };
+  if (v.fileConfirm !== name) return { ok: false, reason: `Type ${name} to confirm` };
+  if (v.fileNew) return { ok: true, reason: `Creates ${v.filePath}` };
+  const d = changedLines(open!.kind === "file" ? open!.text : "", v.fileDraft);
+  return { ok: true, reason: `Replaces ${name}: ${d.removed} line${d.removed === 1 ? "" : "s"} out, ${d.added} in; the old text is kept as a backup beside it` };
 }
 
 const job = (x: unknown): ServiceJob | null => {

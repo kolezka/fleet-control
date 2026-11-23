@@ -23,6 +23,7 @@ import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./applic
 import { settingsUseCases, type SettingsDeps } from "./application/settings.ts";
 import { updateUseCases, type UpdateHost } from "./application/updates.ts";
 import { watchdogUseCases, type WatchdogDeps } from "./application/watchdog.ts";
+import { filesUseCases, type FilesDeps } from "./application/files.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -118,7 +119,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/files" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -160,7 +161,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; files?: FilesDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -203,6 +204,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const noSettings = () => Response.json({ error: { kind: "unavailable", message: "service settings not configured on this host" } }, { status: 503 });
   if (deps.watchdog && !auth) throw new Error("the watchdog service needs tokens; set FLEET_CONTROL_TOKENS");
   const watchdogFor = (who: Principal | null) => (deps.watchdog ? watchdogUseCases(deps.watchdog, who ?? undefined) : null);
+  if (deps.files && !auth) throw new Error("the file editor needs tokens; set FLEET_CONTROL_TOKENS");
+  const filesFor = (who: Principal | null) => (deps.files ? filesUseCases(deps.files, who ?? undefined) : null);
+  const noFiles = () => Response.json({ error: { kind: "unavailable", message: "the file editor is not set up on this host" } }, { status: 503 });
   const noWatchdog = () => Response.json({ error: { kind: "unavailable", message: "the watchdog service is not configured on this host" } }, { status: 503 });
   const tokensFor = (who: Principal | null) => (deps.tokens ? tokenUseCases(deps.tokens, who ?? undefined) : null);
   const noTokens = () => Response.json({ error: { kind: "unavailable", message: "token administration not configured on this host" } }, { status: 503 });
@@ -427,6 +431,26 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
             const body = await jsonBody(req);
             if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
             return Response.json(await st.save(body));
+          } catch (e) { return adminError(e); }
+        }),
+      },
+      // The file editor: GET without path lists the allowed folders, with path opens a folder or a file.
+      "/api/files": {
+        GET: guard(async (req, _s, who) => {
+          const f = filesFor(who);
+          if (!f) return noFiles();
+          const path = new URL(req.url).searchParams.get("path");
+          try { return Response.json(path === null ? f.roots() : await f.open(path), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
+        }),
+        PUT: guard(async (req, _s, who) => {
+          const f = filesFor(who);
+          if (!f) return noFiles();
+          if (!originAllowed(req)) return forbidden();
+          if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await f.save(body));
           } catch (e) { return adminError(e); }
         }),
       },

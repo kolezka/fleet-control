@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, draftOf, emptyAdmin, fileDirty, fileGate, fileName, fillStart, hostGate, parentIn, parseConf, parseFileOpen, parseFileRoots, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -749,7 +749,91 @@ function renderAdmin(h: HostState | undefined) {
     go.classList.toggle("danger", !wg.on);
     go.disabled = !wg.ok;
   }
+  renderFiles(v);
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
+}
+
+// The file editor part: a folder lists its entries as buttons; a file shows its text with a confirm step.
+function renderFiles(v: AdminView) {
+  $("filesPart").hidden = v.fileRoots === null;
+  if (v.fileRoots === null) return;
+  $("fileRootsText").textContent = v.fileRoots.length ? `Opens text files in ${v.fileRoots.join(", ")}.` : "No folders are allowed on this host.";
+  const p = $("filePath") as HTMLInputElement;
+  if (p.value !== v.filePath) p.value = v.filePath;
+  const open = v.fileOpen;
+  const list = $("fileList");
+  list.hidden = open?.kind !== "dir" && !(open === null && v.fileRoots.length > 0 && !v.fileNew);
+  if (open?.kind === "dir") {
+    list.innerHTML = open.entries.map((e) => `<li><button type="button" class="fileentry" data-file="${esc(e.name)}" data-kind="${e.kind}">${esc(e.name)}${e.kind === "dir" ? "/" : ""}</button><span class="fineprint">${e.kind === "file" ? `${Math.ceil(e.size / 1024)} KiB` : e.kind === "other" ? "link or special" : ""}</span></li>`).join("") + (open.truncated ? `<li class="fineprint">Only the first entries are shown.</li>` : "") + (open.entries.length === 0 ? `<li class="fineprint">Empty folder.</li>` : "");
+  } else if (open === null && !v.fileNew) {
+    list.innerHTML = v.fileRoots.map((r) => `<li><button type="button" class="fileentry" data-root="${esc(r)}" data-kind="dir">${esc(r)}/</button></li>`).join("");
+  }
+  const editing = v.fileNew || open?.kind === "file";
+  const t = $("fileText") as HTMLTextAreaElement;
+  t.hidden = !editing;
+  $("fileSaveRow").hidden = !editing;
+  if (editing && t.value !== v.fileDraft) t.value = v.fileDraft;
+  ($("fileUp") as HTMLButtonElement).disabled = !open || open.path === open.root || v.busy;
+  ($("fileOpenBtn") as HTMLButtonElement).disabled = v.busy;
+  for (const b of list.querySelectorAll?.("button.fileentry") ?? []) (b as HTMLButtonElement).disabled = v.busy;
+  if (editing) {
+    const name = fileName(v.fileNew ? v.filePath : open!.path);
+    $("fileConfirmLabel").textContent = `Type ${name} to confirm`;
+    const c = $("fileConfirm") as HTMLInputElement;
+    if (c.value !== v.fileConfirm) c.value = v.fileConfirm;
+    const g = fileGate(v);
+    $("fileGate").textContent = g.reason;
+    ($("fileSave") as HTMLButtonElement).disabled = !g.ok;
+  }
+}
+
+async function openFile(hostId: string, path: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || v.busy) return;
+  // After a refused save the page already said to copy the edit and open the file again; that open goes straight through.
+  if (fileDirty(v) && !v.fileChangedOnHost && v.fileLeaving !== path) {
+    v.fileLeaving = path;
+    v.notice = `${host.name}: the open file has unsaved changes. Ask for ${path} again to drop them.`;
+    renderAdmin(selectedHostState(fleet));
+    return;
+  }
+  v.fileLeaving = "";
+  v.busy = true;
+  renderAdmin(selectedHostState(fleet));
+  const { outcome } = await hostCall(host, `/files?path=${encodeURIComponent(path)}`);
+  v.busy = false;
+  if (outcome.ok) {
+    const read = parseFileOpen(outcome.data);
+    if (read) {
+      v.fileOpen = read; v.filePath = read.path; v.fileNew = false; v.fileChangedOnHost = false; v.fileConfirm = "";
+      v.fileDraft = read.kind === "file" ? read.text : "";
+      v.notice = "";
+    } else v.notice = `${host.name}: the host's answer for ${path} was not understood.`;
+  } else v.notice = `${host.name}: ${outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
+}
+
+async function saveFile(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !fileGate(v).ok) return;
+  const path = v.fileNew ? v.filePath : v.fileOpen!.path;
+  const revision = v.fileNew ? "new" : (v.fileOpen as { revision: string }).revision;
+  v.busy = true;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/files", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, text: v.fileDraft, revision, confirm: v.fileConfirm }) }, WRITE_TIMEOUT_MS);
+  v.busy = false;
+  if (outcome.ok) {
+    const r = outcome.data as { path?: string; revision?: string; backup?: string | null };
+    v.notice = `${host.name}: saved ${r.path ?? path}${r.backup ? `; the old text is in ${r.backup}` : ""}.`;
+    if (typeof r.revision === "string") { v.fileOpen = { kind: "file", path: r.path ?? path, root: v.fileOpen?.root ?? "", text: v.fileDraft, revision: r.revision, size: new TextEncoder().encode(v.fileDraft).length }; v.fileNew = false; v.filePath = r.path ?? path; }
+    v.fileConfirm = "";
+  } else {
+    if (status === 409) v.fileChangedOnHost = true;
+    v.notice = `${host.name}: ${outcome.message}`;
+  }
+  renderAdmin(selectedHostState(fleet));
 }
 
 // keep: which unsaved drafts survive this read. Reload of one part, or a save of it, drops only that part's draft.
@@ -799,6 +883,9 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
     // Watchdog: hidden where the host does not offer it.
     const wd = await hostCall(host, "/watchdog");
     v.watchdog = wd.outcome.ok ? parseWatchdog(wd.outcome.data) : null;
+    // File editor: hidden where the host does not offer it. The open folder or file is not reread here.
+    const fr = await hostCall(host, "/files");
+    v.fileRoots = fr.outcome.ok ? parseFileRoots(fr.outcome.data) : null;
   }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }
@@ -1205,6 +1292,30 @@ $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fl
 for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
+adminField("filePath", (v, x) => { v.filePath = x; });
+adminField("fileText", (v, x) => { v.fileDraft = x; });
+adminField("fileConfirm", (v, x) => { v.fileConfirm = x; });
+$("fileOpenBtn").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void openFile(h.info.id, adminView(h.info.id).filePath); });
+$("fileUp").addEventListener("click", () => { const h = selectedHostState(fleet); const o = h && adminView(h.info.id).fileOpen; if (h && o) void openFile(h.info.id, parentIn(o.path, o.root)); });
+$("fileNewBtn").addEventListener("click", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  const v = adminView(h.info.id);
+  if (fileDirty(v) && v.fileLeaving !== "(new)") { v.fileLeaving = "(new)"; v.notice = `${h.info.name}: the open file has unsaved changes. Press New file again to drop them.`; renderAdmin(h); return; }
+  v.fileLeaving = "";
+  v.fileNew = true; v.fileDraft = ""; v.fileConfirm = ""; v.fileChangedOnHost = false;
+  if (v.fileOpen?.kind === "dir") v.filePath = `${v.fileOpen.path}/`;
+  renderAdmin(h);
+});
+$("fileSave").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void saveFile(h.info.id); });
+$("fileList").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest?.("button.fileentry") as HTMLElement | null;
+  const h = selectedHostState(fleet);
+  if (!b || !h) return;
+  const v = adminView(h.info.id);
+  const target = b.dataset.root ?? (v.fileOpen?.kind === "dir" ? `${v.fileOpen.path}/${b.dataset.file}` : null);
+  if (target) void openFile(h.info.id, target);
+});
 $("confReload").addEventListener("click", () => {
   const h = selectedHostState(fleet);
   if (!h) return;

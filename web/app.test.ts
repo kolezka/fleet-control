@@ -1110,3 +1110,163 @@ test("watchdog: off as a service and tmux unknown says so, and Turn on waits for
   await b.listeners.get("watchdogConfirm:input")!({});
   expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual(["Turn on", true, "Cannot tell whether a watchdog runs in tmux (error connecting to /tmp/tmux-1000/fleet-t (Permission denied)); fix tmux first"]);
 });
+
+test("files: the part lists the allowed folders, opens a file from a folder and saves only with the typed name, naming the backup", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const text = "one\ntwo\n";
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files") && init?.method === "PUT") return { path: "/r/notes.md", revision: "c".repeat(64), backup: "/r/notes.md.bak-1" };
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return { kind: "dir", path: "/r", root: "/r", entries: [{ name: "sub", kind: "dir", size: 0, modifiedAt: "" }, { name: "notes.md", kind: "file", size: 8, modifiedAt: "" }], truncated: false };
+    if (path.endsWith("/files?path=%2Fr%2Fnotes.md")) return { kind: "file", path: "/r/notes.md", root: "/r", text, revision: "b".repeat(64), size: 8 };
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  expect(b.element("filesPart").hidden).toBe(false);
+  expect(b.element("fileRootsText").textContent).toBe("Opens text files in /r.");
+  expect(b.element("fileList").innerHTML).toContain('data-root="/r"');
+  // A folder button opens the folder; a file button in it opens the file.
+  await b.listeners.get("fileList:click")!({ target: { closest: () => ({ dataset: { root: "/r" } }) } });
+  await tick();
+  expect(b.element("fileList").innerHTML).toContain('data-file="notes.md"');
+  expect(b.element("fileList").innerHTML.indexOf("sub/")).toBeLessThan(b.element("fileList").innerHTML.indexOf("notes.md"));
+  await b.listeners.get("fileList:click")!({ target: { closest: () => ({ dataset: { file: "notes.md" } }) } });
+  await tick();
+  expect([b.element("fileText").hidden, b.element("fileText").value, b.element("filePath").value]).toEqual([false, text, "/r/notes.md"]);
+  expect([b.element("fileSave").disabled, b.element("fileGate").textContent]).toEqual([true, "No changes"]);
+  b.element("fileText").value = "one\nTWO\nthree\n";
+  await b.listeners.get("fileText:input")!({});
+  expect([b.element("fileSave").disabled, b.element("fileGate").textContent]).toEqual([true, "Type notes.md to confirm"]);
+  b.element("fileConfirm").value = "notes.md";
+  await b.listeners.get("fileConfirm:input")!({});
+  expect([b.element("fileSave").disabled, b.element("fileGate").textContent]).toEqual([false, "Replaces notes.md: 1 line out, 2 in; the old text is kept as a backup beside it"]);
+  await b.listeners.get("fileSave:click")!({});
+  await tick();
+  const put = b.calls.find(c => c.path === "/api/hosts/a/files" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ path: "/r/notes.md", text: "one\nTWO\nthree\n", revision: "b".repeat(64), confirm: "notes.md" });
+  expect(b.element("adminStatus").textContent).toBe("A: saved /r/notes.md; the old text is in /r/notes.md.bak-1.");
+  // After the save the draft is the file; there is nothing left to save.
+  expect(b.element("fileGate").textContent).toBe("No changes");
+});
+
+test("files: a save refused as stale blocks Save until the file is opened again; a host without the editor hides the part", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  for (const roots of [{ roots: ["/r"] }, { __status: 404 }]) {
+    let reads = 0;
+    const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+      if (path.endsWith("/fleet/conf")) return conf;
+      if (path.endsWith("/files") && init?.method === "PUT") return { __status: 409, error: { kind: "conflict", message: "/r/x.txt changed on the host since you read it; reload it and edit again" } };
+      if (path.endsWith("/files")) return roots;
+      if (path.endsWith("/files?path=%2Fr%2Fx.txt")) { reads++; return { kind: "file", path: "/r/x.txt", root: "/r", text: reads === 1 ? "a\n" : "hand\n", revision: (reads === 1 ? "b" : "d").repeat(64), size: 2 }; }
+      if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+      return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+    });
+    const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+    await tick(3);
+    if ("__status" in roots) { expect(b.element("filesPart").hidden).toBe(true); continue; }
+    b.element("filePath").value = "/r/x.txt";
+    await b.listeners.get("filePath:input")!({});
+    await b.listeners.get("fileOpenBtn:click")!({});
+    await tick();
+    b.element("fileText").value = "mine\n";
+    await b.listeners.get("fileText:input")!({});
+    b.element("fileConfirm").value = "x.txt";
+    await b.listeners.get("fileConfirm:input")!({});
+    await b.listeners.get("fileSave:click")!({});
+    await tick();
+    expect(b.element("adminStatus").textContent).toBe("A: /r/x.txt changed on the host since you read it; reload it and edit again");
+    expect([b.element("fileSave").disabled, b.element("fileGate").textContent]).toEqual([true, "The file changed on the host; copy your edit, then Open it again"]);
+    // The unsaved edit stays visible to copy.
+    expect(b.element("fileText").value).toBe("mine\n");
+    await b.listeners.get("fileOpenBtn:click")!({});
+    await tick();
+    expect([b.element("fileText").value, b.element("fileGate").textContent]).toEqual(["hand\n", "No changes"]);
+  }
+});
+
+test("files: a new file needs a full path ending in a name, and is created with revision new", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files") && init?.method === "PUT") return { path: "/r/new.txt", revision: "e".repeat(64), backup: null };
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return { kind: "dir", path: "/r", root: "/r", entries: [], truncated: false };
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  await b.listeners.get("fileList:click")!({ target: { closest: () => ({ dataset: { root: "/r" } }) } });
+  await tick();
+  expect(b.element("fileList").innerHTML).toContain("Empty folder.");
+  await b.listeners.get("fileNewBtn:click")!({});
+  expect([b.element("filePath").value, b.element("fileGate").textContent]).toEqual(["/r/", "Write the new file's full path, ending in its name"]);
+  b.element("filePath").value = "/r/new.txt";
+  await b.listeners.get("filePath:input")!({});
+  b.element("fileText").value = "hello\n";
+  await b.listeners.get("fileText:input")!({});
+  b.element("fileConfirm").value = "new.txt";
+  await b.listeners.get("fileConfirm:input")!({});
+  expect([b.element("fileSave").disabled, b.element("fileGate").textContent]).toEqual([false, "Creates /r/new.txt"]);
+  await b.listeners.get("fileSave:click")!({});
+  await tick();
+  const put = b.calls.find(c => c.path === "/api/hosts/a/files" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ path: "/r/new.txt", text: "hello\n", revision: "new", confirm: "new.txt" });
+  expect(b.element("adminStatus").textContent).toBe("A: saved /r/new.txt.");
+});
+
+test("files: opening another path with unsaved changes asks for a second click before the draft is dropped", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return { kind: "dir", path: "/r", root: "/r", entries: [{ name: "notes.md", kind: "file", size: 8, modifiedAt: "" }], truncated: false };
+    if (path.endsWith("/files?path=%2Fr%2Fnotes.md")) return { kind: "file", path: "/r/notes.md", root: "/r", text: "one\n", revision: "b".repeat(64), size: 4 };
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  b.element("filePath").value = "/r/notes.md";
+  await b.listeners.get("filePath:input")!({});
+  await b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  b.element("fileText").value = "edited\n";
+  await b.listeners.get("fileText:input")!({});
+  const reads = () => b.calls.filter(c => c.path === "/api/hosts/a/files?path=%2Fr").length;
+  await b.listeners.get("fileUp:click")!({});
+  await tick();
+  expect([reads(), b.element("fileText").value, b.element("adminStatus").textContent]).toEqual([0, "edited\n", "A: the open file has unsaved changes. Ask for /r again to drop them."]);
+  await b.listeners.get("fileUp:click")!({});
+  await tick();
+  expect([reads(), b.element("fileText").hidden]).toEqual([1, true]);
+});
+
+test("files: while a read is on its way, Open is disabled and a second Open sends nothing", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return held.then(() => ({ kind: "dir", path: "/r", root: "/r", entries: [], truncated: false }));
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  b.element("filePath").value = "/r";
+  await b.listeners.get("filePath:input")!({});
+  void b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  expect(b.element("fileOpenBtn").disabled).toBe(true);
+  void b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  expect(b.calls.filter(c => c.path === "/api/hosts/a/files?path=%2Fr").length).toBe(1);
+  release();
+  await tick(6);
+  expect(b.element("fileOpenBtn").disabled).toBe(false);
+});

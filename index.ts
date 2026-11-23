@@ -2,7 +2,7 @@
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
+import { agentSettingsFromEnv, fileRootsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
 import { agentUseCases } from "./src/application/agents.ts";
 import { Agents } from "./src/data/agents.ts";
 import { FleetAgentLauncher } from "./src/fleet/agents.ts";
@@ -24,6 +24,7 @@ import { findBash, managerOf, WatchdogService } from "./src/fleet/watchdog-servi
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
+import { DiskFiles } from "./src/fleet/files.ts";
 import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 import { detectManager, HostUpdates, urlHost } from "./src/update-host.ts";
@@ -123,6 +124,19 @@ if (admin && !options.auth) {
   console.error("FLEET_CONTROL_ADMIN needs FLEET_CONTROL_TOKENS");
   process.exit(1);
 }
+// FLEET_CONTROL_FILE_ROOTS (":"-separated) names the folders the page's file editor may open; unset means the
+// fleet folder and the agent folders. Never the tokens folder, the settings file or fleet.conf, which has its own editor.
+const filesSetup = () => {
+  try {
+    const roots = fileRootsFromEnv(env, [dirname(confPath), ...(agentSettings?.roots ?? [])]);
+    const tokensDir = dirname(process.env.FLEET_CONTROL_TOKENS!);
+    const protectedPaths = [tokensDir, confPath, join(dirname(confPath), "fleet-control-agents.conf"), ...(settingsFile ? [settingsFile] : [])];
+    return { host: new DiskFiles(), roots, protectedPaths };
+  } catch (e) {
+    console.error(`FLEET_CONTROL_FILE_ROOTS: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+};
 // With fleet administration on, an operator also restarts this service and updates it to a release from the
 // page. A separate updater process does it (scripts/updater.ts); its job files and backups go beside the tokens.
 const updatesSetup = () => {
@@ -162,6 +176,8 @@ const deps = {
       watchdog: new WatchdogService({ manager: managerOf(process.platform, process.env), home: homedir(), uid: process.getuid?.() ?? 0, bash: await findBash(), path: process.env.PATH ?? "/usr/bin:/bin", tmuxBin: findTmux() }),
     }
     : undefined,
+  // With fleet administration on, an operator also edits text files in the allowed folders.
+  files: admin && options.auth ? filesSetup() : undefined,
   // With fleet administration on, an operator also edits the service settings; they apply at the next start.
   settings: admin && settingsFile
     ? {
