@@ -1,5 +1,6 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
+import { homedir } from "node:os";
 import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
 import { agentUseCases } from "./src/application/agents.ts";
 import { Agents } from "./src/data/agents.ts";
@@ -18,6 +19,7 @@ import { Leases } from "./src/data/leases.ts";
 import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
+import { findBash, managerOf, WatchdogService } from "./src/fleet/watchdog-service.ts";
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
@@ -130,6 +132,13 @@ const deps = {
   admin,
   // With fleet administration on, an operator also lists, rotates and revokes tokens from the page.
   tokens: admin && options.auth ? { file: new HostTokenFile(process.env.FLEET_CONTROL_TOKENS!, options.auth) } : undefined,
+  // With fleet administration on, an operator also runs agent-fleet's watchdog as a launchd or systemd service.
+  watchdog: admin
+    ? {
+      host: admin.host,
+      watchdog: new WatchdogService({ manager: managerOf(process.platform, process.env), home: homedir(), uid: process.getuid?.() ?? 0, bash: await findBash(), path: process.env.PATH ?? "/usr/bin:/bin", tmuxBin: findTmux() }),
+    }
+    : undefined,
   // With fleet administration on, an operator also edits the service settings; they apply at the next start.
   settings: admin && settingsFile
     ? {
