@@ -20,7 +20,7 @@ import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-term
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
-import { parseSettingsFile } from "./src/application/settings.ts";
+import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 
 const confPath = process.env.FLEET_CONF;
@@ -46,15 +46,17 @@ const settingsFile = process.env.FLEET_CONTROL_ADMIN === "1"
   : null;
 // The checks a start runs on these settings, beyond parsing: managed agents' values, and a fleet that terminal
 // input can use. A save from the page runs them too.
+// Input is checked only when the file turns it on: the plist's own input is checked by the start below.
 const startCheck = async (next: Record<string, string | undefined>) => {
   agentSettingsFromEnv(next);
-  if (next.FLEET_CONTROL_INPUT === "1") { await fleetSocket(confPath); findTmux(); }
+  if (next.FLEET_CONTROL_INPUT === "1" && baseEnv.FLEET_CONTROL_INPUT !== "1") { await fleetSocket(confPath); findTmux(); }
 };
 let env = baseEnv;
-let settingsSkipped: string | null = null;
+let settingsSkipped: { reason: string; revision: string } | null = null;
 if (settingsFile) {
+  let text: string | null = null;
   try {
-    const text = HostSettingsFile.readSync(settingsFile);
+    text = HostSettingsFile.readSync(settingsFile);
     if (text !== null) {
       const next = settingsEnv(baseEnv, parseSettingsFile(text));
       await startCheck(next);
@@ -62,8 +64,8 @@ if (settingsFile) {
       console.log(`settings from ${settingsFile}`);
     }
   } catch (e) {
-    settingsSkipped = e instanceof Error ? e.message : String(e);
-    console.error(`settings file ${settingsFile} skipped: ${settingsSkipped}`);
+    settingsSkipped = { reason: e instanceof Error ? e.message : String(e), revision: settingsRevision(text) };
+    console.error(`settings file ${settingsFile} skipped: ${settingsSkipped.reason}`);
   }
 }
 const options = await serveOptionsFromEnv();

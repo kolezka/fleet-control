@@ -37,7 +37,8 @@ export type AdminView = {
 };
 
 export type SettingsValues = { agentRoots: string[]; agentModels: string[]; agentDshModels: string[]; agentMcpUrl: string | null; input: boolean };
-export type SettingsRead = { path: string; revision: string; running: SettingsValues; next: SettingsValues; restartNeeded: string[]; skipped: string | null };
+// saved: the keys the file holds; base: the plist's or unit's values.
+export type SettingsRead = { path: string; revision: string; running: SettingsValues; next: SettingsValues; base: SettingsValues; saved: string[]; restartNeeded: string[]; skipped: string | null };
 // One text field per list (one entry per line), as typed.
 export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
@@ -63,7 +64,8 @@ export function parseSettings(body: unknown): SettingsRead | null {
   const o = body as Record<string, unknown>;
   const running = values(o.running), next = values(o.next);
   if (typeof o.path !== "string" || typeof o.revision !== "string" || !running || !next || !strings(o.restartNeeded)) return null;
-  return { path: o.path, revision: o.revision, running, next, restartNeeded: o.restartNeeded, skipped: typeof o.skipped === "string" ? o.skipped : null };
+  const saved = o.saved && typeof o.saved === "object" && !Array.isArray(o.saved) ? Object.keys(o.saved) : [];
+  return { path: o.path, revision: o.revision, running, next, base: values(o.base) ?? next, saved, restartNeeded: o.restartNeeded, skipped: typeof o.skipped === "string" ? o.skipped : null };
 }
 
 export const draftOf = (s: SettingsValues): SettingsDraft => ({
@@ -79,8 +81,10 @@ export const settingsBody = (d: SettingsDraft) => ({
 export function settingsGate(v: AdminView): { ok: boolean; reason: string } {
   if (v.busy) return { ok: false, reason: "Working…" };
   if (!v.settings) return { ok: false, reason: "Read the settings first" };
-  if (v.settingsChangedOnHost) return { ok: false, reason: "The settings file changed on the host; copy your edit, then Reload" };
-  if (JSON.stringify(settingsBody(v.settingsDraft)) === JSON.stringify(settingsBody(draftOf(v.settings.next)))) return { ok: false, reason: "No changes" };
+  if (v.settingsChangedOnHost) return { ok: false, reason: "The settings file changed on the host; copy your edit, then Reload the settings" };
+  const body = settingsBody(v.settingsDraft);
+  const drops = v.settings.saved.some((k) => JSON.stringify(body[k as keyof typeof body]) === JSON.stringify(v.settings!.base[k as keyof SettingsValues]));
+  if (JSON.stringify(body) === JSON.stringify(settingsBody(draftOf(v.settings.next))) && !drops) return { ok: false, reason: "No changes" };
   if (v.settingsConfirm !== "settings") return { ok: false, reason: "Type settings to confirm" };
   return { ok: true, reason: "Saved to the settings file; the service takes it at its next start" };
 }

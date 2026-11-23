@@ -675,7 +675,7 @@ function renderAdmin(h: HostState | undefined) {
   ($("hostRotate") as HTMLButtonElement).disabled = !hg.ok;
   ($("hostRemove") as HTMLButtonElement).disabled = !hg.ok;
   $("settingsPart").hidden = v.settings === null && v.settingsError === "";
-  $("settingsError").textContent = v.settingsError ? `The settings file cannot be used: ${v.settingsError}` : v.settings?.skipped ? `This start skipped the settings file: ${v.settings.skipped}` : "";
+  $("settingsError").textContent = v.settingsError ? `The settings file cannot be used: ${v.settingsError}` : v.settings?.skipped ? `At its last start the service skipped the settings file: ${v.settings.skipped}. ${v.settings.restartNeeded.length ? "The current file passes the start checks; it applies at the next restart." : ""}`.trim() : "";
   $("settingsError").hidden = $("settingsError").textContent === "";
   $("settingsForm").hidden = v.settings === null;
   if (v.settings) {
@@ -685,6 +685,9 @@ function renderAdmin(h: HostState | undefined) {
       if (el.value !== value) el.value = value;
     }
     ($("setInput") as HTMLInputElement).checked = v.settingsDraft.input;
+    // Which settings the file sets, and what the plist or unit has for them.
+    const set = v.settings.saved;
+    $("settingsSource").textContent = set.length ? `Set here (over the plist or unit): ${set.join(", ")}. Put a value back to the plist's to drop it from the file.` : "Nothing set here; every value comes from the plist or unit.";
     $("settingsPending").textContent = v.settings.restartNeeded.length ? `Waiting for a restart of the service: ${v.settings.restartNeeded.join(", ")}.` : "The running service uses these settings.";
     const sg = settingsGate(v);
     $("settingsGate").textContent = sg.reason;
@@ -693,7 +696,9 @@ function renderAdmin(h: HostState | undefined) {
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
 }
 
-async function refreshAdmin(hostId: string, keepDraft = true) {
+// keep: which unsaved drafts survive this read. Reload of one part, or a save of it, drops only that part's draft.
+async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: boolean } = {}) {
+  const keepDraft = keep.conf ?? true;
   const host = fleet.hosts[hostId]?.info;
   if (!host || host.supervisor) return;
   const v = adminView(hostId);
@@ -720,7 +725,7 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
     // Settings: hidden where the host does not offer them. An unsaved edit stays through a refresh.
     const st = await hostCall(host, "/settings");
     const read = st.outcome.ok ? parseSettings(st.outcome.data) : null;
-    const dirty = keepDraft && v.settings !== null && JSON.stringify(settingsBody(v.settingsDraft)) !== JSON.stringify(settingsBody(draftOf(v.settings.next)));
+    const dirty = (keep.settings ?? true) && v.settings !== null && JSON.stringify(settingsBody(v.settingsDraft)) !== JSON.stringify(settingsBody(draftOf(v.settings.next)));
     v.settingsError = !st.outcome.ok && st.status === 400 ? st.outcome.message : "";
     if (read) {
       // Like fleet.conf: an unsaved edit keeps the revision it was made from; only Reload or a clean draft moves on.
@@ -824,7 +829,7 @@ async function saveConf(hostId: string) {
     const backup = (outcome.data as { backup?: string | null }).backup;
     v.notice = `${host.name}: fleet.conf saved${backup ? `; the previous file is ${backup}` : ""}. Running sessions keep going; restart one to apply its change.`;
     v.saveConfirm = "";
-    await refreshAdmin(hostId, false);
+    await refreshAdmin(hostId, { conf: false });
     return;
   }
   if (status === 409) v.changedOnHost = true;
@@ -1057,7 +1062,14 @@ $("confReload").addEventListener("click", () => {
   if (!h) return;
   const v = adminView(h.info.id);
   v.notice = ""; v.saveConfirm = "";
-  void refreshAdmin(h.info.id, false);
+  void refreshAdmin(h.info.id, { conf: false });
+});
+$("settingsReload").addEventListener("click", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  const v = adminView(h.info.id);
+  v.notice = ""; v.settingsConfirm = "";
+  void refreshAdmin(h.info.id, { settings: false });
 });
 $("agentOrchestrator").addEventListener("change", () => {
   const h = selectedHostState(fleet);

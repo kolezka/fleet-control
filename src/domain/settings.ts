@@ -88,7 +88,7 @@ export function settingsDiff(base: Required<ServiceSettings>, wanted: Required<S
 export function checkNeedsRoots(next: Required<ServiceSettings>, saved: ServiceSettings): void {
   if (next.agentRoots.length) return;
   const idle = (["agentModels", "agentDshModels", "agentMcpUrl"] as const).filter((k) => saved[k] !== undefined && saved[k] !== null && !(Array.isArray(saved[k]) && (saved[k] as string[]).length === 0));
-  if (idle.length) throw new AdminError("invalid", `${idle.join(", ")} need agent folders; set agentRoots too, or leave ${idle.length > 1 ? "them" : "it"} as the service has ${idle.length > 1 ? "them" : "it"}`);
+  if (idle.length) throw new AdminError("invalid", `${idle.join(", ")} need agent folders; set agentRoots too, or put ${idle.length > 1 ? "them" : "it"} back as the plist or unit has ${idle.length > 1 ? "them" : "it"}`);
 }
 
 // The settings as the running service took them from its environment, in the file's shape.

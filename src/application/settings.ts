@@ -23,8 +23,8 @@ export type SettingsDeps = {
   // Throws when the service would not start with this environment, or would start without part of it
   // (the same checks index.ts runs at start).
   check(env: Record<string, string | undefined>): Promise<void>;
-  // Why the file was skipped at this start, or null when it was taken (or absent).
-  skipped?: string | null;
+  // Why the file was skipped at this start, with the revision it had then; null when it was taken (or absent).
+  skipped?: { reason: string; revision: string } | null;
 };
 
 // No file has its own revision, so it never equals the revision of an empty file.
@@ -47,7 +47,7 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
     const saved = parseSettingsFile(text);
     const next = settingsOf(settingsEnv(deps.baseEnv, saved));
     const differs = (Object.keys(next) as (keyof typeof next)[]).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(deps.running[k]));
-    return { path: deps.file.path, revision: settingsRevision(text), saved, base: settingsOf(deps.baseEnv), running: deps.running, next, restartNeeded: differs, skipped: deps.skipped ?? null };
+    return { path: deps.file.path, revision: settingsRevision(text), saved, base: settingsOf(deps.baseEnv), running: deps.running, next, restartNeeded: differs, skipped: deps.skipped && deps.skipped.revision === settingsRevision(text) ? deps.skipped.reason : null };
   };
   return {
     async get() {
@@ -62,9 +62,15 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       if (extra.length) throw new AdminError("invalid", `unknown field ${extra[0]}`);
       if (typeof revision !== "string" || !/^[0-9a-f]{64}$/.test(revision)) throw new AdminError("invalid", "revision must be the 64-hex revision the settings were read at");
       if (confirm !== SETTINGS_CONFIRM) throw new AdminError("invalid", `type ${SETTINGS_CONFIRM} to confirm`);
-      // The page sends every setting; the file keeps only those that differ from the plist or unit.
-      const full = settingsOf(settingsEnv(deps.baseEnv, checkSettings(settings)));
-      const next = settingsDiff(settingsOf(deps.baseEnv), full);
+      // The page sends every setting; the file keeps only those that differ from the plist or unit, and only
+      // those are checked, so a plist value the page cannot set (an empty model list) does not block a save.
+      const base = settingsOf(deps.baseEnv);
+      const sent = settings && typeof settings === "object" && !Array.isArray(settings) ? settings as Record<string, unknown> : settings;
+      const changed = sent && typeof sent === "object" && !Array.isArray(sent)
+        ? Object.fromEntries(Object.entries(sent).filter(([k, x]) => !(k in base) || JSON.stringify(x) !== JSON.stringify(base[k as keyof typeof base])))
+        : sent;
+      const full = settingsOf(settingsEnv(deps.baseEnv, checkSettings(changed)));
+      const next = settingsDiff(base, full);
       checkNeedsRoots(full, next);
       // A file the service could not start with would take the page down at the next restart.
       try { await deps.check(settingsEnv(deps.baseEnv, next)); } catch (e) {

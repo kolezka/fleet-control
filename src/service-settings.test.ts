@@ -221,3 +221,49 @@ test("review fixes on the real service: input on a fleet it cannot type into is 
   expect((await call(s.base, "/leases")).status).toBe(200);
   s.proc.kill(); await s.proc.exited;
 });
+
+test("review round 2: a plist value the page cannot set does not block a save, and the skip reason ends once the file changes", async () => {
+  let text: string | null = "{\"input\": true}\n";
+  const file: SettingsFile = { path: "/s/settings.json", read: async () => text, write: async (expected, t) => { if (expected !== text) return false; text = t; return true; } };
+  // The plist sets an empty model list; the page sends it back unchanged with one real change.
+  const baseEnv = { FLEET_CONTROL_AGENT_MODELS: "" };
+  const deps = { file, baseEnv, running: settingsOf(baseEnv), check: async () => {}, skipped: { reason: "terminal input needs a local fleet (REMOTE_SSH is set)", revision: settingsRevision(text) } };
+  const use = settingsUseCases(deps, { name: "op", role: "operator" });
+  const first = await use.get();
+  expect([first.next.agentModels, first.skipped]).toEqual([[], "terminal input needs a local fleet (REMOTE_SSH is set)"]);
+  const saved = await use.save({ settings: { ...first.base, input: false }, revision: first.revision, confirm: "settings" });
+  expect(JSON.parse(text!)).toEqual({});
+  // The file the start skipped is gone, so its reason no longer shows.
+  expect(saved.skipped).toBeNull();
+  expect((await use.get()).skipped).toBeNull();
+});
+
+test("review round 2 on the real service: with input on in the plist, a save of other settings does not depend on fleet.conf loading", async () => {
+  const d = join(dir, "plist-input");
+  await mkdir(d, { recursive: true });
+  const op = newToken();
+  await writeFile(join(d, "tokens"), `${tokenLine("op", op, "operator")}\n`, { mode: 0o600 });
+  const conf = `FLEET=settings-input-${process.pid}\nFLEET_DIR=${d}\nAGENTS=()\n`;
+  await writeFile(join(d, "fleet.conf"), conf);
+  const port = await freePort();
+  const proc = Bun.spawn(["bun", "index.ts"], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env, PORT: String(port), FLEET_CONF: join(d, "fleet.conf"), FLEET_CONTROL_DB: join(d, "state.db"), FLEET_CONTROL_TOKENS: join(d, "tokens"), FLEET_CONTROL_ADMIN: "1", FLEET_CONTROL_AGENT_ROOTS: "", FLEET_CONTROL_INPUT: "1", FLEET_CONTROL_SETTINGS: "" },
+    stdout: "pipe", stderr: "pipe",
+  });
+  procs.push(proc);
+  const base = `http://127.0.0.1:${port}`;
+  let up = false;
+  for (let i = 0; i < 100 && !up; i++) { try { up = (await fetch(`${base}/api/whoami`, { headers: { authorization: `Bearer ${op}` } })).ok; } catch { await Bun.sleep(100); } }
+  expect(up).toBe(true);
+  const call = (path: string, init: RequestInit = {}) => fetch(`${base}/api${path}`, { ...init, headers: { authorization: `Bearer ${op}`, "content-type": "application/json", origin: base } });
+  // fleet.conf breaks for a moment (an edit by hand); an unrelated settings save still goes through.
+  await writeFile(join(d, "fleet.conf"), `${conf}false\n`);
+  const read = await (await call("/settings")).json();
+  const put = await call("/settings", { method: "PUT", body: JSON.stringify({ settings: { ...read.next, agentDshModels: [] , agentRoots: [] }, revision: read.revision, confirm: "settings" }) });
+  expect(put.status).toBe(200);
+  const put2 = await call("/settings", { method: "PUT", body: JSON.stringify({ settings: { ...read.next, input: false }, revision: (await put.json()).revision, confirm: "settings" }) });
+  expect(put2.status).toBe(200);
+  expect(JSON.parse(await readFile(join(d, "settings.json"), "utf8"))).toEqual({ input: false });
+  proc.kill(); await proc.exited;
+});
