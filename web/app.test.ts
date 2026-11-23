@@ -1013,3 +1013,19 @@ test("watchdog: a service watchdog and a hand-started one together are both name
   for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("watchdogState").textContent).toBe("On: pl.raqz.fleet-watchdog.t runs (pid 7), and a second watchdog runs by hand in tmux session t-watchdog. Stop that one with fleet watchdog stop.");
 });
+
+test("watchdog: when tmux cannot be asked the part still shows, Turn off stays open and Turn on is held back", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/watchdog")) return { fleet: "t", manager: "launchd", name: "pl.raqz.fleet-watchdog.t", installed: true, running: true, pid: 7, inTmux: null, inTmuxError: "tmux exited 1" };
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("watchdogPart").hidden).toBe(false);
+  expect(b.element("watchdogState").textContent).toBe("On: pl.raqz.fleet-watchdog.t runs (pid 7). It checks every agent every 60 s and starts again at login. Cannot tell whether a watchdog runs in tmux: tmux exited 1.");
+  b.element("watchdogConfirm").value = "watchdog";
+  await b.listeners.get("watchdogConfirm:input")!({});
+  expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled]).toEqual(["Turn off", false]);
+});

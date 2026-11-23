@@ -49,6 +49,7 @@ export function watchdogUseCases(deps: WatchdogDeps, caller?: Caller) {
           // Two watchdogs would both nudge and replace the same agents. A hand start right after this check
           // still slips through; the page then shows both (state() reports running and inTmux).
           if (now.inTmux) throw new AdminError("conflict", `a watchdog already runs in tmux session ${f.fleet}-watchdog; stop it with fleet watchdog stop first`);
+          if (now.inTmux === null) throw new AdminError("conflict", `cannot tell whether a watchdog runs in tmux (${now.inTmuxError}); turning it on could start a second one`);
           if (!now.running) await deps.watchdog.start(f);
         } else if (now.installed || now.running) {
           await deps.watchdog.stop(f);

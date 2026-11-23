@@ -102,13 +102,14 @@ export class WatchdogService implements WatchdogHost {
   private launchctl(...a: string[]) { return run([this.opts.launchctl ?? "launchctl", ...a]); }
   private systemctl(...a: string[]) { return run([this.opts.systemctl ?? "systemctl", "--user", ...a]); }
 
-  private async inTmux(f: WatchdogFleet) {
+  private async inTmux(f: WatchdogFleet): Promise<{ inTmux: boolean | null; inTmuxError?: string }> {
     const tmux = this.opts.tmuxBin ?? "tmux";
     const r = await run([tmux, ...(f.socket ? ["-L", f.socket, "-f", "/dev/null"] : []), "has-session", "-t", `=${f.fleet}-watchdog`]);
-    if (r.exitCode === 0) return true;
-    // Only a plain "not there" counts as no watchdog; any other tmux error must not let a second one start.
-    if (/can't find session|no server running|error connecting to/i.test(r.stderr)) return false;
-    throw new AdminError("conflict", `cannot tell whether a watchdog runs in tmux (${r.stderr.trim() || `tmux exited ${r.exitCode}`})`);
+    if (r.exitCode === 0) return { inTmux: true };
+    // Only a plain "not there" counts as no watchdog (no session, no socket, nothing listening); any other tmux
+    // error leaves it unknown, and unknown never lets a second watchdog start.
+    if (/can't find session|no server running|error connecting to .*\((No such file or directory|Connection refused)\)/i.test(r.stderr)) return { inTmux: false };
+    return { inTmux: null, inTmuxError: r.stderr.trim() || `tmux exited ${r.exitCode}` };
   }
 
   private async pid(name: string): Promise<number | null> {
@@ -124,12 +125,12 @@ export class WatchdogService implements WatchdogHost {
   }
 
   async state(f: WatchdogFleet): Promise<WatchdogState> {
-    const inTmux = await this.inTmux(f);
-    if (!this.opts.manager) return { manager: null, name: "", installed: false, running: false, pid: null, inTmux };
+    const tmux = await this.inTmux(f);
+    if (!this.opts.manager) return { manager: null, name: "", installed: false, running: false, pid: null, ...tmux };
     const name = watchdogName(this.opts.manager, f.fleet);
     const installed = await Bun.file(this.file(name)).exists();
     const pid = await this.pid(name);
-    return { manager: this.opts.manager, name, installed, running: pid !== null, pid, inTmux };
+    return { manager: this.opts.manager, name, installed, running: pid !== null, pid, ...tmux };
   }
 
   private async loaded(name: string) {
@@ -157,6 +158,7 @@ export class WatchdogService implements WatchdogHost {
           for (let i = 0; i < 50 && await this.loaded(name); i++) await Bun.sleep(100);
         }
         await writeFile(file, launchdPlist(name, f, this.opts.bash, this.opts.path), { mode: 0o644 });
+        // 5 is also launchd's error for a plist it refuses; such a refusal reaches the page after the retries (about 7.5 s).
         let r = await this.launchctl("bootstrap", `gui/${this.opts.uid}`, file);
         for (let i = 0; r.exitCode !== 0 && /: (5|37):/.test(r.stderr) && i < 4; i++) {
           await Bun.sleep(500 * 2 ** i);

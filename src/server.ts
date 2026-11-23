@@ -135,6 +135,8 @@ export type ServeOptions = {
 export const MAX_VIEWERS = 16;
 // How long a restart request may stay open while the session starts again.
 export const RESTART_IDLE_SECONDS = 200;
+// A watchdog start: unload wait, bootstrap retries, settle, cleanup on failure. The gateway waits 60 s.
+export const WATCHDOG_IDLE_SECONDS = 70;
 
 // The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
 export class ViewerSlots {
@@ -409,11 +411,12 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!w) return noWatchdog();
           try { return Response.json(await w.get(), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
         }),
-        PUT: guard(async (req, _s, who) => {
+        PUT: guard(async (req, srv, who) => {
           const w = watchdogFor(who);
           if (!w) return noWatchdog();
           if (!originAllowed(req)) return forbidden();
           if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+          srv.timeout(req, WATCHDOG_IDLE_SECONDS);
           try {
             const body = await jsonBody(req);
             if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });

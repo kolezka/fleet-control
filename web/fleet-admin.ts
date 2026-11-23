@@ -53,15 +53,15 @@ export type SettingsRead = { path: string; revision: string; running: SettingsVa
 // One text field per list (one entry per line), as typed.
 export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
-export type WatchdogRead = { fleet: string; manager: "launchd" | "systemd" | null; name: string; installed: boolean; running: boolean; pid: number | null; inTmux: boolean };
+export type WatchdogRead = { fleet: string; manager: "launchd" | "systemd" | null; name: string; installed: boolean; running: boolean; pid: number | null; inTmux: boolean | null; inTmuxError?: string };
 
 export function parseWatchdog(x: unknown): WatchdogRead | null {
   if (!x || typeof x !== "object") return null;
   const w = x as Record<string, unknown>;
-  if (typeof w.fleet !== "string" || typeof w.name !== "string" || typeof w.installed !== "boolean" || typeof w.running !== "boolean" || typeof w.inTmux !== "boolean") return null;
+  if (typeof w.fleet !== "string" || typeof w.name !== "string" || typeof w.installed !== "boolean" || typeof w.running !== "boolean" || (typeof w.inTmux !== "boolean" && w.inTmux !== null)) return null;
   if (w.manager !== "launchd" && w.manager !== "systemd" && w.manager !== null) return null;
   if (w.pid !== null && typeof w.pid !== "number") return null;
-  return { fleet: w.fleet, manager: w.manager, name: w.name, installed: w.installed, running: w.running, pid: w.pid as number | null, inTmux: w.inTmux };
+  return { fleet: w.fleet, manager: w.manager, name: w.name, installed: w.installed, running: w.running, pid: w.pid as number | null, inTmux: w.inTmux as boolean | null, ...(typeof w.inTmuxError === "string" ? { inTmuxError: w.inTmuxError } : {}) };
 }
 
 // The one button turns the service on when it is off and off when it is on.
@@ -71,6 +71,7 @@ export function watchdogGate(v: AdminView): { ok: boolean; on: boolean; reason: 
   const on = !w.running;
   if (!w.manager) return { ok: false, on, reason: "This host has neither launchd nor systemd" };
   if (on && w.inTmux) return { ok: false, on, reason: `A watchdog runs in tmux session ${w.fleet}-watchdog; stop it with fleet watchdog stop first` };
+  if (on && w.inTmux === null) return { ok: false, on, reason: `Cannot tell whether a watchdog runs in tmux (${w.inTmuxError ?? "tmux did not answer"}); fix tmux first` };
   if (v.busy) return { ok: false, on, reason: "Working" };
   if (v.watchdogConfirm !== "watchdog") return { ok: false, on, reason: "Type watchdog to confirm" };
   return { ok: true, on, reason: on ? `Starts ${w.name} now and at every login` : `Stops ${w.name}; agents keep running` };

@@ -23,6 +23,28 @@ if (!usable) console.warn("SKIP watchdog service test: needs the agent-fleet CLI
 const pidAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 describe("watchdog rules", () => {
+  test("only a missing session, server or socket reads as no tmux watchdog; other tmux errors read as unknown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fleet-control-wd-tmux-"));
+    const cases: [string, boolean | null][] = [
+      ["can't find session: t-watchdog", false],
+      ["no server running on /tmp/tmux-1000/fleet-t", false],
+      ["error connecting to /private/tmp/tmux-501/fleet-t (No such file or directory)", false],
+      ["error connecting to /tmp/tmux-1000/fleet-t (Connection refused)", false],
+      ["error connecting to /private/tmp/tmux-501/fleet-t (Permission denied)", null],
+      ["error connecting to /private/tmp/tmux-501/fleet-t (Socket operation on non-socket)", null],
+      ["", null],
+    ];
+    try {
+      for (const [text, want] of cases) {
+        const fake = join(dir, "tmux");
+        await writeFile(fake, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(text)} >&2\nexit 1\n`);
+        await chmod(fake, 0o755);
+        const w = new WatchdogService({ manager: "systemd", home: dir, uid: 1, bash: "/bin/bash", path: "/usr/bin:/bin", tmuxBin: fake, systemctl: "/usr/bin/true" });
+        const st = await w.state({ fleet: "t", dir, socket: "fleet-t" });
+        expect([text, st.inTmux]).toEqual([text, want]);
+      }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
   test("a request names on or off and types watchdog", () => {
     expect(checkWatchdogRequest({ on: true, confirm: "watchdog" })).toEqual({ on: true });
     expect(() => checkWatchdogRequest({ on: true })).toThrow("type watchdog to confirm");
@@ -54,7 +76,7 @@ describe("watchdog rules", () => {
 
   test("the use cases need an operator, refuse a second watchdog and a REMOTE_SSH fleet, and do nothing twice", async () => {
     const calls: string[] = [];
-    let running = false, inTmux = false, remote = "";
+    let running = false, inTmux: boolean | null = false, remote = "";
     const wd: WatchdogHost = {
       state: async () => ({ manager: "launchd", name: "w", installed: running, running, pid: running ? 1 : null, inTmux }),
       start: async () => { calls.push("start"); running = true; },
@@ -72,6 +94,13 @@ describe("watchdog rules", () => {
     expect(calls).toEqual(["start", "stop"]);
     inTmux = true;
     await expect(op.set({ on: true, confirm: "watchdog" })).rejects.toThrow("a watchdog already runs in tmux session t-watchdog; stop it with fleet watchdog stop first");
+    // tmux could not be asked: on is refused, off still works.
+    inTmux = null;
+    await expect(op.set({ on: true, confirm: "watchdog" })).rejects.toThrow("cannot tell whether a watchdog runs in tmux");
+    expect((await op.get()).inTmux).toBe(null);
+    running = true;
+    expect((await op.set({ on: false, confirm: "watchdog" })).running).toBe(false);
+    calls.pop();
     inTmux = false; remote = "ssh x";
     await expect(op.get()).rejects.toThrow("this fleet runs over REMOTE_SSH; run its watchdog on that host");
     // A refusal the operator can act on is 422 on the wire; 503 would reach the page as "unknown".
@@ -211,6 +240,7 @@ if (tool === "launchctl") {
   const label = cmd === "bootstrap" ? /<key>Label<\\/key><string>([^<]*)</.exec(readFileSync(file, "utf8"))[1] : target.split("/").pop();
   const job = S[label];
   if (cmd === "bootstrap") {
+    if (S.__bootFail > 0) { S.__bootFail--; save(); console.error("Bootstrap failed: 5: Input/output error"); process.exit(5); }
     if (job) { console.error("Bootstrap failed: 5: Input/output error"); process.exit(5); }
     const x = readFileSync(file, "utf8");
     let argv = [...x.split("<key>ProgramArguments</key><array>")[1].split("</array>")[0].matchAll(/<string>([^<]*)<\\/string>/g)].map((m) => un(m[1]));
@@ -220,11 +250,20 @@ if (tool === "launchctl") {
     S[label] = { argv, abandon: x.includes("<key>AbandonProcessGroup</key><true/>"), pid: start(argv, dirname(argv[1]), out, path), out, path };
     save();
   } else if (cmd === "print") {
+    if (job && job.linger !== undefined) {
+      if (job.linger <= 0) { delete S[label]; save(); console.error("Could not find service"); process.exit(113); }
+      job.linger--; save(); console.log("gui/501/" + label + " = {\\n\\tstate = not running\\n}"); process.exit(0);
+    }
     if (!job) { console.error("Could not find service"); process.exit(113); }
     console.log("gui/501/" + label + " = {\\n\\tstate = " + (alive(job.pid) ? "running" : "not running") + (alive(job.pid) ? "\\n\\tpid = " + job.pid : "") + "\\n\\tendpoints = {\\n\\t\\tpid = 1\\n\\t}\\n}");
   } else if (cmd === "bootout") {
     if (!job) { console.error("Boot-out failed: 3: No such process"); process.exit(3); }
-    kill(job.pid, !job.abandon); delete S[label]; save(); await Bun.sleep(200);
+    kill(job.pid, !job.abandon);
+    // Real launchd unloads a job it is killing later: "linger" keeps it loaded for n prints and refuses m bootstraps.
+    const lf = join(home, "linger");
+    if (existsSync(lf)) { const [n, m] = readFileSync(lf, "utf8").trim().split(" ").map(Number); rmSync(lf); job.linger = n; S.__bootFail = m; }
+    else delete S[label];
+    save(); await Bun.sleep(200);
   } else if (cmd === "kickstart") {
     if (!job) process.exit(113);
     if (!alive(job.pid)) { job.pid = start(job.argv, dirname(job.argv[1]), job.out, job.path); save(); }
@@ -273,18 +312,22 @@ describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand
     test(`${manager}: on starts watchdog.sh from a folder with spaces and $, off stops only the watchdog, and the agent it started keeps running`, async () => {
       const f = await fakeFleet(manager);
       const w = service(manager);
-      // tmux as /usr/bin/false: an error other than "no session" refuses rather than guessing.
-      await expect(w.state(f)).rejects.toThrow("cannot tell whether a watchdog runs in tmux");
       const ok = new WatchdogService({ ...w.opts, tmuxBin: undefined });
       const st = { ...f, socket: `fc-wd-none-${process.pid}` };
       await ok.start(st);
       const on = await ok.state(st);
       expect([on.running, on.installed, on.inTmux]).toEqual([true, true, false]);
+      // tmux as /usr/bin/false: the state still reads, on is refused, and off is not blocked.
+      const host = { read: async () => "", facts: async () => ({ fleet: st.fleet, dir: st.dir, socket: st.socket, remote: "", sessions: [] }) };
+      const broken = watchdogUseCases({ host, watchdog: w }, { name: "op", role: "operator" });
+      const seen = await broken.get();
+      expect([seen.running, seen.inTmux, seen.inTmuxError]).toEqual([true, null, "tmux exited 1"]);
       for (let i = 0; i < 30 && !(await Bun.file(join(f.dir, "agent.pid")).exists()); i++) await Bun.sleep(100);
       const agent = await agentAlive(f);
       expect(agent).toBeGreaterThan(0);
       expect(await readFile(join(f.dir, "watchdog.service.log"), "utf8")).toContain("watchdog up PATH=/usr/bin:/bin");
-      await ok.stop(st);
+      await expect(broken.set({ on: true, confirm: "watchdog" })).rejects.toThrow("cannot tell whether a watchdog runs in tmux (tmux exited 1)");
+      expect((await broken.set({ on: false, confirm: "watchdog" })).running).toBe(false);
       expect((await ok.state(st)).running).toBe(false);
       expect(await agentAlive(f)).toBe(agent);
       process.kill(agent);
@@ -312,6 +355,36 @@ describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand
     try { process.kill(Number(await readFile(join(f.dir, "agent.pid"), "utf8"))); } catch {}
   }, 20_000);
 
+  test("launchd: a job that stays loaded for a while after bootout is waited for, and refused bootstraps are retried", async () => {
+    const f = await fakeFleet("linger");
+    const st = { ...f, socket: `fc-wd-none-${process.pid}` };
+    const w = new WatchdogService({ ...service("launchd").opts, tmuxBin: undefined });
+    await w.start(st);
+    const S = JSON.parse(await readFile(join(dir, "state.json"), "utf8"));
+    process.kill(-S["pl.raqz.fleet-watchdog.linger"].pid);
+    await Bun.sleep(300);
+    await writeFile(join(dir, "linger"), "3 2");
+    const before = (await readFile(join(dir, "calls"), "utf8")).split("\n").length;
+    await w.start(st);
+    expect((await w.state(st)).running).toBe(true);
+    const calls = (await readFile(join(dir, "calls"), "utf8")).split("\n").slice(before - 1).filter((l) => l.includes("linger")).map((l) => l.split(" ")[1]);
+    // bootout, then prints while it stays loaded (3) and the one that finds it gone, then bootstrap: refused twice, then taken.
+    const between = calls.slice(calls.indexOf("bootout") + 1, calls.indexOf("bootstrap"));
+    expect(between.filter((c) => c === "print").length).toBeGreaterThanOrEqual(4);
+    expect(calls.filter((c) => c === "bootstrap").length).toBe(3);
+    // Bootstrap refused more often than the retries allow: 422 and no plist left.
+    await w.stop(st);
+    try { process.kill(Number(await readFile(join(f.dir, "agent.pid"), "utf8"))); } catch {}
+    await w.start(st);
+    process.kill(-JSON.parse(await readFile(join(dir, "state.json"), "utf8"))["pl.raqz.fleet-watchdog.linger"].pid);
+    await Bun.sleep(300);
+    await writeFile(join(dir, "linger"), "0 9");
+    const e = await w.start(st).catch((x) => x);
+    expect([e.kind, /Bootstrap failed: 5/.test(e.message)]).toEqual(["failed", true]);
+    expect(await Bun.file(join(dir, "Library/LaunchAgents/pl.raqz.fleet-watchdog.linger.plist")).exists()).toBe(false);
+    try { process.kill(Number(await readFile(join(f.dir, "agent.pid"), "utf8"))); } catch {}
+  }, 30_000);
+
   test("a start the manager refuses leaves no file behind, and refusals the operator can fix are 422, not 503", async () => {
     const f = await fakeFleet("refused");
     const st = { ...f, socket: `fc-wd-none-${process.pid}` };
@@ -329,14 +402,14 @@ describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand
   });
 });
 
-test("the gateway waits for a slow watchdog start instead of answering 504 after its usual 10 s", async () => {
+test("the gateway waits for a slow watchdog start instead of answering 504 after its usual 10 s, and the host does not drop it either", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fleet-control-wd-slow-"));
   const op = newToken();
   await writeFile(join(dir, "tokens"), `${tokenLine("op", op, "operator")}\n`);
   let running = false;
   const slow = {
     state: async () => ({ manager: "launchd" as const, name: "pl.raqz.fleet-watchdog.t", installed: running, running, pid: running ? 1 : null, inTmux: false }),
-    start: async () => { await Bun.sleep(11_000); running = true; },
+    start: async () => { await Bun.sleep(16_000); running = true; },
     stop: async () => { running = false; },
   };
   const host = { read: async () => "", facts: async () => ({ fleet: "t", dir, socket: "", remote: "", sessions: [] }) };

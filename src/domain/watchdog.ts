@@ -14,7 +14,9 @@ export type WatchdogState = {
   running: boolean;
   pid: number | null;
   // A watchdog started by hand with `fleet watchdog start`, in tmux session <FLEET>-watchdog.
-  inTmux: boolean;
+  // null: tmux could not be asked; inTmuxError says why. Turning on is then refused, turning off is not.
+  inTmux: boolean | null;
+  inTmuxError?: string;
 };
 
 export function checkWatchdogRequest(input: unknown): { on: boolean } {
