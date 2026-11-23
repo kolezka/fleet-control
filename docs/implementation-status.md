@@ -2,6 +2,17 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Service settings from the page (2026-11-23, branch `feat/service-settings`, not released)
+
+Owner decision 2026-11-23: settings saved from the page go to a file the service reads when it starts; nothing changes in the running service.
+
+- File: `settings.json` beside `FLEET_CONTROL_TOKENS` (or `FLEET_CONTROL_SETTINGS`, an absolute path), mode 0600, written under a lock and replaced only if it still holds what the page read. Keys: `agentRoots`, `agentModels`, `agentDshModels`, `agentMcpUrl`, `input`. Each key in the file goes over the same variable in the plist or unit; a key left out keeps the plist value. `FLEET_CONTROL_ADMIN` is not a setting: the page cannot turn off the section it is shown in.
+- Page: Fleet section, part "Service settings", operator only. Shows what the next start uses and which settings wait for a restart. A save sends every setting, the revision it was read at and the typed word `settings`. Refused: unknown keys, folders that are not plain absolute paths or `/`, model names the agent form would refuse, an MCP URL not on `/mcp`, an empty Claude model list, and anything the service's own start check refuses.
+- Start: the service reads the file, checks it the same way, and logs "settings from <file>". A file that does not parse or check is skipped with a log line, and the service starts on the plist values; the page names the problem.
+- Routes: `GET`/`PUT /api/settings` behind `FLEET_CONTROL_ADMIN=1`, JSON only, same Origin; the gateway forwards them.
+- Not yet: restarting the service from the page (goal 2 point 2), so a change takes effect at the next restart by hand.
+- Tests: rules and env mapping, use cases (roles, confirm, revision, start check, stale save, broken file), the real `index.ts` started three times (save writes 0600 file and leaves the running service unchanged; the next start offers the saved folder and model and turns input on; a broken file is skipped and the service still serves), the file's compare-and-replace, and two page tests. The real-service test fails on main; nine mutations each fail a test.
+
 ## Release 238817a: tokens from the page on .4 and .15 (2026-11-23)
 
 PR #205 merged as 238817a after three Claude Opus review rounds (the owner's exception: DeepSeek answers 402). Full suite at the merged head 591be84: 2015 pass, 0 fail, exit 0.

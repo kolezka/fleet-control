@@ -73,6 +73,17 @@
                 <label class="checkrow"><input type="checkbox" id="hostRevoke" checked> Revoke this gateway's token on the host before removing</label>
                 <div class="composerfooter"><span id="hostGate"></span><button type="button" id="hostRotate" disabled>Rotate gateway token</button><button type="button" id="hostRemove" class="destructive" disabled>Remove host</button></div>
               </div>
+              <div class="adminpart" id="settingsPart" hidden><div class="sectionheading"><h4>Service settings</h4></div>
+                <p class="fineprint" id="settingsPath"></p>
+                <label for="setRoots">Agent folders (one per line)</label><textarea id="setRoots" rows="2" spellcheck="false"></textarea>
+                <label for="setModels">Claude Code models (one per line)</label><textarea id="setModels" rows="2" spellcheck="false"></textarea>
+                <label for="setDsh">DSH models, provider/model (one per line)</label><textarea id="setDsh" rows="2" spellcheck="false"></textarea>
+                <label for="setMcp">MCP address for orchestrators (empty: none)</label><input id="setMcp" autocomplete="off" spellcheck="false">
+                <label class="checkrow"><input type="checkbox" id="setInput"> Typing into terminals with an input lease</label>
+                <p class="fineprint" id="settingsPending"></p>
+                <label for="settingsConfirm">Type settings to confirm</label><input id="settingsConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="settingsGate"></span><button type="button" id="settingsSave" disabled>Save settings</button></div>
+              </div>
               <p id="adminStatus" role="status"></p>
             </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>

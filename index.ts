@@ -19,6 +19,9 @@ import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 import { HostTokenFile } from "./src/token-file.ts";
+import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
+import { parseSettingsFile } from "./src/application/settings.ts";
+import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -34,12 +37,30 @@ const commands = new Commands(store.db);
 const unknown = commands.reconcileAfterRestart();
 if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
+// Settings saved from the page (a JSON file beside the tokens file) override the plist's or unit's values.
+// A file that does not parse is skipped with a message, so a bad save can never keep the page from starting.
+const baseEnv: Record<string, string | undefined> = { ...process.env };
+const settingsFile = (() => { try { return settingsPath(baseEnv); } catch (e) { console.error(`${e instanceof Error ? e.message : e}`); process.exit(1); } })();
+let env = baseEnv;
+if (settingsFile) {
+  try {
+    const text = HostSettingsFile.readSync(settingsFile);
+    if (text !== null) {
+      const next = settingsEnv(baseEnv, parseSettingsFile(text));
+      agentSettingsFromEnv(next);
+      env = next;
+      console.log(`settings from ${settingsFile}`);
+    }
+  } catch (e) {
+    console.error(`settings file ${settingsFile} skipped: ${e instanceof Error ? e.message : e}`);
+  }
+}
 const options = await serveOptionsFromEnv();
 const port = portFromEnv(process.env.PORT);
 // Checked before anything binds, so a bad tailnet setting does not leave a half-started service.
 const tailnet = await tailnetOptionsFromEnv(process.env, options, port);
 reloadTokensOnHangup(options.auth);
-const agentSettings = agentSettingsFromEnv(process.env);
+const agentSettings = agentSettingsFromEnv(env);
 // Without tokens anyone on the machine could start an unattended agent, so managed agents need them even on loopback.
 if (agentSettings && !options.auth) {
   console.error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
@@ -53,7 +74,7 @@ const leaseTerminal = async () => {
     process.exit(1);
   }
 };
-const input = process.env.FLEET_CONTROL_INPUT === "1"
+const input = env.FLEET_CONTROL_INPUT === "1"
   ? leaseUseCases({ leases: new Leases(store.db), terminal: await leaseTerminal() })
   : undefined;
 if (input && !options.auth) {
@@ -94,6 +115,17 @@ const deps = {
   admin,
   // With fleet administration on, an operator also lists, rotates and revokes tokens from the page.
   tokens: admin && options.auth ? { file: new HostTokenFile(process.env.FLEET_CONTROL_TOKENS!, options.auth) } : undefined,
+  // With fleet administration on, an operator also edits the service settings; they apply at the next start.
+  settings: admin && settingsFile
+    ? {
+      file: new HostSettingsFile(settingsFile),
+      baseEnv,
+      running: settingsOf(env),
+      check: (next: Record<string, string | undefined>) => {
+        if (agentSettingsFromEnv(next) && !options.auth) throw new Error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
+      },
+    }
+    : undefined,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),

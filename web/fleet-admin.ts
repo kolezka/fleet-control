@@ -26,7 +26,16 @@ export type AdminView = {
   // This gateway's own link to the host: rotate its token or remove the host.
   hostConfirm: string;
   hostRevoke: boolean;
+  // The service settings file: null until read; hosts without it hide the part.
+  settings: SettingsRead | null;
+  settingsDraft: SettingsDraft;
+  settingsConfirm: string;
 };
+
+export type SettingsValues = { agentRoots: string[]; agentModels: string[]; agentDshModels: string[]; agentMcpUrl: string | null; input: boolean };
+export type SettingsRead = { path: string; revision: string; running: SettingsValues; next: SettingsValues; restartNeeded: string[] };
+// One text field per list (one entry per line), as typed.
+export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
@@ -34,7 +43,42 @@ export const emptyAdmin = (): AdminView => ({
   status: "idle", error: "", conf: null, changedOnHost: false, draft: "", saveConfirm: "", logSource: "watchdog", logText: "",
   restartSession: "", restartConfirm: "", busy: false, notice: "",
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
+  settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "",
 });
+
+const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");
+const values = (x: unknown): SettingsValues | null => {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  if (!strings(o.agentRoots) || !strings(o.agentModels) || !strings(o.agentDshModels) || !(typeof o.agentMcpUrl === "string" || o.agentMcpUrl === null) || typeof o.input !== "boolean") return null;
+  return { agentRoots: o.agentRoots, agentModels: o.agentModels, agentDshModels: o.agentDshModels, agentMcpUrl: o.agentMcpUrl as string | null, input: o.input };
+};
+
+export function parseSettings(body: unknown): SettingsRead | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
+  const running = values(o.running), next = values(o.next);
+  if (typeof o.path !== "string" || typeof o.revision !== "string" || !running || !next || !strings(o.restartNeeded)) return null;
+  return { path: o.path, revision: o.revision, running, next, restartNeeded: o.restartNeeded };
+}
+
+export const draftOf = (s: SettingsValues): SettingsDraft => ({
+  agentRoots: s.agentRoots.join("\n"), agentModels: s.agentModels.join("\n"), agentDshModels: s.agentDshModels.join("\n"), agentMcpUrl: s.agentMcpUrl ?? "", input: s.input,
+});
+
+const lines = (t: string) => t.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+// What the page sends: every setting, so the file says exactly what the next start uses.
+export const settingsBody = (d: SettingsDraft) => ({
+  agentRoots: lines(d.agentRoots), agentModels: lines(d.agentModels), agentDshModels: lines(d.agentDshModels), agentMcpUrl: d.agentMcpUrl.trim() || null, input: d.input,
+});
+
+export function settingsGate(v: AdminView): { ok: boolean; reason: string } {
+  if (v.busy) return { ok: false, reason: "Working…" };
+  if (!v.settings) return { ok: false, reason: "Read the settings first" };
+  if (JSON.stringify(settingsBody(v.settingsDraft)) === JSON.stringify(settingsBody(draftOf(v.settings.next)))) return { ok: false, reason: "No changes" };
+  if (v.settingsConfirm !== "settings") return { ok: false, reason: "Type settings to confirm" };
+  return { ok: true, reason: "Saved to the settings file; the service takes it at its next start" };
+}
 
 export function parseTokens(body: unknown): TokenEntry[] | null {
   const list = body && typeof body === "object" ? (body as { tokens?: unknown }).tokens : undefined;

@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, emptyAdmin, hostGate, parseConf, parseTokens, restartable, restartGate, saveGate, tokenGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, draftOf, emptyAdmin, hostGate, parseConf, parseSettings, parseTokens, restartable, restartGate, saveGate, settingsBody, settingsGate, tokenGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -674,6 +674,19 @@ function renderAdmin(h: HostState | undefined) {
   $("hostGate").textContent = hg.reason;
   ($("hostRotate") as HTMLButtonElement).disabled = !hg.ok;
   ($("hostRemove") as HTMLButtonElement).disabled = !hg.ok;
+  $("settingsPart").hidden = v.settings === null;
+  if (v.settings) {
+    $("settingsPath").textContent = `Kept in ${v.settings.path}. The service reads it when it starts; the running service keeps what it started with.`;
+    for (const [id, value] of [["setRoots", v.settingsDraft.agentRoots], ["setModels", v.settingsDraft.agentModels], ["setDsh", v.settingsDraft.agentDshModels], ["setMcp", v.settingsDraft.agentMcpUrl], ["settingsConfirm", v.settingsConfirm]] as const) {
+      const el = $(id) as HTMLInputElement;
+      if (el.value !== value) el.value = value;
+    }
+    ($("setInput") as HTMLInputElement).checked = v.settingsDraft.input;
+    $("settingsPending").textContent = v.settings.restartNeeded.length ? `Waiting for a restart of the service: ${v.settings.restartNeeded.join(", ")}.` : "The running service uses these settings.";
+    const sg = settingsGate(v);
+    $("settingsGate").textContent = sg.reason;
+    ($("settingsSave") as HTMLButtonElement).disabled = !sg.ok;
+  }
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
 }
 
@@ -701,6 +714,12 @@ async function refreshAdmin(hostId: string, keepDraft = true) {
   if (v.status === "ready") {
     const t = await hostCall(host, "/tokens");
     v.tokens = t.outcome.ok ? parseTokens(t.outcome.data) : null;
+    // Settings: hidden where the host does not offer them. An unsaved edit stays through a refresh.
+    const st = await hostCall(host, "/settings");
+    const read = st.outcome.ok ? parseSettings(st.outcome.data) : null;
+    const clean = !v.settings || JSON.stringify(settingsBody(v.settingsDraft)) === JSON.stringify(settingsBody(draftOf(v.settings.next)));
+    if (read && (clean || read.revision === v.settings?.revision)) { if (clean) v.settingsDraft = draftOf(read.next); v.settings = read; }
+    else if (!read) v.settings = null;
   }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }
@@ -727,6 +746,25 @@ async function changeToken(hostId: string) {
     : `${host.name}: ${name} not changed: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
   await refreshAdmin(hostId);
+}
+
+async function saveSettings(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !v.settings || !settingsGate(v).ok) return;
+  v.busy = true; v.notice = `Saving settings on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/settings", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ settings: settingsBody(v.settingsDraft), revision: v.settings.revision, confirm: v.settingsConfirm }),
+  }, WRITE_TIMEOUT_MS);
+  v.busy = false; v.settingsConfirm = "";
+  const read = outcome.ok ? parseSettings(outcome.data) : null;
+  if (read) {
+    v.settings = read; v.settingsDraft = draftOf(read.next);
+    v.notice = `${host.name}: settings saved. ${read.restartNeeded.length ? "They apply when the service restarts." : "Nothing to restart for."}`;
+  } else v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the settings were saved.` : `${host.name}: settings not saved: ${outcome.ok ? "malformed answer" : outcome.message}`;
+  renderAdmin(selectedHostState(fleet));
 }
 
 // This gateway's link to a host. Not a host route: the gateway itself does it, at /api/manage.
@@ -980,6 +1018,17 @@ adminField("tokenName", (v, x) => { v.tokenName = x; v.tokenConfirm = ""; v.newT
 adminField("tokenAction", (v, x) => { if (x === "rotate" || x === "revoke") v.tokenAction = x; });
 adminField("tokenConfirm", (v, x) => { v.tokenConfirm = x; });
 adminField("hostConfirm", (v, x) => { v.hostConfirm = x; });
+adminField("setRoots", (v, x) => { v.settingsDraft.agentRoots = x; });
+adminField("setModels", (v, x) => { v.settingsDraft.agentModels = x; });
+adminField("setDsh", (v, x) => { v.settingsDraft.agentDshModels = x; });
+adminField("setMcp", (v, x) => { v.settingsDraft.agentMcpUrl = x; });
+adminField("settingsConfirm", (v, x) => { v.settingsConfirm = x; });
+$("setInput").addEventListener("change", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  adminView(h.info.id).settingsDraft.input = ($("setInput") as HTMLInputElement).checked;
+  renderAdmin(h);
+});
 $("hostRevoke").addEventListener("change", () => {
   const h = selectedHostState(fleet);
   if (!h) return;
@@ -990,7 +1039,7 @@ $("newTokenDone").addEventListener("click", () => { const h = selectedHostState(
 $("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
 $("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
 $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken]] as const) {
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 $("confReload").addEventListener("click", () => {

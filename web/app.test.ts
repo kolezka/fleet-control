@@ -755,3 +755,53 @@ test("a token refusal the gateway relays as upstream_forbidden reads as not chan
   await b.click({ host: "a", session: "s" });
   expect(b.element("newTokenText").textContent).toBe("");
 });
+
+test("service settings: the page shows what the next start uses, saves every setting with the read revision and the typed confirm, and says a restart is needed", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const running = { agentRoots: ["/r"], agentModels: ["sonnet"], agentDshModels: [], agentMcpUrl: null, input: false };
+  let settings = { path: "/c/settings.json", revision: "b".repeat(64), saved: {}, running, next: running, restartNeeded: [] as string[] };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      const next = body.settings;
+      settings = { ...settings, revision: "c".repeat(64), saved: next, next, restartNeeded: ["agentModels", "input"] };
+      return settings;
+    }
+    if (path.endsWith("/settings")) return settings;
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("settingsPart").hidden).toBe(false);
+  expect([b.element("setRoots").value, b.element("setModels").value, b.element("setMcp").value]).toEqual(["/r", "sonnet", ""]);
+  expect(b.element("settingsPending").textContent).toBe("The running service uses these settings.");
+  expect([b.element("settingsSave").disabled, b.element("settingsGate").textContent]).toEqual([true, "No changes"]);
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  await type("setModels", "haiku\nopus");
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  expect([b.element("settingsSave").disabled, b.element("settingsGate").textContent]).toEqual([true, "Type settings to confirm"]);
+  await type("settingsConfirm", "settings");
+  expect(b.element("settingsSave").disabled).toBe(false);
+  await b.listeners.get("settingsSave:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/settings" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ settings: { agentRoots: ["/r"], agentModels: ["haiku", "opus"], agentDshModels: [], agentMcpUrl: null, input: true }, revision: "b".repeat(64), confirm: "settings" });
+  expect(b.element("adminStatus").textContent).toBe("A: settings saved. They apply when the service restarts.");
+  expect(b.element("settingsPending").textContent).toBe("Waiting for a restart of the service: agentModels, input.");
+  expect(b.element("settingsGate").textContent).toBe("No changes");
+});
+
+test("a host without service settings hides the part", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings")) return { __status: 404 };
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("settingsPart").hidden).toBe(true);
+});
