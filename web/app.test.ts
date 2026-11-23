@@ -1151,3 +1151,30 @@ test("files: a new file needs a full path ending in a name, and is created with 
   expect(JSON.parse(String(put.init!.body))).toEqual({ path: "/r/new.txt", text: "hello\n", revision: "new", confirm: "new.txt" });
   expect(b.element("adminStatus").textContent).toBe("A: saved /r/new.txt.");
 });
+
+test("files: opening another path with unsaved changes asks for a second click before the draft is dropped", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return { kind: "dir", path: "/r", root: "/r", entries: [{ name: "notes.md", kind: "file", size: 8, modifiedAt: "" }], truncated: false };
+    if (path.endsWith("/files?path=%2Fr%2Fnotes.md")) return { kind: "file", path: "/r/notes.md", root: "/r", text: "one\n", revision: "b".repeat(64), size: 4 };
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  b.element("filePath").value = "/r/notes.md";
+  await b.listeners.get("filePath:input")!({});
+  await b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  b.element("fileText").value = "edited\n";
+  await b.listeners.get("fileText:input")!({});
+  const reads = () => b.calls.filter(c => c.path === "/api/hosts/a/files?path=%2Fr").length;
+  await b.listeners.get("fileUp:click")!({});
+  await tick();
+  expect([reads(), b.element("fileText").value, b.element("adminStatus").textContent]).toEqual([0, "edited\n", "A: the open file has unsaved changes. Ask for /r again to drop them."]);
+  await b.listeners.get("fileUp:click")!({});
+  await tick();
+  expect([reads(), b.element("fileText").hidden]).toEqual([1, true]);
+});

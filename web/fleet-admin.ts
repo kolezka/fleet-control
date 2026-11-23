@@ -52,6 +52,8 @@ export type AdminView = {
   // A file opened as new (not on the host yet) saves with revision "new".
   fileNew: boolean;
   fileChangedOnHost: boolean;
+  // A path the operator asked to open while the draft had unsaved changes; asking again for the same path discards it.
+  fileLeaving: string;
   watchdogConfirm: string;
 };
 
@@ -94,7 +96,7 @@ export const emptyAdmin = (): AdminView => ({
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
   watchdog: null, watchdogConfirm: "",
-  fileRoots: null, fileOpen: null, filePath: "", fileDraft: "", fileConfirm: "", fileNew: false, fileChangedOnHost: false,
+  fileRoots: null, fileOpen: null, filePath: "", fileDraft: "", fileConfirm: "", fileNew: false, fileChangedOnHost: false, fileLeaving: "",
 });
 
 const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");
@@ -262,6 +264,9 @@ export function parseFileOpen(x: unknown): FileOpen | null {
   if (o.kind === "file" && typeof o.text === "string" && typeof o.revision === "string") return { kind: "file", path: o.path, root: o.root, text: o.text, revision: o.revision, size: typeof o.size === "number" ? o.size : 0 };
   return null;
 }
+
+// The draft differs from what was opened (or a new file has text): leaving it needs a second click.
+export const fileDirty = (v: AdminView) => (v.fileNew ? v.fileDraft !== "" : v.fileOpen?.kind === "file" && v.fileDraft !== v.fileOpen.text);
 
 export const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 // The folder above a path, but never above the allowed folder it is in.

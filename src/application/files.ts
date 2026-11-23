@@ -3,9 +3,10 @@
 import { createHash } from "node:crypto";
 import { AdminError } from "../domain/fleet-admin.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
-import { checkFileSave, checkPath, inside, MAX_ENTRIES, NEW_FILE, refuseProtected, rootOf, type DirView, type FileEntry, type FileView } from "../domain/files.ts";
+import { checkFileSave, checkPath, MAX_ENTRIES, NEW_FILE, refuseProtected, rootOf, type DirView, type FileEntry, type FileView } from "../domain/files.ts";
 
-export type HostEntry = { kind: "file" | "dir" | "other"; size: number; modifiedAt: string };
+// links: hard links to the file; above 1 the same bytes may also be a protected file somewhere else.
+export type HostEntry = { kind: "file" | "dir" | "other"; size: number; modifiedAt: string; links?: number };
 
 // What the host does on disk. Paths given to it are already checked against the allowed folders, but the
 // host resolves symlinks itself and answers with the real path, which is checked again here.
@@ -39,16 +40,24 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 export function filesUseCases(deps: FilesDeps, caller?: Caller) {
+  // Roots and protected paths are compared after symlinks are resolved on both sides, so a symlinked or
+  // differently written folder (/tmp vs /private/tmp, FLEET.CONF vs fleet.conf on macOS) cannot slip past.
+  const resolved = async (paths: readonly string[]) => (await Promise.all(paths.map(async (p) => [p, await deps.host.real(p)] as const)));
   const allowed = async (path: string) => {
     const asked = checkPath(path);
-    rootOf(asked, deps.roots);
+    const roots = (await resolved(deps.roots)).flatMap(([p, r]) => (r === null ? [] : r === p ? [p] : [p, r]));
+    const realRoots = (await resolved(deps.roots)).map(([, r]) => r).filter((r): r is string => r !== null);
+    rootOf(asked, roots);
     const real = await deps.host.real(asked);
     if (real === null) throw new AdminError("not_found", `${asked} does not exist, nor does its folder`);
     // A symlink may lead out of the folder; what counts is where it leads.
-    const roots = (await Promise.all(deps.roots.map((r) => deps.host.real(r)))).filter((r): r is string => r !== null);
-    const root = rootOf(real, roots);
-    refuseProtected(real, deps.protectedPaths);
+    const root = rootOf(real, realRoots);
+    const guarded = (await resolved(deps.protectedPaths)).flatMap(([p, r]) => (r === null ? [p] : [p, r]));
+    refuseProtected(real, guarded);
     return { asked, real, root };
+  };
+  const single = (real: string, st: HostEntry) => {
+    if (st.kind === "file" && (st.links ?? 1) > 1) throw new AdminError("invalid", `${real} has ${st.links} hard links; one of them may be a file this editor must not touch, so it does not open it`);
   };
 
   return {
@@ -70,6 +79,7 @@ export function filesUseCases(deps: FilesDeps, caller?: Caller) {
         return { kind: "dir", path: real, root, entries: entries.slice(0, MAX_ENTRIES), truncated: entries.length > MAX_ENTRIES };
       }
       if (st.kind !== "file") throw new AdminError("invalid", `${asked} is not a regular file or a folder`);
+      single(real, st);
       const text = await deps.host.read(real);
       return { kind: "file", path: real, root, text, revision: fileRevision(text), size: st.size };
     },
@@ -89,6 +99,7 @@ export function filesUseCases(deps: FilesDeps, caller?: Caller) {
       }
       if (!st) throw new AdminError("conflict", `${real} is gone since you read it`);
       if (st.kind !== "file") throw new AdminError("invalid", `${real} is not a regular file`);
+      single(real, st);
       const current = await deps.host.read(real);
       if (fileRevision(current) !== s.revision) throw new AdminError("conflict", `${real} changed on the host since you read it; reload it and edit again`);
       if (current === s.text) return { path: real, revision: s.revision, backup: null };
@@ -99,4 +110,3 @@ export function filesUseCases(deps: FilesDeps, caller?: Caller) {
 }
 
 export type FilesUseCases = ReturnType<typeof filesUseCases>;
-export { inside };

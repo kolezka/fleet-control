@@ -1,7 +1,7 @@
 // The file editor end to end: a real host service over real folders and files, a real gateway, and the page's
 // calls through it. Only an operator, only inside the allowed folders, never the service's own files.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "./auth.ts";
@@ -158,4 +158,52 @@ test("path and folder rules", () => {
   expect(fileRootsFromEnv({}, ["/f", "/a/"])).toEqual(["/f", "/a"]);
   expect(fileRootsFromEnv({ FLEET_CONTROL_FILE_ROOTS: "/x:/y" }, ["/f"])).toEqual(["/x", "/y"]);
   for (const bad of ["/", "rel", "/a/../b"]) expect(() => fileRootsFromEnv({ FLEET_CONTROL_FILE_ROOTS: bad }, [])).toThrow();
+});
+
+test("review: a symlinked root still browses, and fleet.conf reached through a symlinked or differently cased path stays refused", async () => {
+  const fleetDir = join(dir, "fleet");
+  mkdirSync(fleetDir);
+  writeFileSync(join(fleetDir, "fleet.conf"), "FLEET=t\n");
+  writeFileSync(join(fleetDir, "notes.md"), "n\n");
+  symlinkSync(fleetDir, join(dir, "fleet-link"));
+  const link = join(dir, "fleet-link");
+  // As configured: root and FLEET_CONF both written through the symlink, the way /tmp or a linked home shows them.
+  const u = filesUseCases({ host: new DiskFiles(), roots: [link], protectedPaths: [join(link, "fleet.conf")] }, { name: "op", role: "operator" });
+  const top = await u.open(link) as { path: string };
+  expect(top.path).toBe(fleetDir);
+  expect(((await u.open(`${top.path}/notes.md`)) as { text: string }).text).toBe("n\n");
+  for (const p of [join(link, "fleet.conf"), join(fleetDir, "fleet.conf")]) await expect(u.open(p)).rejects.toThrow("belongs to the Fleet Control service");
+  const insensitive = existsSync(join(fleetDir, "FLEET.CONF"));
+  if (insensitive) await expect(u.open(join(fleetDir, "FLEET.CONF"))).rejects.toThrow("belongs to the Fleet Control service");
+  await expect(u.save({ path: join(fleetDir, "fleet.conf"), text: "PWNED\n", revision: fileRevision("FLEET=t\n"), confirm: "fleet.conf" })).rejects.toThrow("belongs to the Fleet Control service");
+  expect(readFileSync(join(fleetDir, "fleet.conf"), "utf8")).toBe("FLEET=t\n");
+});
+
+test("review: a file with a byte order mark opens with it and saves with it kept", async () => {
+  const file = join(root, "bom.txt");
+  writeFileSync(file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("hi\n")]));
+  const read = await (await open(file)).json() as { text: string; revision: string };
+  expect(read.text).toBe("\ufeffhi\n");
+  const r = await page("/files", { path: file, text: "\ufeffho\n", revision: read.revision, confirm: "bom.txt" });
+  expect(r.status).toBe(200);
+  expect([...readFileSync(file).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  expect(readFileSync(file, "utf8")).toBe("\ufeffho\n");
+});
+
+test("review: a hard link is refused, a file that became a symlink is refused at read, and the backup holds the bytes that were read", async () => {
+  const hl = join(root, "hl.txt");
+  linkSync(join(cfgDir, "tokens"), hl);
+  expect(await errorOf(await hostOpen(hl))).toEqual({ status: 400, message: `${hl} has 2 hard links; one of them may be a file this editor must not touch, so it does not open it` });
+  // The host side: a path swapped for a symlink after the checks is not followed.
+  const files = new DiskFiles();
+  const swapped = join(root, "swapped.txt");
+  symlinkSync(join(outside, "secret.txt"), swapped);
+  await expect(files.read(swapped)).rejects.toThrow("became a symlink after it was checked");
+  await expect(files.write(swapped, "nope\n", "x")).rejects.toThrow("became a symlink after it was checked");
+  expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("nope\n");
+  expect(readdirSync(root).filter((n) => n.startsWith("swapped.txt.bak") || n.startsWith(".swapped"))).toEqual([]);
+  // A file that grows past the limit after its size was looked at is still refused.
+  const big = join(root, "big.txt");
+  writeFileSync(big, "a".repeat(MAX_FILE_BYTES + 5));
+  await expect(files.read(big)).rejects.toThrow(`this editor opens files up to ${MAX_FILE_BYTES / 1024} KiB`);
 });

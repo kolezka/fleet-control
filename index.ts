@@ -2,7 +2,7 @@
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
+import { agentSettingsFromEnv, fileRootsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
 import { agentUseCases } from "./src/application/agents.ts";
 import { Agents } from "./src/data/agents.ts";
 import { FleetAgentLauncher } from "./src/fleet/agents.ts";
@@ -25,7 +25,6 @@ import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
 import { DiskFiles } from "./src/fleet/files.ts";
-import { fileRootsFromEnv } from "./src/config.ts";
 import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 

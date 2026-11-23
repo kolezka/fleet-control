@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, fileGate, fileName, parentIn, parseFileOpen, parseFileRoots, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, fileDirty, fileGate, fileName, parentIn, parseFileOpen, parseFileRoots, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -748,7 +748,9 @@ function renderFiles(v: AdminView) {
   t.hidden = !editing;
   $("fileSaveRow").hidden = !editing;
   if (editing && t.value !== v.fileDraft) t.value = v.fileDraft;
-  ($("fileUp") as HTMLButtonElement).disabled = !open || open.path === open.root;
+  ($("fileUp") as HTMLButtonElement).disabled = !open || open.path === open.root || v.busy;
+  ($("fileOpenBtn") as HTMLButtonElement).disabled = v.busy;
+  for (const b of list.querySelectorAll?.("button.fileentry") ?? []) (b as HTMLButtonElement).disabled = v.busy;
   if (editing) {
     const name = fileName(v.fileNew ? v.filePath : open!.path);
     $("fileConfirmLabel").textContent = `Type ${name} to confirm`;
@@ -764,7 +766,16 @@ async function openFile(hostId: string, path: string) {
   const host = fleet.hosts[hostId]?.info;
   const v = adminView(hostId);
   if (!host || v.busy) return;
+  // After a refused save the page already said to copy the edit and open the file again; that open goes straight through.
+  if (fileDirty(v) && !v.fileChangedOnHost && v.fileLeaving !== path) {
+    v.fileLeaving = path;
+    v.notice = `${host.name}: the open file has unsaved changes. Ask for ${path} again to drop them.`;
+    renderAdmin(selectedHostState(fleet));
+    return;
+  }
+  v.fileLeaving = "";
   v.busy = true;
+  renderAdmin(selectedHostState(fleet));
   const { outcome } = await hostCall(host, `/files?path=${encodeURIComponent(path)}`);
   v.busy = false;
   if (outcome.ok) {
@@ -791,7 +802,7 @@ async function saveFile(hostId: string) {
   if (outcome.ok) {
     const r = outcome.data as { path?: string; revision?: string; backup?: string | null };
     v.notice = `${host.name}: saved ${r.path ?? path}${r.backup ? `; the old text is in ${r.backup}` : ""}.`;
-    if (typeof r.revision === "string") { v.fileOpen = { kind: "file", path: r.path ?? path, root: v.fileOpen?.root ?? "", text: v.fileDraft, revision: r.revision, size: v.fileDraft.length }; v.fileNew = false; v.filePath = r.path ?? path; }
+    if (typeof r.revision === "string") { v.fileOpen = { kind: "file", path: r.path ?? path, root: v.fileOpen?.root ?? "", text: v.fileDraft, revision: r.revision, size: new TextEncoder().encode(v.fileDraft).length }; v.fileNew = false; v.filePath = r.path ?? path; }
     v.fileConfirm = "";
   } else {
     if (status === 409) v.fileChangedOnHost = true;
@@ -1223,6 +1234,8 @@ $("fileNewBtn").addEventListener("click", () => {
   const h = selectedHostState(fleet);
   if (!h) return;
   const v = adminView(h.info.id);
+  if (fileDirty(v) && v.fileLeaving !== "(new)") { v.fileLeaving = "(new)"; v.notice = `${h.info.name}: the open file has unsaved changes. Press New file again to drop them.`; renderAdmin(h); return; }
+  v.fileLeaving = "";
   v.fileNew = true; v.fileDraft = ""; v.fileConfirm = ""; v.fileChangedOnHost = false;
   if (v.fileOpen?.kind === "dir") v.filePath = `${v.fileOpen.path}/`;
   renderAdmin(h);
