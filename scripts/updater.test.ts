@@ -3,7 +3,8 @@
 // swaps, and rolls back to the old folder and database when the new code does not come up for real.
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -280,15 +281,17 @@ test("review round 4: a rollback stop that reports an error leaves the database 
 }, 150_000);
 
 // A stand-in service that, like index.ts, takes FLEET_CONF from the settings file and says which one it runs.
-async function moveSetup(name: string, rule: string) {
+async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolean } = {}) {
   const base = join(root, name);
   const dir = join(base, "service");
   mkdirSync(base, { recursive: true });
   const settings = join(base, "settings.json");
   const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\nw(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ fleetConf: conf, startedAt: new Date().toISOString() }));`;
   serviceCode(dir, "a".repeat(40), take);
-  const old = join(base, "fleets", "old");
+  let old = join(base, "fleets", "old");
   mkdirSync(old, { recursive: true });
+  // FLEET_DIR may be a symlink to the real folder.
+  if (opts.linkedFrom) { const real = join(base, "real-old"); renameSync(old, real); symlinkSync(real, old); }
   const conf = join(old, "fleet.conf");
   writeFileSync(conf, `FLEET=old\nFLEET_DIR=${old}\nFLEET_TMUX_SOCKET=fleet-old\nAGENTS=()\n`, { mode: 0o640 });
   writeFileSync(join(old, "fleet.conf.bak-20261101T000000Z-aaaaaaaa"), "old backup\n");
@@ -307,7 +310,7 @@ async function moveSetup(name: string, rule: string) {
   const data: JobFile = {
     id: "upd-20261123T120000Z-0000abcd", action: "move", tag: null, commit: null, packageUrl: null, sha256Url: null, by: "op", state: "starting", steps: [], startedAt: new Date().toISOString(), endedAt: null, pid: null,
     service: { dir, manager, db: null, files: [tokens, conf, settings], fleetConf: conf, rollbackRoot: base, health, env, waits: { scratch: 8, start: 8 } },
-    move: { from: { fleet: "old", dir: old, socket: "fleet-old" }, to, settingsFile: settings },
+    move: { from: { fleet: "old", dir: old, socket: `fc-move-none-${process.pid}` }, to, settingsFile: settings, confSha256: createHash("sha256").update(readFileSync(conf)).digest("hex") },
   };
   const f = join(jobs, `${data.id}.json`);
   writeFileSync(f, JSON.stringify(data));
@@ -354,4 +357,57 @@ test("move: a target folder that filled up after the check is refused before any
   expect([after.state, after.steps.at(-1)?.replace(/^\S+ /, "")]).toEqual(["failed", `${s.to.dir} exists and is not empty; nothing moved`]);
   expect(readFileSync(join(s.base, "pid"), "utf8")).toBe(pid);
   expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true });
+}, 60_000);
+
+test("move review: an empty target folder gets the files themselves, not a copy one level down", async () => {
+  const s = await moveSetup("move-empty", "");
+  mkdirSync(s.to.dir, { recursive: true });
+  await runJob(s.job);
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("done");
+  expect(readdirSync(s.to.dir).sort()).toEqual(["fleet.conf", "fleet.conf.sync", "probe.txt"]);
+  expect((statSync(join(s.to.dir, "fleet.conf")).mode & 0o777).toString(8)).toBe("640");
+}, 60_000);
+
+test("move review: a FLEET_DIR that is a symlink is copied as its folder, and the old fleet.conf is not rewritten", async () => {
+  const s = await moveSetup("move-link", "", { linkedFrom: true });
+  const before = readFileSync(s.conf, "utf8");
+  await runJob(s.job);
+  expect(Job.read(s.job.file).data.state).toBe("done");
+  expect(lstatSync(s.to.dir).isDirectory()).toBe(true);
+  expect(lstatSync(s.to.dir).isSymbolicLink()).toBe(false);
+  expect(readFileSync(s.conf, "utf8")).toBe(before);
+  expect(readFileSync(join(s.to.dir, "fleet.conf"), "utf8")).toContain("FLEET=prod\n");
+}, 60_000);
+
+test("move review: a fleet.conf edited after the check, or sessions on the fleet's tmux server, stop the move before anything stops", async () => {
+  const s = await moveSetup("move-recheck", "");
+  const pid = readFileSync(join(s.base, "pid"), "utf8");
+  writeFileSync(s.conf, `${readFileSync(s.conf, "utf8")}# edited\n`);
+  await runJob(s.job);
+  let after = Job.read(s.job.file).data;
+  expect([after.state, after.steps.at(-1)?.replace(/^\S+ /, "")]).toEqual(["failed", `${s.conf} changed since the move was asked for; nothing moved`]);
+  expect(existsSync(s.to.dir)).toBe(false);
+  const t = await moveSetup("move-live", "");
+  const sock = t.job.data.move!.from.socket;
+  spawnSync("tmux", ["-L", sock, "-f", "/dev/null", "new-session", "-d", "-s", "live", "sleep 60"]);
+  try {
+    await runJob(t.job);
+    after = Job.read(t.job.file).data;
+    expect([after.state, after.steps.at(-1)?.replace(/^\S+ /, "")]).toEqual(["failed", "the fleet's tmux server still runs live; nothing moved"]);
+    expect(readFileSync(join(t.base, "pid"), "utf8")).not.toBe("");
+    expect(existsSync(t.to.dir)).toBe(false);
+  } finally { spawnSync("tmux", ["-L", sock, "kill-server"]); }
+  expect(readFileSync(join(s.base, "pid"), "utf8")).toBe(pid);
+}, 60_000);
+
+test("move review: a settings save during a failed move is kept; only the move's own fleetConf is undone", async () => {
+  const s = await moveSetup("move-keep", "conf = process.env.FLEET_CONF!;");
+  // The stand-in ignores the settings file; before it starts, the page saves models into the file.
+  const orig = Job.read(s.job.file);
+  const realStep = orig.step.bind(orig);
+  orig.step = (t: string) => { realStep(t); if (t.startsWith("service stopped")) { const cur = JSON.parse(readFileSync(s.settings, "utf8")); writeFileSync(s.settings, JSON.stringify({ ...cur, agentModels: ["haiku"] })); } };
+  await runJob(orig);
+  expect(Job.read(s.job.file).data.state).toBe("rolled_back");
+  expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true, agentModels: ["haiku"] });
 }, 60_000);

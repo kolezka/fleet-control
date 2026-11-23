@@ -31,7 +31,7 @@ test("a move request needs a plain name, a plain folder two levels deep, a plain
 test("the moved fleet.conf changes only the name, folder and socket lines, and refuses a file it cannot read safely", () => {
   const conf = "# test\nFLEET=old\nFLEET_DIR=/a/old\nAGENTS=(\"x|X|x.txt\")\n[ -f \"$FLEET_DIR/fleet-control-agents.conf\" ] && . \"$FLEET_DIR/fleet-control-agents.conf\"\n";
   expect(movedConf(conf, to)).toBe("# test\nFLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\nAGENTS=(\"x|X|x.txt\")\n[ -f \"$FLEET_DIR/fleet-control-agents.conf\" ] && . \"$FLEET_DIR/fleet-control-agents.conf\"\n");
-  expect(movedConf("FLEET=old\nFLEET_DIR=/a/old\nexport FLEET_TMUX_SOCKET=s\n", to)).toBe("FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\n");
+  expect(movedConf("FLEET=old\nFLEET_DIR=/a/old\nexport FLEET_TMUX_SOCKET=s\n", to)).toBe("FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nexport FLEET_TMUX_SOCKET=fleet-prod\n");
   expect(fail(() => movedConf("FLEET_DIR=/a\n", to)).message).toBe("fleet.conf sets FLEET on 0 lines; a move needs exactly one FLEET= line");
   expect(fail(() => movedConf("FLEET=a\nFLEET=b\nFLEET_DIR=/a\n", to)).message).toBe("fleet.conf sets FLEET on 2 lines; a move needs exactly one FLEET= line");
   expect(fail(() => movedConf("FLEET=a\nFLEET_DIR=/a\n[ x ] && FLEET_DIR=/b\n", to)).message).toBe("fleet.conf sets the fleet's name, folder or socket in another way too ([ x ] && FLEET_DIR=/b); move it by hand");
@@ -41,7 +41,7 @@ test("the moved fleet.conf changes only the name, folder and socket lines, and r
 
 const facts = (over: Partial<MoveFacts> = {}): MoveFacts => ({
   from: { fleet: "old", dir: "/a/old", socket: "fleet-old" }, remote: "", agents: [], leases: [],
-  watchdog: { installed: false, running: false, inTmux: false }, oldSessions: [], newSessions: [], targetUsed: false, settingsFile: true, ...over,
+  watchdog: { installed: false, running: false, inTmux: false }, oldSessions: [], newSessions: [], targetUsed: false, settingsFile: true, confInDir: true, ...over,
 });
 
 test("a move waits until nothing runs on the old setup and the new place is free", () => {
@@ -54,7 +54,7 @@ test("a move waits until nothing runs on the old setup and the new place is free
     "turn the watchdog service off first; it runs for the old folder",
     "cannot tell whether a watchdog runs by hand in tmux; fix tmux first",
     "/srv/fleets/prod exists and is not empty; choose a new folder",
-    "end the sessions on the old tmux server first (probe); the moved fleet uses a new one",
+    "end the fleet's tmux sessions first (probe); they run on the old setup",
     "tmux server fleet-prod already runs x; choose another socket",
   ]);
   expect(moveBlockers(facts({ watchdog: { installed: false, running: false, inTmux: true } }))).toEqual(["stop the watchdog that runs by hand in tmux first (fleet watchdog stop)"]);
@@ -62,6 +62,17 @@ test("a move waits until nothing runs on the old setup and the new place is free
   expect(moveBlockers(facts(), { fleet: "new", dir: "/a/old", socket: "fleet-old" })).toEqual(["a move needs a new folder; the name and socket change only together with it"]);
   expect(moveBlockers(facts(), { ...to, dir: "/a/old/inner" })).toEqual(["the new folder must not be inside the old one, nor the old inside the new"]);
   expect(moveBlockers(facts(), { ...to, dir: "/a" })).toEqual(["the new folder must not be inside the old one, nor the old inside the new"]);
+  // Review round 1: running sessions block a move that keeps the socket too, and a fleet.conf outside FLEET_DIR blocks it.
+  expect(moveBlockers(facts({ oldSessions: ["probe"] }), { ...to, socket: "fleet-old" })).toEqual(["end the fleet's tmux sessions first (probe); they run on the old setup"]);
+  expect(moveBlockers(facts({ confInDir: false }), to)).toEqual(["the service's FLEET_CONF is not FLEET_DIR/fleet.conf; move a fleet whose fleet.conf lives elsewhere by hand"]);
+});
+
+test("review round 1: export stays on the rewritten lines, and declare or default-value forms are refused", () => {
+  expect(movedConf("export FLEET=a\nexport FLEET_DIR=/a\nexport FLEET_TMUX_SOCKET=s\n", to)).toBe("export FLEET=prod\nexport FLEET_DIR=/srv/fleets/prod\nexport FLEET_TMUX_SOCKET=fleet-prod\n");
+  expect(fail(() => movedConf("FLEET=a\nFLEET_DIR=/a\n: ${FLEET_DIR:=/b}\n", to)).message).toBe("fleet.conf sets the fleet's name, folder or socket in another way too (: ${FLEET_DIR:=/b}); move it by hand");
+  expect(fail(() => movedConf("FLEET=a\nFLEET_DIR=/a\ndeclare FLEET_TMUX_SOCKET\n", to)).message).toBe("fleet.conf sets the fleet's name, folder or socket in another way too (declare FLEET_TMUX_SOCKET); move it by hand");
+  // Reading the value is fine.
+  expect(movedConf("FLEET=a\nFLEET_DIR=/a\nLOG=$FLEET_DIR/log\n", to)).toBe("FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\nLOG=$FLEET_DIR/log\n");
 });
 
 test("the use cases: operator only, blockers named, a moved fleet.conf that would not load refused, the updater gets the job", async () => {
@@ -71,6 +82,7 @@ test("the use cases: operator only, blockers named, a moved fleet.conf that woul
   let loads = true;
   const deps: MoveDeps = {
     host: {
+      path: "/a/old/fleet.conf",
       read: async () => conf,
       facts: async (text) => {
         if (!loads && text !== conf) throw new Error("set -e failed");
@@ -97,7 +109,7 @@ test("the use cases: operator only, blockers named, a moved fleet.conf that woul
   expect(started).toEqual([]);
   const r = await moveUseCases(deps, op).move({ ...to, confirm: "move" });
   expect(r.job.action).toBe("move");
-  expect(started).toEqual([{ m: { from: { fleet: "old", dir: "/a/old", socket: "fleet-old" }, to, settingsFile: "/c/settings.json" }, by: "op" }]);
+  expect(started).toEqual([{ m: { from: { fleet: "old", dir: "/a/old", socket: "fleet-old" }, to, settingsFile: "/c/settings.json", confSha256: new Bun.CryptoHasher("sha256").update(conf).digest("hex") }, by: "op" }]);
   // Without the updater nothing starts.
   const off = await failAsync(moveUseCases({ ...deps, unavailable: () => "not started by launchd or systemd" }, op).move({ ...to, confirm: "move" }));
   expect([off.kind, off.message]).toEqual(["failed", "not started by launchd or systemd"]);

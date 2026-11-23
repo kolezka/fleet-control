@@ -76,7 +76,10 @@ export function settingsUseCases(deps: SettingsDeps, caller?: Caller) {
       const next = settingsDiff(base, full);
       checkNeedsRoots(full, next);
       // A file the service could not start with would take the page down at the next restart.
-      try { await deps.check(settingsEnv(deps.baseEnv, next)); } catch (e) {
+      // A moved fleet's next start runs the fleet.conf the file keeps, so check against that one.
+      let keptNow: string | undefined;
+      try { keptNow = parseSettingsFile(await deps.file.read()).fleetConf; } catch { keptNow = undefined; }
+      try { await deps.check(settingsEnv(deps.baseEnv, keptNow === undefined ? next : { ...next, fleetConf: keptNow })); } catch (e) {
         throw new AdminError("invalid", `the service would not start with these settings: ${e instanceof Error ? e.message : e}`);
       }
       return serial(async () => {

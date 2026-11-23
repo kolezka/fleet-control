@@ -11,6 +11,9 @@ import { spawnSync } from "node:child_process";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync, fsyncSync } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { lstatSync, rmdirSync } from "node:fs";
+import { withLock } from "./tokens.ts";
 import { backup } from "./host-backup.ts";
 import { movedConf } from "../src/domain/move.ts";
 import type { JobFile, Manager } from "../src/domain/updates.ts";
@@ -358,27 +361,58 @@ export async function moveFleet(job: Job) {
   const s = job.data.service;
   const oldConf = s.fleetConf;
   const newConf = join(m.to.dir, "fleet.conf");
-  if (existsSync(m.to.dir) && readdirSync(m.to.dir).length) throw new StepFailed(`${m.to.dir} exists and is not empty; nothing moved`);
+  // Checked again here: the page's checks are some seconds old by now.
+  if (createHash("sha256").update(readFileSync(oldConf)).digest("hex") !== m.confSha256) throw new StepFailed(`${oldConf} changed since the move was asked for; nothing moved`);
+  const live = run(process.env.FLEET_CONTROL_TMUX ?? "tmux", ["-L", m.from.socket, "list-sessions", "-F", "#{session_name}"]);
+  if (live.ok && live.out) throw new StepFailed(`the fleet's tmux server still runs ${live.out.split("\n").join(", ")}; nothing moved`);
+  if (existsSync(m.to.dir)) {
+    if (!lstatSync(m.to.dir).isDirectory() || readdirSync(m.to.dir).length) throw new StepFailed(`${m.to.dir} exists and is not empty; nothing moved`);
+    rmdirSync(m.to.dir);
+  }
+  // Copying "<dir>/." takes the files of the folder a symlinked FLEET_DIR names, so the copy is never a link back to it.
+  const from = m.from.dir;
   const b = backupState(job, "move");
-  mkdirSync(dirname(m.to.dir), { recursive: true });
-  const r = run("cp", ["-pR", m.from.dir, m.to.dir]);
-  if (!r.ok) { rmSync(m.to.dir, { recursive: true, force: true }); throw new StepFailed(`copying ${m.from.dir} to ${m.to.dir} failed: ${r.out}; nothing moved`); }
+  mkdirSync(m.to.dir, { recursive: true });
+  const r = run("cp", ["-pR", `${from}/.`, m.to.dir]);
+  if (!r.ok || !lstatSync(m.to.dir).isDirectory() || !existsSync(newConf) || lstatSync(newConf).isSymbolicLink()) {
+    rmSync(m.to.dir, { recursive: true, force: true });
+    throw new StepFailed(`copying ${from} to ${m.to.dir} failed${r.ok ? ": the copy has no fleet.conf of its own" : `: ${r.out}`}; nothing moved`);
+  }
   // Backups and logs of the old folder stay with it.
   for (const f of readdirSync(m.to.dir)) if (/^fleet\.conf\.bak-|^\.fleet\.conf\./.test(f)) rmSync(join(m.to.dir, f), { force: true });
   // The copy keeps fleet.conf's mode (cp -p), and writing over it keeps the mode too.
   writeFileSync(newConf, movedConf(readFileSync(oldConf, "utf8"), m.to));
   job.step(`fleet folder copied to ${m.to.dir}; its fleet.conf names fleet ${m.to.fleet}, socket ${m.to.socket}`);
-  const settingsBefore = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
-  const saved = settingsBefore ? JSON.parse(settingsBefore) as Record<string, unknown> : {};
-  writeAtomic(m.settingsFile, `${JSON.stringify({ ...saved, fleetConf: newConf }, null, 2)}\n`);
+  // The same lock as the page's settings saves, so neither overwrites the other.
+  const settingsBefore = withLock(m.settingsFile, () => {
+    const before = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
+    const saved = before ? JSON.parse(before) as Record<string, unknown> : {};
+    writeAtomic(m.settingsFile, `${JSON.stringify({ ...saved, fleetConf: newConf }, null, 2)}\n`);
+    return before;
+  });
+  const written = readFileSync(m.settingsFile, "utf8");
   job.step(`settings file ${m.settingsFile} names ${newConf}`);
   const health = s.health, waits = s.waits ?? { scratch: 30, start: 45 };
   let stoppedAt = Date.now();
   const putBack = async (why: string) => {
-    if (settingsBefore === null) rmSync(m.settingsFile, { force: true }); else writeAtomic(m.settingsFile, settingsBefore);
-    job.step(`${why}; settings file put back, so the service runs ${oldConf} again`);
+    const back = withLock(m.settingsFile, () => {
+      // A save from the page during the move is kept; only the move's own change is undone.
+      const now = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
+      if (now !== written) {
+        if (now === null) return false;
+        const cur = JSON.parse(now) as Record<string, unknown>;
+        if (cur.fleetConf !== newConf) return true;
+        const { fleetConf: _drop, ...rest } = cur;
+        const prev = settingsBefore ? (JSON.parse(settingsBefore) as Record<string, unknown>).fleetConf : undefined;
+        writeAtomic(m.settingsFile, `${JSON.stringify(prev === undefined ? rest : { ...rest, fleetConf: prev }, null, 2)}\n`);
+        return true;
+      }
+      if (settingsBefore === null) rmSync(m.settingsFile, { force: true }); else writeAtomic(m.settingsFile, settingsBefore);
+      return true;
+    });
+    job.step(`${why}; ${back ? "settings file put back" : "the settings file is gone, so nothing names the new folder"}, so the service runs ${oldConf} again`);
     try { stopService(s.manager); } catch {}
-    await waitDown(health, 15);
+    if (!(await waitDown(health, 15))) job.step("the service still answers; if the stop did not take, it still runs the old setup");
     try { await startService(s.manager, s.dir); } catch (e) { job.end("failed", `the old setup did not start either (${e instanceof Error ? e.message : e}); backup in ${b}`); return; }
     const up = await waitHealthy(health, waits.start);
     job.end(up ? "rolled_back" : "failed", up ? `the service answers again on ${health} with the old fleet; ${m.to.dir} is left for a look` : `the old setup does not answer on ${health} either; backup in ${b}`);
@@ -398,7 +432,10 @@ export async function moveFleet(job: Job) {
   // An answer alone does not say which fleet.conf it took: a settings file it skipped leaves it on the old one.
   const took = runningConf(`${m.settingsFile}.running`, stoppedAt);
   if (took !== newConf) { await putBack(`the service started on ${took ?? "an unknown fleet.conf"}, not ${newConf}`); return; }
-  job.end("done", `the service answers on ${health} with fleet ${m.to.fleet} in ${m.to.dir}; the old folder ${m.from.dir} is unchanged`);
+  // Absolute symlinks inside the folder still point into the old one; name them so they can be fixed.
+  const links = readdirSync(m.to.dir).filter((f) => lstatSync(join(m.to.dir, f)).isSymbolicLink());
+  if (links.length) job.step(`symlinks copied as they were (they may point into the old folder): ${links.join(", ")}`);
+  job.end("done", `the service answers on ${health} with fleet ${m.to.fleet} in ${m.to.dir}; the old folder ${m.from.dir} is unchanged (a FLEET_CONTROL_FILE_ROOTS in the plist or unit that names it is not changed)`);
 }
 
 // The fleet.conf a service started after `since` says it runs; null when there is no such record.

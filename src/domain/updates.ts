@@ -70,7 +70,7 @@ export type JobFile = {
   };
   // A move: the fleet folder is copied to to.dir, the copy's fleet.conf gets the new values, and the
   // settings file names the new fleet.conf, so the service starts on it.
-  move?: { from: MoveTarget; to: MoveTarget; settingsFile: string };
+  move?: { from: MoveTarget; to: MoveTarget; settingsFile: string; confSha256: string };
 };
 
 // A job that is not final but whose updater is gone: its pid no longer runs, or it never wrote one within a

@@ -278,3 +278,16 @@ test("review round 2 on the real service: with input on in the plist, a save of 
   expect(JSON.parse(await readFile(join(d, "settings.json"), "utf8"))).toEqual({ input: false });
   proc.kill(); await proc.exited;
 });
+
+test("move review: a settings save is checked against the fleet.conf a moved service will start on", async () => {
+  let text: string | null = JSON.stringify({ fleetConf: "/srv/moved/fleet.conf" });
+  const file: SettingsFile = { path: "/s/settings.json", read: async () => text, write: async (expected, t) => { if (expected !== text) return false; text = t; return true; } };
+  const seen: (string | undefined)[] = [];
+  const baseEnv = { FLEET_CONF: "/srv/old/fleet.conf" };
+  const deps = { file, baseEnv, running: settingsOf(baseEnv), check: async (env: Record<string, string | undefined>) => { seen.push(env.FLEET_CONF); } };
+  const use = settingsUseCases(deps, { name: "op", role: "operator" });
+  const now = await use.get();
+  await use.save({ settings: { ...now.next, input: true }, revision: now.revision, confirm: "settings" });
+  expect(seen).toEqual(["/srv/moved/fleet.conf"]);
+  expect(JSON.parse(text!).fleetConf).toBe("/srv/moved/fleet.conf");
+});

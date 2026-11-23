@@ -179,7 +179,8 @@ const updatesSetup = () => {
       dir: process.cwd(), manager, db, files, fleetConf: resolve(confPath),
       rollbackRoot: dirname(resolve(tokens)), jobDir: join(dirname(resolve(tokens)), "updates"),
       health: `${options.tls ? "https" : "http"}://${urlHost(options.hostname ?? "127.0.0.1")}:${port}`,
-      env: baseEnv,
+      // After a move the scratch start of later updates must run the fleet.conf this service runs.
+      env: { ...baseEnv, FLEET_CONF: resolve(confPath) },
     }),
   };
 };
@@ -197,7 +198,7 @@ const move = admin && updates
     targetUsed: async (dir: string) => { try { return readdirSync(dir).length > 0; } catch (e) { return (e as NodeJS.ErrnoException).code !== "ENOENT"; } },
     settingsFile,
     unavailable: () => updates.host.unavailable(),
-    start: (m: { from: MoveTarget; to: MoveTarget; settingsFile: string }, by: string) => updates.host.start("move", null, by, m),
+    start: (m: { from: MoveTarget; to: MoveTarget; settingsFile: string; confSha256: string }, by: string) => updates.host.start("move", null, by, m),
   }
   : undefined;
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.

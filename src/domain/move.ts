@@ -34,11 +34,18 @@ export function movedConf(text: string, to: MoveTarget): string {
   if (fleet.length !== 1) throw new AdminError("invalid", `fleet.conf sets FLEET on ${fleet.length} lines; a move needs exactly one FLEET= line`);
   if (dir.length !== 1) throw new AdminError("invalid", `fleet.conf sets FLEET_DIR on ${dir.length} lines; a move needs exactly one FLEET_DIR= line`);
   if (socket.length > 1) throw new AdminError("invalid", `fleet.conf sets FLEET_TMUX_SOCKET on ${socket.length} lines; a move needs at most one`);
-  const mentions = lines.filter((l, i) => !fleet.includes(i) && !dir.includes(i) && !socket.includes(i) && /\b(FLEET|FLEET_DIR|FLEET_TMUX_SOCKET)=/.test(l.replace(/#.*$/, "")));
+  const sets = /\b(FLEET|FLEET_DIR|FLEET_TMUX_SOCKET)(=|:=|:-|\b)/;
+  const mentions = lines.filter((l, i) => {
+    if (fleet.includes(i) || dir.includes(i) || socket.includes(i)) return false;
+    const code = l.replace(/#.*$/, "");
+    return /\b(FLEET|FLEET_DIR|FLEET_TMUX_SOCKET)(=|:=)/.test(code) || (/\b(declare|typeset|readonly|local|read|export)\b/.test(code) && sets.test(code));
+  });
   if (mentions.length) throw new AdminError("invalid", `fleet.conf sets the fleet's name, folder or socket in another way too (${mentions[0]!.trim()}); move it by hand`);
-  lines[fleet[0]!] = `FLEET=${to.fleet}`;
-  lines[dir[0]!] = `FLEET_DIR=${to.dir}`;
-  if (socket.length) lines[socket[0]!] = `FLEET_TMUX_SOCKET=${to.socket}`;
+  // An `export ` in front stays, so child processes see the same names as before.
+  const keep = (i: number) => (/^\s*export\s+/.exec(lines[i]!)?.[0] ?? "");
+  lines[fleet[0]!] = `${keep(fleet[0]!)}FLEET=${to.fleet}`;
+  lines[dir[0]!] = `${keep(dir[0]!)}FLEET_DIR=${to.dir}`;
+  if (socket.length) lines[socket[0]!] = `${keep(socket[0]!)}FLEET_TMUX_SOCKET=${to.socket}`;
   else lines.splice(dir[0]! + 1, 0, `FLEET_TMUX_SOCKET=${to.socket}`);
   return lines.join("\n");
 }
@@ -54,6 +61,7 @@ export type MoveFacts = {
   newSessions: string[]; // sessions already on the target tmux server
   targetUsed: boolean; // the target folder exists and is not empty
   settingsFile: boolean;
+  confInDir: boolean; // the service's FLEET_CONF is FLEET_DIR/fleet.conf, as agent-fleet keeps it
 };
 export function moveBlockers(f: MoveFacts, to?: MoveTarget): string[] {
   const out: string[] = [];
@@ -62,13 +70,15 @@ export function moveBlockers(f: MoveFacts, to?: MoveTarget): string[] {
   if (f.agents.length) out.push(`stop the managed agents first: ${f.agents.join(", ")}`);
   if (f.leases.length) out.push(`end the typing in ${f.leases.join(", ")} first`);
   if (f.watchdog.installed || f.watchdog.running) out.push("turn the watchdog service off first; it runs for the old folder");
+  if (!f.confInDir) out.push("the service's FLEET_CONF is not FLEET_DIR/fleet.conf; move a fleet whose fleet.conf lives elsewhere by hand");
   if (f.watchdog.inTmux !== false) out.push(f.watchdog.inTmux ? "stop the watchdog that runs by hand in tmux first (fleet watchdog stop)" : "cannot tell whether a watchdog runs by hand in tmux; fix tmux first");
   if (to) {
     if (to.fleet === f.from.fleet && to.dir === f.from.dir && to.socket === f.from.socket) out.push("nothing to move: the name, folder and socket are the ones in use");
     if (to.dir === f.from.dir && (to.fleet !== f.from.fleet || to.socket !== f.from.socket)) out.push("a move needs a new folder; the name and socket change only together with it");
     if (to.dir !== f.from.dir && (to.dir.startsWith(`${f.from.dir}/`) || f.from.dir.startsWith(`${to.dir}/`))) out.push("the new folder must not be inside the old one, nor the old inside the new");
     if (f.targetUsed) out.push(`${to.dir} exists and is not empty; choose a new folder`);
-    if (to.socket !== f.from.socket && f.oldSessions.length) out.push(`end the sessions on the old tmux server first (${f.oldSessions.join(", ")}); the moved fleet uses a new one`);
+    // Sessions keep the old folder as their FLEET_DIR, so even with the same socket they would split the fleet.
+    if (f.oldSessions.length) out.push(`end the fleet's tmux sessions first (${f.oldSessions.join(", ")}); they run on the old setup`);
     if (to.socket !== f.from.socket && f.newSessions.length) out.push(`tmux server ${to.socket} already runs ${f.newSessions.join(", ")}; choose another socket`);
   }
   return out;
