@@ -49,6 +49,10 @@ export type AdminView = {
   // agent-fleet's watchdog as a host service: null until read; hosts without it hide the part.
   watchdog: WatchdogRead | null;
   watchdogConfirm: string;
+  // Certificates, Tailscale Serve and other services: null until read; hosts without it hide the part.
+  infra: InfraRead | null;
+  infraService: string;
+  infraConfirm: string;
 };
 
 export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string | null; cwd: string } | null };
@@ -91,6 +95,48 @@ export function watchdogGate(v: AdminView): { ok: boolean; on: boolean; reason: 
   return { ok: true, on, reason: on ? `Starts ${w.name} now and at every login` : `Stops ${w.name}; agents keep running` };
 }
 
+export type InfraCert = { id: "lan" | "tailnet"; path: string; names: string[]; notAfter: string; daysLeft: number; renewable: boolean; error?: string };
+export type InfraService = { name: string; kind: string; target: string; running: boolean | null; detail: string };
+export type InfraRead = { certs: InfraCert[]; renewedAt: string | null; serve: { text: string } | { error: string }; services: InfraService[] };
+
+export function parseInfra(x: unknown): InfraRead | null {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  if (!Array.isArray(o.certs) || !Array.isArray(o.services) || !o.serve || typeof o.serve !== "object") return null;
+  const certs: InfraCert[] = [];
+  for (const c of o.certs as Record<string, unknown>[]) {
+    if (!c || (c.id !== "lan" && c.id !== "tailnet") || !str(c.path) || !Array.isArray(c.names) || !str(c.notAfter) || typeof c.daysLeft !== "number" || typeof c.renewable !== "boolean") return null;
+    certs.push({ id: c.id, path: c.path, names: (c.names as unknown[]).filter(str), notAfter: c.notAfter, daysLeft: c.daysLeft, renewable: c.renewable, ...(str(c.error) ? { error: c.error } : {}) });
+  }
+  const services: InfraService[] = [];
+  for (const s of o.services as Record<string, unknown>[]) {
+    if (!s || !str(s.name) || !str(s.kind) || !str(s.target) || !str(s.detail) || !(s.running === null || typeof s.running === "boolean")) return null;
+    services.push({ name: s.name, kind: s.kind, target: s.target, running: s.running as boolean | null, detail: s.detail });
+  }
+  const sv = o.serve as Record<string, unknown>;
+  const serve = str(sv.text) ? { text: sv.text } : str(sv.error) ? { error: sv.error } : null;
+  if (!serve) return null;
+  return { certs, renewedAt: str(o.renewedAt) ? o.renewedAt : null, serve, services };
+}
+
+// One action at a time: renewing the tailnet certificate ("renew") or restarting one named service.
+export function infraGate(v: AdminView): { ok: boolean; action: "renew" | "restart" | null; reason: string } {
+  const i = v.infra;
+  if (!i) return { ok: false, action: null, reason: "Read the host first" };
+  if (!v.infraService) return { ok: false, action: null, reason: "Choose what to do" };
+  if (v.busy) return { ok: false, action: null, reason: "Working" };
+  if (v.infraService === "renew") {
+    const c = i.certs.find((x) => x.id === "tailnet");
+    if (!c || !c.renewable) return { ok: false, action: "renew", reason: "This host cannot renew its tailnet certificate from here" };
+    if (v.infraConfirm !== "renew") return { ok: false, action: "renew", reason: "Type renew to confirm" };
+    return { ok: true, action: "renew", reason: "Asks tailscale for a new certificate; the service takes it at its next start" };
+  }
+  const s = i.services.find((x) => x.name === v.infraService);
+  if (!s) return { ok: false, action: null, reason: "Choose what to do" };
+  if (v.infraConfirm !== s.name) return { ok: false, action: "restart", reason: `Type ${s.name} to confirm` };
+  return { ok: true, action: "restart", reason: `Restarts ${s.name} (${s.target}); whoever uses it loses the connection for a moment` };
+}
+
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
 export const emptyAdmin = (): AdminView => ({
@@ -100,6 +146,7 @@ export const emptyAdmin = (): AdminView => ({
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
   service: null, serviceAction: "restart", serviceTag: "", serviceConfirm: "",
   watchdog: null, watchdogConfirm: "",
+  infra: null, infraService: "", infraConfirm: "",
 });
 
 const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");

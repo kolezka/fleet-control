@@ -1110,3 +1110,61 @@ test("watchdog: off as a service and tmux unknown says so, and Turn on waits for
   await b.listeners.get("watchdogConfirm:input")!({});
   expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual(["Turn on", true, "Cannot tell whether a watchdog runs in tmux (error connecting to /tmp/tmux-1000/fleet-t (Permission denied)); fix tmux first"]);
 });
+
+test("host part: certificates, services and Serve show; a restart runs only after the typed name, and a renewal after renew", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  let infra = {
+    certs: [{ id: "lan", path: "/c/lan.pem", names: ["192.168.1.2"], notAfter: "2029-02-09T00:00:00.000Z", daysLeft: 800, renewable: false }, { id: "tailnet", path: "/c/t.pem", names: ["h.example"], notAfter: "2026-12-01T00:00:00.000Z", daysLeft: 8, renewable: true }],
+    renewedAt: null as string | null, serve: { text: "https://h.example\n|-- / proxy http://127.0.0.1:3080" },
+    services: [{ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: true, detail: "pid 4242" }],
+  };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/infra/services/dsh/restart") && init?.method === "POST") return infra.services[0];
+    if (path.endsWith("/infra/renew") && init?.method === "POST") { infra = { ...infra, renewedAt: "2026-11-23T12:00:00.000Z" }; return { cert: infra.certs[1], renewed: true }; }
+    if (path.endsWith("/infra")) return infra;
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  expect(b.element("infraPart").hidden).toBe(false);
+  expect(b.element("infraServe").textContent).toContain("proxy http://127.0.0.1:3080");
+  const text = (id: string) => [...String(b.element(id).innerHTML).matchAll(/<li>(.*?)<\/li>/g)].map((m) => m[1]);
+  expect(text("infraCerts")).toEqual([
+    "LAN certificate for 192.168.1.2: valid to 2029-02-09, 800 days left; made by hand",
+    "Tailnet certificate for h.example: valid to 2026-12-01, 8 days left (renew soon)",
+  ]);
+  expect(text("infraServices")).toEqual(["dsh (pl.raqz.dsh): running, pid 4242"]);
+  expect([b.element("infraGo").disabled, b.element("infraGate").textContent]).toEqual([true, "Choose what to do"]);
+  b.element("infraAction").value = "dsh";
+  await b.listeners.get("infraAction:change")!({});
+  expect([b.element("infraGo").disabled, b.element("infraGate").textContent]).toEqual([true, "Type dsh to confirm"]);
+  b.element("infraConfirm").value = "dsh";
+  await b.listeners.get("infraConfirm:input")!({});
+  expect([b.element("infraGo").disabled, b.element("infraGo").textContent]).toEqual([false, "Restart"]);
+  await b.listeners.get("infraGo:click")!({});
+  await tick();
+  const post = b.calls.find(c => c.path === "/api/hosts/a/infra/services/dsh/restart")!;
+  expect(JSON.parse(String(post.init!.body))).toEqual({ confirm: "dsh" });
+  expect(b.element("adminStatus").textContent).toBe("A: dsh restarted.");
+  b.element("infraAction").value = "renew";
+  await b.listeners.get("infraAction:change")!({});
+  b.element("infraConfirm").value = "renew";
+  await b.listeners.get("infraConfirm:input")!({});
+  await b.listeners.get("infraGo:click")!({});
+  await tick();
+  expect(b.element("adminStatus").textContent).toBe("A: tailnet certificate renewed. The service takes it at its next start.");
+  expect(text("infraCerts").at(-1)).toBe("Renewed 2026-11-23 12:00 UTC; the service takes it at its next start.");
+});
+
+test("host part: hidden on a host without it", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/infra") || path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("infraPart").hidden).toBe(true);
+});

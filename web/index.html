@@ -106,6 +106,14 @@
                 <label for="watchdogConfirm">Type watchdog to confirm</label><input id="watchdogConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="watchdogGate"></span><button type="button" id="watchdogGo" disabled>Turn on</button></div>
               </div>
+              <div class="adminpart" id="infraPart" hidden><div class="sectionheading"><h4>Host</h4></div>
+                <ul class="tokenrows" id="infraCerts"></ul>
+                <ul class="tokenrows" id="infraServices"></ul>
+                <details><summary>Tailscale Serve (read only)</summary><pre class="logtext" id="infraServe"></pre></details>
+                <label for="infraAction">Action</label><select id="infraAction"></select>
+                <label for="infraConfirm" id="infraConfirmLabel">Type to confirm</label><input id="infraConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="infraGate"></span><button type="button" id="infraGo" class="destructive" disabled>Do it</button></div>
+              </div>
               <p id="adminStatus" role="status"></p>
             </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>

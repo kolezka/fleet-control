@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, parseInfra, infraGate, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -45,6 +45,8 @@ const SERVICE_POLL_MS = 3000;
 const SERVICE_POLLS = 200;
 // The gateway gives a watchdog start 60 s; the page waits a little longer.
 const WATCHDOG_TIMEOUT_MS = 65000;
+// The gateway gives a renewal or a service restart 190 s; the page waits a little longer.
+const INFRA_TIMEOUT_MS = 195000;
 const SHOWN_COMMANDS = 6;
 
 // One call to one host. A 401 from a single host service means this page has no sign-in: go to /login.
@@ -749,7 +751,53 @@ function renderAdmin(h: HostState | undefined) {
     go.classList.toggle("danger", !wg.on);
     go.disabled = !wg.ok;
   }
+  renderInfra(v);
   $("adminStatus").textContent = v.status === "unknown" ? `Fleet settings unknown: ${v.error}` : v.conf?.loadError ? `fleet.conf does not load: ${v.conf.loadError}` : v.notice;
+}
+
+function renderInfra(v: AdminView) {
+  $("infraPart").hidden = v.infra === null;
+  const i = v.infra;
+  if (!i) return;
+  const certLine = (c: (typeof i.certs)[number]) => c.error
+    ? `${c.id === "lan" ? "LAN" : "Tailnet"} certificate ${c.path}: cannot read it (${c.error})`
+    : `${c.id === "lan" ? "LAN" : "Tailnet"} certificate for ${c.names.join(", ")}: valid to ${c.notAfter.slice(0, 10)}, ${c.daysLeft} days left${c.daysLeft < 30 ? " (renew soon)" : ""}${c.renewable ? "" : c.id === "tailnet" ? "; renew it on the host" : "; made by hand"}`;
+  const certLines = [...i.certs.map(certLine), ...(i.renewedAt ? [`Renewed ${i.renewedAt.slice(0, 16).replace("T", " ")} UTC; the service takes it at its next start.`] : [])];
+  $("infraCerts").innerHTML = certLines.map((l) => `<li>${esc(l)}</li>`).join("");
+  $("infraServices").innerHTML = i.services.map((s) => `<li>${esc(`${s.name} (${s.target}): ${s.running === null ? "unknown" : s.running ? "running" : "stopped"}, ${s.detail}`)}</li>`).join("");
+  $("infraServe").textContent = "text" in i.serve ? (i.serve.text || "Nothing served.") : `Cannot read it: ${i.serve.error}`;
+  const sel = $("infraAction") as HTMLSelectElement;
+  const options: [string, string][] = [["", "Choose"], ...(i.certs.some((c) => c.id === "tailnet" && c.renewable) ? [["renew", "Renew the tailnet certificate"] as [string, string]] : []), ...i.services.map((s): [string, string] => [s.name, `Restart ${s.name}`])];
+  const html = options.map(([val, label]) => `<option value="${esc(val)}">${esc(label)}</option>`).join("");
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  if (!options.some(([val]) => val === v.infraService)) v.infraService = "";
+  sel.value = v.infraService;
+  const ic = $("infraConfirm") as HTMLInputElement;
+  if (ic.value !== v.infraConfirm) ic.value = v.infraConfirm;
+  const g = infraGate(v);
+  $("infraConfirmLabel").textContent = v.infraService === "renew" ? "Type renew to confirm" : v.infraService ? `Type ${v.infraService} to confirm` : "Type to confirm";
+  $("infraGate").textContent = g.reason;
+  const go = $("infraGo") as HTMLButtonElement;
+  go.textContent = g.action === "renew" ? "Renew" : g.action === "restart" ? "Restart" : "Do it";
+  go.disabled = !g.ok;
+}
+
+async function runInfra(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  const g = infraGate(v);
+  if (!host || !g.ok) return;
+  const what = v.infraService;
+  v.busy = true; v.notice = g.action === "renew" ? `Renewing the tailnet certificate on ${host.name}` : `Restarting ${what} on ${host.name}`;
+  renderAdmin(selectedHostState(fleet));
+  const path = g.action === "renew" ? "/infra/renew" : `/infra/services/${encodeURIComponent(what)}/restart`;
+  const { status, outcome } = await hostCall(host, path, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: v.infraConfirm }),
+  }, INFRA_TIMEOUT_MS);
+  v.busy = false; v.infraConfirm = ""; v.infraService = "";
+  if (outcome.ok) v.notice = g.action === "renew" ? `${host.name}: tailnet certificate renewed. The service takes it at its next start.` : `${host.name}: ${what} restarted.`;
+  else v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether ${g.action === "renew" ? "the certificate was renewed" : `${what} restarted`}; read the host again.` : `${host.name}: ${g.action === "renew" ? "certificate not renewed" : `${what} not restarted`}: ${outcome.message}`;
+  await refreshAdmin(hostId);
 }
 
 // keep: which unsaved drafts survive this read. Reload of one part, or a save of it, drops only that part's draft.
@@ -799,6 +847,9 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
     // Watchdog: hidden where the host does not offer it.
     const wd = await hostCall(host, "/watchdog");
     v.watchdog = wd.outcome.ok ? parseWatchdog(wd.outcome.data) : null;
+    // Certificates, Serve and other services: hidden where the host does not offer them.
+    const inf = await hostCall(host, "/infra");
+    v.infra = inf.outcome.ok ? parseInfra(inf.outcome.data) : null;
   }
   if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
 }
@@ -1185,6 +1236,8 @@ adminField("setModels", (v, x) => { v.settingsDraft.agentModels = x; });
 adminField("setDsh", (v, x) => { v.settingsDraft.agentDshModels = x; });
 adminField("setMcp", (v, x) => { v.settingsDraft.agentMcpUrl = x; });
 adminField("watchdogConfirm", (v, x) => { v.watchdogConfirm = x; });
+adminField("infraAction", (v, x) => { v.infraService = x; v.infraConfirm = ""; });
+adminField("infraConfirm", (v, x) => { v.infraConfirm = x; });
 adminField("settingsConfirm", (v, x) => { v.settingsConfirm = x; });
 $("setInput").addEventListener("change", () => {
   const h = selectedHostState(fleet);
@@ -1202,7 +1255,7 @@ $("newTokenDone").addEventListener("click", () => { const h = selectedHostState(
 $("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
 $("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
 $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog]] as const) {
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog], ["infraGo", runInfra]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 $("confReload").addEventListener("click", () => {

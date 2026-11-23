@@ -240,6 +240,7 @@ const NUM = /^[0-9]{1,4}$/;
 // fleet start waits up to 90 s for an agent's UI, after which the host answers; leave room above that.
 export const RESTART_TIMEOUT_MS = 180_000;
 export const WATCHDOG_TIMEOUT_MS = 60_000;
+const INFRA_TIMEOUT_MS = 190_000;
 // Keyset paging on the host lists: the host checks the range and the cursor itself.
 const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
 
@@ -275,6 +276,10 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 2 && a === "service" && (b === "restart" || b === "update")) return http(`/api/service/${b}`, ["POST"]);
   // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
   if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
+  // A renewal asks tailscale for a certificate; a restart of another service may wait on docker compose.
+  if (seg.length === 1 && a === "infra") return http("/api/infra", ["GET"]);
+  if (seg.length === 2 && a === "infra" && b === "renew") return { ...http("/api/infra/renew", ["POST"]), timeoutMs: INFRA_TIMEOUT_MS };
+  if (seg.length === 4 && a === "infra" && b === "services" && seg[3] === "restart" && /^[a-z][a-z0-9-]{0,31}$/.test(seg[2]!)) return { ...http(`/api/infra/services/${seg[2]}/restart`, ["POST"]), timeoutMs: INFRA_TIMEOUT_MS };
   if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;
