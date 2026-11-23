@@ -1,203 +1,73 @@
 # Fleet Control
 
-A web page and backend services for watching and steering a fleet of agents that run in tmux.
+Fleet Control is a self-hosted web console for people running coding agents in tmux. From one browser window, you can watch a session, send an instruction to its supervisor, and answer a request for approval. [agent-fleet](https://github.com/kolezka/agent-fleet) runs the sessions on each workstation. Fleet Control gives you a view across them without moving the work to your laptop.
 
-## Current backend deployment
+[Try the demo](#quick-start-two-local-hosts) · [Connect a workstation](#connect-your-own-workstation) · [Multi-host setup](docs/multi-host.md) · [Implementation status](docs/implementation-status.md)
 
-As of 2026-11-13, [PR #58](https://github.com/kolezka/fleet-control/pull/58) and [PR #59](https://github.com/kolezka/fleet-control/pull/59) are merged. The deployment evidence is in [the two-host rollout record](docs/deploy-15-plan.md#deployment-2026-11-13).
+![Terminal Deck design preview with hosts and sessions on the left, terminal output in the center, and supervisor requests on the right](docs/design/desktop-dark.png)
 
-- The persistent cooperative central service and PostgreSQL 17 run on `.15` with Docker Compose. PostgreSQL has no published port; the central application listens on host loopback.
-- Central is reachable only inside the private tailnet at [https://local-arch.tail4a51cb.ts.net:4881](https://local-arch.tail4a51cb.ts.net:4881). Tailscale Serve terminates HTTPS and forwards to loopback; this is not a public endpoint or a web UI.
-- Persistent cooperative adapters run on `.15` (Compose) and `.4` (launchd), each listening on `127.0.0.1:4882` with its own supervisor identity and incarnation. Supervisors claim work and report through MCP; there is no tmux paste fallback. An optional waker (`src/host-agent/waker.ts`) starts a fresh supervisor agent when work is queued; it is not installed on either host yet.
-- Synthetic submit, claim, accepted/running/completed reports and operator inspection passed through both adapters, then passed again after central and both adapters restarted. Incarnations stayed unchanged. No real agents or production fleet sessions were used for those checks.
-- The deployed legacy `.4` host service and UI remain unchanged. An opt-in local gateway now connects the Terminal Deck command panel to cooperative central; that integration has not been deployed. See [cooperative client configuration](docs/multi-host.md#optional-cooperative-central-commands).
-- A lead-verified real DSH run on `.15` completed through the persistent desktop adapter and tailnet central in about 13 seconds: accepted/running/completed, exact fixture answer `2: host-b, host-d`, unchanged file and no token leak. This was read-only scratch work, not a UI, idle-wakeup or production-session test; see [the run evidence](docs/central-server-status.md#real-dsh-on-15-2026-11-13).
+*Design preview with synthetic data. To explore the layout without installing anything, open the [standalone HTML preview](docs/design/terminal-deck.html) from a local checkout.*
 
-See [cooperative deployment](deploy/cooperative/README.md), [persistent adapter setup](deploy/cooperative/README.md#persistent-adapters-and-tailnet-access), [central backend status](docs/central-server-status.md) and [session handoff](docs/HANDOFF.md). The host-service instructions below describe the separate SQLite-backed UI path, not the cooperative deployment.
+## Quick start: two local hosts
 
-## What is what
+Try the multi-host console on one machine before connecting a workstation. The demo starts two local services, each with its own private tmux socket, shell fixture and SQLite database. It does not start a model or require an API key or PostgreSQL.
 
-There are two repositories. This one calls the other.
+**Requirements:** Git, Bun 1.4 or newer, tmux 3.x and Bash 4 or newer on your `PATH`. On macOS, make sure `bash --version` in the shell that starts the demo reports the newer Bash, not the system Bash 3.2.
 
-| | [agent-fleet](https://github.com/kolezka/agent-fleet) | fleet-control (this repo) |
-| --- | --- | --- |
-| What it is | A Claude Code plugin with the `fleet` command and a watchdog | A service with a web page, an API and MCP |
-| What it does | Starts agents in tmux, pastes messages into them, reads their screens, answers dialogs, nudges stuck agents | Shows the agents' terminals (read-only), the model each one uses, supervisor requests, approvals and commands, and keeps all of that in a database |
-| How it talks to tmux | Directly | Runtime terminal access uses the `fleet` command. The separate installation CLI can invoke a prepared remote installer through SSH |
-| State | Files in the fleet directory | PostgreSQL for cooperative control; SQLite for the separate host service |
-
-In short: agent-fleet runs the agents; Fleet Control is the control panel on top of it.
-
-## How the separate host UI fits together
-
-```
- MacBook (client, may go offline)            Host, e.g. 192.168.50.4 (does the work)
- ┌────────────────────────────┐              ┌──────────────────────────────────────┐
- │ Browser  ── page, API ─────┼──── HTTPS ──►│ Fleet Control service (bun index.ts) │
- │ Claude Code ── MCP ────────┼──── HTTPS ──►│   SQLite: commands, requests, phases │
- └────────────────────────────┘              │   calls: fleet status / screen /     │
-                                             │          send / attach --read-only   │
-                                             │                 │                    │
-                                             │   tmux sessions with agents          │
-                                             └──────────────────────────────────────┘
-```
-
-- The service runs on the host where the agents run. It keeps working when the MacBook is closed.
-- A command goes through separate states: queued, delivered (pasted into the agent), accepted or rejected by the agent, then completed or failed. "Delivered" does not mean the agent did it.
-- An approval belongs to one request, one phase and one revision. No answer, or a disconnected MacBook, is never an approval.
-- The page's terminals are read-only. The page cannot type into an agent; it sends instructions as commands.
-
-## What you need
-
-- [Bun](https://bun.sh) 1.4 or newer.
-- tmux 3.x and bash 4+ (on macOS: `brew install tmux bash`).
-- The pinned agent-fleet submodule at `vendor/agent-fleet` (includes read-only attach and the viewer/send fix). No separate checkout is required.
-
-## Install
-
-For fresh cooperative central, adapter or client installations from a prepared checkout, use the [installation CLI](docs/install-cli.md). It prints a plan before any explicit apply and can invoke the same CLI through SSH. It does not upgrade existing installations or install prerequisites.
-
-To install the separate legacy host service on a host so it runs in the background and is reachable from the MacBook, follow **[docs/install-guide.md](docs/install-guide.md)** step by step. The short version for trying it locally:
-
-```bash
-git clone --recurse-submodules git@github.com:kolezka/fleet-control.git
+```sh
+git clone --recurse-submodules https://github.com/kolezka/fleet-control.git
 cd fleet-control
-bun install
-```
-
-Existing checkout: `git submodule update --init --recursive`. After `git pull`, run that command again to use the recorded dependency commit. Do not use `--remote` for routine installs. See [dependency maintenance](docs/agent-fleet-dependency.md).
-
-## Run it
-
-### 1. Try it safely with a test fleet
-
-This starts a private tmux server with one harmless session (`probe-shell`, no agent) and the service on your own machine.
-
-```bash
-env -u NO_COLOR \
-  PORT=4881 \
-  bun scripts/dev-test-fleet.ts
-```
-
-Open http://127.0.0.1:4881/. Stop with Ctrl+C; it removes the test session too. No login is needed because it listens only on your own machine.
-
-### 2. Run it for your own fleet
-
-```bash
-env -u NO_COLOR \
-  FLEET_CONF=/path/to/your/fleet.conf \
-  FLEET_CONTROL_DB=~/fleet-control-state.db \
-  bun run serve
-```
-
-Open http://127.0.0.1:4871/. Stop with Ctrl+C. Commands, requests and approvals are kept in the database file and survive a restart. Without `FLEET_CONTROL_DB` they are lost when it stops.
-
-`FLEET_CONF` is the agent-fleet `fleet.conf`, and it must sit in the fleet directory (`FLEET_DIR`), because agent-fleet reads it from there.
-
-### 3. Make it reachable from another machine
-
-Anything other than `127.0.0.1` needs tokens; the service refuses to start without them. Use TLS on a LAN, otherwise tokens travel in clear text.
-
-1. Create one token per client. The command prints the token once (keep it, the host never stores it) and adds its hash to `./tokens`:
-
-   ```bash
-   bun scripts/new-token.ts web-mariusz ./tokens
-   bun scripts/new-token.ts macbook-session ./tokens
-   ```
-
-   To revoke a client, delete its line from `./tokens` and restart the service.
-
-2. Get a certificate for the host's address, for example with [mkcert](https://github.com/FiloSottile/mkcert) on the MacBook: `mkcert 192.168.50.4`.
-
-3. Start the service:
-
-   ```bash
-   env -u NO_COLOR \
-     FLEET_CONF=/path/to/fleet.conf \
-     FLEET_CONTROL_DB=~/fleet-control-state.db \
-     FLEET_CONTROL_HOST=192.168.50.4 \
-     FLEET_CONTROL_TOKENS=./tokens \
-     FLEET_CONTROL_TLS_CERT=./192.168.50.4.pem \
-     FLEET_CONTROL_TLS_KEY=./192.168.50.4-key.pem \
-     bun run serve
-   ```
-
-4. Browser: open `https://192.168.50.4:4871/`, paste your token. You stay signed in for 30 days.
-
-5. Claude Code on the MacBook (MCP):
-
-   ```bash
-   claude mcp add --scope user --transport http fleet-control-mini \
-     https://192.168.50.4:4871/mcp --header "Authorization: Bearer <token>"
-   claude mcp list    # should say: Connected
-   ```
-
-   The token's name is recorded as the author of everything that client does. A client cannot pretend to be someone else.
-
-To keep it running in the background on macOS, see the launchd section in [docs/installation.md](docs/installation.md), including how to stop and remove it.
-
-## Two hosts from one MacBook
-
-Run one independent host service on Linux and another on macOS. Use the MacBook's loopback client gateway for a single host-grouped Terminal Deck; each workstation keeps its own supervisor and SQLite state.
-
-```bash
-FLEET_CONTROL_CLIENT_CONFIG="$HOME/.config/fleet-control/client.json" bun run client
-```
-
-See [multi-host setup](docs/multi-host.md) for the host list, separate token files, TLS trust and per-host MCP connections. The gateway does not run agents, merge queues or retry uncertain writes. To try two independent local shell-only services without connecting to any workstation:
-
-```bash
+bun install --frozen-lockfile
 env -u NO_COLOR bun run demo:two-hosts
 ```
 
-Run the client command printed by the demo in another terminal. Both hosts are local fixtures, not proof of Linux/macOS deployment.
+1. Leave the demo running. In a second terminal, enter the same checkout and run the `FLEET_CONTROL_CLIENT_CONFIG=... bun run client` command printed by the demo. The generated config points to this run's temporary hosts.
+2. Open **<http://127.0.0.1:4870/>**. Select `probe-shell` under `alpha`, then under `beta`. Look for `HOST-ALPHA-TERMINAL` and `HOST-BETA-TERMINAL`: the sessions have the same name, but you are viewing different hosts.
+3. Open the supervisor panel. Each host has its own sample approval request. Answering one records a decision for that host; it does not execute a phase. The demo shells echo input rather than interpret it as a command.
+4. Press **Ctrl+C** in the client terminal, then in the demo terminal. Stopping the demo removes its temporary fleets, databases and credentials.
 
-## Settings
+If startup reports a missing `fleet` or `watchdog.sh`, run `git submodule update --init --recursive` in the checkout. Run it again after pulling updates to use the version of agent-fleet pinned by this repository.
 
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `FLEET_CONF` | agent-fleet `fleet.conf` of the fleet to watch | required for `serve` |
-| `READONLY_FLEET_BIN` | Explicit CLI override (takes precedence over `FLEET_BIN`) | `vendor/agent-fleet/scripts/fleet` |
-| `FLEET_CONTROL_DB` | SQLite file | in memory, lost on stop |
-| `PORT` | Port | 4871 |
-| `FLEET_CONTROL_HOST` | Address to listen on | `127.0.0.1` |
-| `FLEET_CONTROL_TOKENS` | Tokens file (hashes only) | none; required for any non-loopback address |
-| `FLEET_CONTROL_TLS_CERT`, `FLEET_CONTROL_TLS_KEY` | Certificate and key (PEM) | plain HTTP |
-| `FLEET_CONTROL_HOST_NAME` | Host name shown in the page | machine name |
-| `FLEET_CONTROL_PEERS` | Other hosts' services shown as links, `name=https://host:4871,...` | none |
-| `FLEET_CONTROL_ALLOWED_HOSTS` | Extra `host:port` names accepted on `/mcp` | bind address |
+## Connect your own workstation
 
-Always clear `NO_COLOR` (`env -u NO_COLOR`). With it set, agent-fleet mistakes Claude Code's grey suggestion for someone typing and refuses to send.
+Run the **host service** where the tmux sessions live, as the user who owns the fleet. Start with a test fleet. Use its existing agent-fleet `fleet.conf`, and choose a private directory for persistent state:
 
-## Using the page
-
-- **Left:** hosts and their sessions. Each session shows whether it runs and which model it uses: *observed* (read from the agent's own transcript), *configured* (set, not seen), *unknown* (with the reason) or *no model* for scripts.
-- **Centre:** the live terminal of the selected session, read-only. It reconnects by itself after a dropped connection.
-- **Right:** the supervisor panel. Open requests with Approve or Decline, the run's phase, recent commands with their honest state, and a field to send an instruction to the supervisor.
-- Below 900 px the right panel opens over the terminal with the panel button; Escape closes it.
-
-## Checks
-
-```bash
-env -u NO_COLOR bun test   # unit and real-tmux tests
-bun check                                                                            # types
-bun run design:check                                                                 # the original design mockup's handlers
+```sh
+mkdir -p -m 700 "$HOME/.local/state/fleet-control"
+env -u NO_COLOR \
+  FLEET_CONF="/absolute/path/to/your/fleet.conf" \
+  FLEET_CONTROL_DB="$HOME/.local/state/fleet-control/host.sqlite" \
+  bun run serve
 ```
 
-The tests start their own private tmux servers and never touch your sessions.
+Replace the example config path before running. Open **<http://127.0.0.1:4871/>** on the workstation and select a session. The service uses an in-memory database if you omit `FLEET_CONTROL_DB`; set it if you need command history and decisions after a restart. Clearing `NO_COLOR` matters because agent-fleet uses prompt styling to distinguish a suggestion from someone typing.
 
-## Known limits
+**For access from a laptop**, follow the [host installation guide](docs/install-guide.md) to configure authentication and TLS, then the [gateway guide](docs/multi-host.md) to create your client config. Use a separate operator token for each host, keep token files outside Git, and use HTTPS with a trusted certificate for remote connections. The local gateway holds those credentials on behalf of the browser. Run it only on a machine whose local users and processes you trust.
 
-- The pinned agent-fleet includes the viewer/send fix; the real-shell regression passes. Overrides pointing to older checkouts may still have that bug. This is not production-agent verification.
-- Model detection works for Claude Code only, on the same host as the service.
-- phased-delivery does not yet write its phase record through MCP. Typing into a terminal (input leases) does not exist.
-- The cooperative backend is deployed on `.15` and `.4`, but is not connected to the UI. One read-only real DSH fixture task on `.15` passed; production sessions and idle-agent wakeup remain unverified.
+```sh
+FLEET_CONTROL_CLIENT_CONFIG="$HOME/.config/fleet-control/client.json" bun run client
+```
 
-## More
+## Working in the console
 
-- [docs/HANDOFF.md](docs/HANDOFF.md): where the project stands and what is next. Start here in a new coding session.
-- [docs/implementation-status.md](docs/implementation-status.md): what is built, what was verified and what is still open.
-- [docs/install-guide.md](docs/install-guide.md): step-by-step install on a host.
-- [docs/installation.md](docs/installation.md): running the service, the install on 192.168.50.4, launchd, removal.
-- [docs/architecture.md](docs/architecture.md), [docs/control-protocol.md](docs/control-protocol.md), [docs/model-observability.md](docs/model-observability.md): design of the parts.
-- [docs/design/terminal-deck.html](docs/design/terminal-deck.html): the original interactive mockup the page is built from (static, not connected).
+- **Watch a session.** Select a host in the left sidebar, then a session to focus its terminal. A configured model is not necessarily the model that ran; see [model observation](docs/model-observability.md) for how to read the label.
+- **Give an instruction.** Use the supervisor panel for work you want tracked. A queued command has been recorded, and a delivered command has been sent. Neither means the agent has accepted or finished it. If a connection drops, inspect the existing command before sending it again.
+- **Review a decision.** Check the host, request, phase and revision before approving. An approval records your decision about that revision, not proof that the next phase started. Closing the browser does not approve pending work or stop agents already running on a workstation.
+- **Take direct control when needed.** Terminals are read-only by default. A host can opt into operator-only typing under an exclusive input lease. Managed agent launches and fleet administration are separate opt-ins; you do not need to enable them to watch a fleet.
+
+## Choose the right setup
+
+| What you need | What to run | Guide |
+| --- | --- | --- |
+| Inspect or supervise one fleet | A host service beside agent-fleet, with SQLite for persistent history | [Host setup](docs/install-guide.md) |
+| See several workstations in one Terminal Deck | One host service per workstation and a loopback client gateway on your laptop | [Gateway configuration, TLS and per-host MCP](docs/multi-host.md) |
+| Let supervisors claim work and report progress through MCP | Optional cooperative central service with PostgreSQL and a supervisor adapter | [Cooperative deployment](deploy/cooperative/README.md) |
+
+The cooperative service is a separate command path, not a prerequisite for the console. A claim reserves work; it is not an execution report. If you map a gateway command panel to central, its terminals still come from the host service, and approvals and workflow are unavailable in that mapped panel. See [cooperative command routing](docs/multi-host.md#optional-cooperative-central-commands) before enabling it.
+
+## Development and operations
+
+- [Installation CLI](docs/install-cli.md): preview a fresh installation plan before applying it to a prepared checkout.
+- [Implementation status](docs/implementation-status.md): distinguish implemented features, tested scenarios and open limits before connecting production sessions.
+- [Source layout](docs/source-layout.md): find the entry points, application logic and storage layers.
+- Run `bun run typecheck` for types and `bun run design:check` for the standalone preview's event handlers. The full `bun test` suite includes real tmux tests and optional PostgreSQL integration tests. Use an isolated development environment and a disposable test database, never an operational database.
