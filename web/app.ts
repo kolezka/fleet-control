@@ -648,7 +648,7 @@ function renderAdmin(h: HostState | undefined) {
   const restart = restartGate(v);
   $("restartGate").textContent = restart.reason;
   ($("restartGo") as HTMLButtonElement).disabled = !restart.ok;
-  $("startPart").hidden = v.sessions === null || !v.restartSession || Boolean(v.sessions.find((r) => r.session === v.restartSession)?.inConf);
+  $("startPart").hidden = v.sessions === null || !v.restartSession || (() => { const r = v.sessions.find((x) => x.session === v.restartSession); return Boolean(r?.inConf && !r.saved); })();
   if (v.sessions) {
     fillStart(v);
     const row = v.sessions.find((r) => r.session === v.restartSession);

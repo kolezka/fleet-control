@@ -50,13 +50,14 @@ const endLine = (nonce: string) => `__fc_status=$?; __FLEET_CONTROL_END=${nonce}
 const EARLY_STOP = "it stops before its end (return or exit), so the lines after it, the managed agents among them, never load";
 
 // tmux shows a pane's start command in double quotes with backslash escapes; this gives back what was typed.
-// Only \" \\ and \$ are read back. Any other escape (a tab shows as \t, a control byte as \ooo) gives null:
-// the page then fills nothing in rather than a command that differs from the one that runs.
+// Only \" \\ \$ and a leading \~ are read back. Any other escape (a tab shows as \t, a control byte as \ooo)
+// or a single-quoted form gives null: the page then fills nothing in rather than a command that differs from the one that runs.
 export function unquoteTmux(shown: string): string | null {
+  if (shown.startsWith("'")) return null;
   if (!(shown.length >= 2 && shown.startsWith('"') && shown.endsWith('"'))) return shown;
   const inner = shown.slice(1, -1);
-  if (/\\[^"\\$]/.test(inner.replace(/\\\\/g, ""))) return null;
-  return inner.replace(/\\(["\\$])/g, "$1");
+  if (/\\[^"\\$~]/.test(inner.replace(/\\\\/g, ""))) return null;
+  return inner.replace(/\\(["\\$~])/g, "$1");
 }
 
 const SESSION_NAME = /^[A-Za-z0-9._-]{1,64}$/;

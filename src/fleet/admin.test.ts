@@ -227,6 +227,9 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     // An escape the page cannot read back gives nothing to fill in, not a different command.
     expect(unquoteTmux('"echo a\\tb"')).toBeNull();
     expect(unquoteTmux('"echo \\001"')).toBeNull();
+    // tmux escapes a leading ~ and single-quotes some words.
+    expect(unquoteTmux('"\\~/bin/x"')).toBe("~/bin/x");
+    expect(unquoteTmux(`'exec"sleep"'`)).toBeNull();
   });
 
   test("review fixes on a real tmux server: odd folders and names, UTF-8 without a locale, missing folder, dotted name, leading dash, dead pane", async () => {

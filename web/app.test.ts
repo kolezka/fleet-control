@@ -760,9 +760,10 @@ test("a hand-made session is offered for restart only after its start command, p
   const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: ["probe-shell"], loadError: null };
   const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
   let saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null = null;
+  let stale: { command: string; cwd: string; savedBy: string; savedAt: string } | null = null;
   const rows = () => ({ starts: true, sessions: [
     { session: "hand", inConf: false, running: true, saved, pane: { command: "exec cat", cwd: "/w" } },
-    { session: "probe-shell", inConf: true, running: true, saved: null, pane: { command: "", cwd: "/f" } },
+    { session: "probe-shell", inConf: true, running: true, saved: stale, pane: { command: "", cwd: "/f" } },
   ] });
   const b = await browser([host], (path, init) => {
     if (path.endsWith("/fleet/conf")) return conf;
@@ -779,6 +780,15 @@ test("a hand-made session is offered for restart only after its start command, p
   // A fleet.conf session starts from fleet.conf: no start form for it.
   await type("restartSession", "probe-shell", "change");
   expect(b.element("startPart").hidden).toBe(true);
+  // A start saved before probe-shell joined fleet.conf can still be forgotten from the page.
+  stale = { command: "exec cat", cwd: "/f", savedBy: "gw", savedAt: "2026-11-22T01:00:00Z" };
+  await b.listeners.get("confReload:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  await type("restartSession", "probe-shell", "change");
+  expect([b.element("startPart").hidden, b.element("startSave").disabled]).toEqual([false, true]);
+  stale = null;
+  await b.listeners.get("confReload:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
   await type("restartSession", "hand", "change");
   expect(b.element("startPart").hidden).toBe(false);
   // Filled from tmux, not saved: Restart is blocked until a command is saved.
