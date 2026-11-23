@@ -169,7 +169,7 @@ test("the service manager is found from launchd's label or systemd's cgroup, and
   mkdirSync(join(home, "Library/LaunchAgents"), { recursive: true });
   writeFileSync(join(home, "Library/LaunchAgents/pl.raqz.fleet-control.plist"), "");
   expect(detectManager({ XPC_SERVICE_NAME: "pl.raqz.fleet-control" }, home)).toEqual({ kind: "launchd", label: "pl.raqz.fleet-control", plist: join(home, "Library/LaunchAgents/pl.raqz.fleet-control.plist") });
-  // A terminal on macOS has XPC_SERVICE_NAME=0, and a label without a plist is not one this can restart.
+  // A terminal on macOS has XPC_SERVICE_NAME=0; that, and any label without a plist, is not a service this can restart.
   expect(detectManager({ XPC_SERVICE_NAME: "0" }, home)).toBeNull();
   expect(detectManager({ XPC_SERVICE_NAME: "other.label" }, home)).toBeNull();
   const cg = join(home, "cgroup");

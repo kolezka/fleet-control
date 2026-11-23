@@ -828,6 +828,7 @@ async function runService(hostId: string) {
     return;
   }
   v.notice = `${host.name}: ${action} started (${id}).`;
+  renderAdmin(selectedHostState(fleet));
   for (let i = 0; i < SERVICE_POLLS; i++) {
     await new Promise((r) => setTimeout(r, SERVICE_POLL_MS));
     const sv = await hostCall(host, "/service");

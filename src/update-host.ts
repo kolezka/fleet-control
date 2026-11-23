@@ -15,7 +15,7 @@ const RELEASES_CACHE_MS = 5 * 60_000;
 // launchd sets XPC_SERVICE_NAME to the job label; systemd puts the service in its own cgroup.
 export function detectManager(env: Record<string, string | undefined>, home: string, cgroup = "/proc/self/cgroup"): Manager | null {
   const label = env.XPC_SERVICE_NAME;
-  if (label && label !== "0" && /^[A-Za-z0-9._-]+$/.test(label)) {
+  if (label && /^[A-Za-z0-9._-]+$/.test(label)) {
     const plist = join(home, "Library/LaunchAgents", `${label}.plist`);
     return existsSync(plist) ? { kind: "launchd", label, plist } : null;
   }

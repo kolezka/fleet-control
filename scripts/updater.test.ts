@@ -11,12 +11,12 @@ import { Job, runJob, stopService, type JobFile } from "./updater.ts";
 
 const root = mkdtempSync(join(tmpdir(), "updater-"));
 const managers: JobFile["service"]["manager"][] = [];
-const files = new Map<string, Uint8Array>();
-const web = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => { const b = files.get(new URL(req.url).pathname); return b ? new Response(b) : new Response("no", { status: 404 }); } });
+const files = new Map<string, Buffer>();
+const web = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => { const b = files.get(new URL(req.url).pathname); return b ? new Response(new Blob([new Uint8Array(b)])) : new Response("no", { status: 404 }); } });
 afterAll(() => { for (const m of managers) stopService(m); web.stop(true); rmSync(root, { recursive: true, force: true }); }, 60_000);
 
 const free = () => { const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() }); const p = s.port; s.stop(true); return p; };
-const sha = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+const sha = (b: Buffer) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
 // A stand-in service: answers 401 on /api/whoami and says which release it is. `rule` may make it refuse to start.
 function serviceCode(dir: string, commit: string, rule = "") {
@@ -33,9 +33,9 @@ function publish(name: string, commit: string, rule = "", tamper = false) {
   serviceCode(join(stage, "fleet-control"), commit, rule);
   const pkg = join(stage, "p.tgz");
   expect(spawnSync("tar", ["-czf", pkg, "-C", stage, "fleet-control"]).status).toBe(0);
-  const bytes = new Uint8Array(readFileSync(pkg));
+  const bytes = readFileSync(pkg);
   files.set(`/${name}/pkg.tar.gz`, bytes);
-  files.set(`/${name}/pkg.tar.gz.sha256`, new TextEncoder().encode(`${tamper ? "0".repeat(64) : sha(bytes)}  pkg.tar.gz\n`));
+  files.set(`/${name}/pkg.tar.gz.sha256`, Buffer.from(`${tamper ? "0".repeat(64) : sha(bytes)}  pkg.tar.gz\n`));
   return { packageUrl: `${web.url}${name}/pkg.tar.gz`, sha256Url: `${web.url}${name}/pkg.tar.gz.sha256` };
 }
 
