@@ -50,6 +50,10 @@ export type HostUpdatesOptions = {
   now?: () => Date;
 };
 
+// A cold release list took 9.3 s on .4. The list and all tag lookups together get 20 s each, 40 s in all,
+// under the gateway's 60 s for an update.
+const GITHUB_TIMEOUT_MS = 20_000;
+
 export class HostUpdates implements UpdateHost {
   #cache: { at: number; releases: Release[] } | null = null;
   // A failed read is kept a minute, so a page polling during a job does not spend GitHub's 60 calls an hour.
@@ -81,7 +85,7 @@ export class HostUpdates implements UpdateHost {
   async #readReleases(now: number): Promise<Release[]> {
     const url = `${this.o.api ?? "https://api.github.com"}/repos/${this.o.repo ?? REPO}/releases?per_page=20`;
     let r: Response;
-    try { r = await fetch(url, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000) }); } catch (e) {
+    try { r = await fetch(url, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) }); } catch (e) {
       throw new Error(`cannot read releases from GitHub: ${e instanceof Error ? e.message : e}`);
     }
     if (!r.ok) throw new Error(`GitHub answered ${r.status} for the release list`);
@@ -107,8 +111,10 @@ export class HostUpdates implements UpdateHost {
   // a package uploaded to a release by hand under another commit's name is refused.
   async tagCommit(tag: string): Promise<string> {
     const api = this.o.api ?? "https://api.github.com", repo = this.o.repo ?? REPO;
+    // One deadline for the ref and any annotated tags it leads through.
+    const signal = AbortSignal.timeout(GITHUB_TIMEOUT_MS);
     const get = async (path: string) => {
-      const r = await fetch(`${api}/repos/${repo}/${path}`, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000) });
+      const r = await fetch(`${api}/repos/${repo}/${path}`, { headers: { accept: "application/vnd.github+json" }, signal });
       if (!r.ok) throw new Error(`GitHub answered ${r.status} for ${path}`);
       return await r.json() as { object?: { type?: string; sha?: string } };
     };
