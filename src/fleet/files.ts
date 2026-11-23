@@ -19,7 +19,8 @@ function decode(path: string, bytes: Uint8Array): string {
 }
 const missing = (e: unknown) => ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "");
 
-// Test seams: run between the size check and the read, and just before the rename, so a race can be staged.
+// Test seams: run between the size check and the read, around the backup write, and just before the rename,
+// so a race can be staged.
 export type DiskHooks = { afterSize?: (path: string) => Promise<void>; beforeBackup?: (path: string) => Promise<void>; afterBackup?: (path: string) => Promise<void>; beforeRename?: (path: string) => Promise<void> };
 
 export class DiskFiles implements FilesHost {

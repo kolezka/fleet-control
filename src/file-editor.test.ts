@@ -214,7 +214,7 @@ test("review 2: names are compared without case, also for protected files that d
   const fleetDir = join(dir, "fleet2");
   mkdirSync(fleetDir);
   const u = filesUseCases({ host: new DiskFiles(), roots: [fleetDir], protectedPaths: [join(fleetDir, "fleet.conf"), join(fleetDir, "fleet-control-agents.conf")] }, { name: "op", role: "operator" });
-  for (const name of ["FLEET.CONF", "Fleet-Control-Agents.conf", "Settings.json", "TOKENS", "Token-mini"]) {
+  for (const name of ["FLEET.CONF", "Fleet-Control-Agents.conf", "Settings.json", "TOKENS", "Token-mini", "fleet-control-agent\u017f.conf", "to\u212Aen-x", "fleet.conf".normalize("NFD"), "ſettings.json"]) {
     await expect(u.save({ path: join(fleetDir, name), text: "x\n", revision: "new", confirm: name })).rejects.toThrow("belongs to the Fleet Control service");
   }
   expect(readdirSync(fleetDir)).toEqual([]);
@@ -233,7 +233,6 @@ test("review 2: a file that grows after its size check is refused, a folder swap
   expect(readdirSync(outside)).toEqual(["secret.txt"]);
   expect(readFileSync(join(root, "moved", "notes.md"), "utf8")).toBe("one\ntwo\n");
   rmSync(work); renameSync(join(root, "moved"), work);
-  // The backup holds what was read through the handle, even if the path names other bytes by the time it is written.
   chmodSync(file, 0o664);
   // The path names other bytes while the backup is written, and the old bytes again afterwards: the backup is what was read.
   const late = new DiskFiles({ beforeBackup: async (p) => { writeFileSync(p, "someone else\n"); }, afterBackup: async (p) => { writeFileSync(p, "one\ntwo\n"); } });

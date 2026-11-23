@@ -41,7 +41,7 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
 
 export function filesUseCases(deps: FilesDeps, caller?: Caller) {
   // Roots and protected paths are compared after symlinks are resolved on both sides, so a symlinked or
-  // differently written folder (/tmp vs /private/tmp, FLEET.CONF vs fleet.conf on macOS) cannot slip past.
+  // differently written folder (/tmp vs /private/tmp) cannot slip past; letter case is folded in refuseProtected.
   const resolved = async (paths: readonly string[]) => (await Promise.all(paths.map(async (p) => [p, await deps.host.real(p)] as const)));
   const allowed = async (path: string) => {
     const asked = checkPath(path);
