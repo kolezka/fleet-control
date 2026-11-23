@@ -2,6 +2,18 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Watchdog as a host service from the page (2026-11-23, branch `feat/watchdog-service`, not released)
+
+With `FLEET_CONTROL_ADMIN=1` the Fleet section has a Watchdog part. An operator types `watchdog` and turns agent-fleet's watchdog on or off for the fleet in `fleet.conf`.
+
+- On: the service writes a launchd agent `~/Library/LaunchAgents/pl.raqz.fleet-watchdog.<FLEET>.plist` (macOS) or a systemd user unit `fleet-watchdog-<FLEET>.service` (Linux), then loads and starts it. It runs `watchdog.sh --quiet-start` from `FLEET_DIR` with a bash 4 or newer (Homebrew bash on macOS, under `caffeinate -i` like `fleet watchdog start`) and the service's own `PATH`. It starts again at login (launchd `RunAtLoad`, systemd `WantedBy=default.target`, linger on .15) and after a crash (`KeepAlive` on failure, `Restart=on-failure`, 30 s apart). Output goes to `FLEET_DIR/watchdog.service.log`; the watchdog's own log stays `watchdog.log`.
+- Off: `launchctl bootout` or `systemctl --user disable --now`, then the file is removed. Only the watchdog process stops (launchd `AbandonProcessGroup`, systemd `KillMode=process`): tmux servers and agents it started keep running.
+- A start that does not keep running for 2 s is reported as failed (422) with the last lines of `watchdog.service.log`, and the service file is removed again.
+- Refused: a watchdog already running by hand in tmux session `<FLEET>-watchdog` (two watchdogs would both nudge and replace the same agents), a `REMOTE_SSH` fleet, a host with neither launchd nor systemd, no bash 4, no `watchdog.sh` in `FLEET_DIR` (run `fleet sync`). Turning on a running watchdog or off a stopped one changes nothing.
+- Code: rules in `src/domain/watchdog.ts`, use cases in `src/application/watchdog.ts`, launchd and systemd in `src/fleet/watchdog-service.ts`, `GET/PUT /api/watchdog` (operator, Origin, JSON) and the gateway allowlist, page part `#watchdogPart`.
+- Tests: `src/fleet/watchdog-service.test.ts` runs the pinned real `watchdog.sh` on a private fleet through the real host service and gateway, with a stand-in `launchctl` that starts what the plist names (no real launchd or systemd job in tests). Two page tests in `web/app.test.ts`. The page tests fail on main; mutations of the tmux guard, the start-once check, the role check, the confirm, the cleanup after a failed start, `KillMode`, plist removal and both page gates each fail a test.
+- Not checked yet: real launchd on .4 and real systemd on .15 (done at deploy). The watchdog nudges and replaces agents it finds hung; on the test fleets that is `probe-shell` (a `cat` pane it reads as a dead agent and tries to restart with Claude, which fails at the trust dialog and is logged).
+
 ## Release d653eb9: service settings and saved start commands on .4 and .15 (2026-11-23)
 
 - Code: main at d653eb9 (PR #208 restart any session, PR #209 service settings). agent-fleet pin unchanged (c916b8d).

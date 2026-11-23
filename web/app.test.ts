@@ -958,3 +958,46 @@ test("saving fleet.conf keeps an unsaved settings edit", async () => {
   expect(b.element("adminStatus").textContent.startsWith("A: fleet.conf saved")).toBe(true);
   expect([b.element("setInput").checked, b.element("settingsGate").textContent]).toEqual([true, "Type settings to confirm"]);
 });
+
+test("watchdog: the part says off, turns it on only after the typed confirm, then offers Turn off", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  let wd = { fleet: "t", manager: "launchd", name: "pl.raqz.fleet-watchdog.t", installed: false, running: false, pid: null as number | null, inTmux: false };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/watchdog") && init?.method === "PUT") { wd = { ...wd, installed: true, running: true, pid: 42 }; return wd; }
+    if (path.endsWith("/watchdog")) return wd;
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("watchdogPart").hidden).toBe(false);
+  expect(b.element("watchdogState").textContent).toBe("Off: no watchdog checks the agents of t.");
+  expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual(["Turn on", true, "Type watchdog to confirm"]);
+  b.element("watchdogConfirm").value = "watchdog";
+  await b.listeners.get("watchdogConfirm:input")!({});
+  expect(b.element("watchdogGo").disabled).toBe(false);
+  await b.listeners.get("watchdogGo:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/watchdog" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ on: true, confirm: "watchdog" });
+  expect(b.element("adminStatus").textContent).toBe("A: watchdog on.");
+  expect(b.element("watchdogState").textContent).toBe("On: pl.raqz.fleet-watchdog.t runs (pid 42). It checks every agent every 60 s and starts again after a reboot.");
+  expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual(["Turn off", true, "Type watchdog to confirm"]);
+});
+
+test("watchdog: a watchdog started by hand in tmux blocks Turn on, and a host without the route hides the part", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  for (const answer of [{ fleet: "t", manager: "systemd", name: "fleet-watchdog-t.service", installed: false, running: false, pid: null, inTmux: true }, { __status: 404 }]) {
+    const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+      if (path.endsWith("/fleet/conf")) return conf;
+      if (path.endsWith("/watchdog")) return answer;
+      if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 503 };
+      return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+    });
+    for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    if ("__status" in answer) { expect(b.element("watchdogPart").hidden).toBe(true); continue; }
+    b.element("watchdogConfirm").value = "watchdog";
+    await b.listeners.get("watchdogConfirm:input")!({});
+    expect([b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual([true, "A watchdog runs in tmux session t-watchdog; stop it with fleet watchdog stop first"]);
+  }
+});

@@ -41,6 +41,9 @@ export type AdminView = {
   settingsError: string;
   // An unsaved edit whose file changed on the host since; Reload takes the new file.
   settingsChangedOnHost: boolean;
+  // agent-fleet's watchdog as a host service: null until read; hosts without it hide the part.
+  watchdog: WatchdogRead | null;
+  watchdogConfirm: string;
 };
 
 export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string | null; cwd: string } | null };
@@ -50,6 +53,29 @@ export type SettingsRead = { path: string; revision: string; running: SettingsVa
 // One text field per list (one entry per line), as typed.
 export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
+export type WatchdogRead = { fleet: string; manager: "launchd" | "systemd" | null; name: string; installed: boolean; running: boolean; pid: number | null; inTmux: boolean };
+
+export function parseWatchdog(x: unknown): WatchdogRead | null {
+  if (!x || typeof x !== "object") return null;
+  const w = x as Record<string, unknown>;
+  if (typeof w.fleet !== "string" || typeof w.name !== "string" || typeof w.installed !== "boolean" || typeof w.running !== "boolean" || typeof w.inTmux !== "boolean") return null;
+  if (w.manager !== "launchd" && w.manager !== "systemd" && w.manager !== null) return null;
+  if (w.pid !== null && typeof w.pid !== "number") return null;
+  return { fleet: w.fleet, manager: w.manager, name: w.name, installed: w.installed, running: w.running, pid: w.pid as number | null, inTmux: w.inTmux };
+}
+
+// The one button turns the service on when it is off and off when it is on.
+export function watchdogGate(v: AdminView): { ok: boolean; on: boolean; reason: string } {
+  const w = v.watchdog;
+  if (!w) return { ok: false, on: false, reason: "Read the watchdog first" };
+  const on = !w.running;
+  if (!w.manager) return { ok: false, on, reason: "This host has neither launchd nor systemd" };
+  if (on && w.inTmux) return { ok: false, on, reason: `A watchdog runs in tmux session ${w.fleet}-watchdog; stop it with fleet watchdog stop first` };
+  if (v.busy) return { ok: false, on, reason: "Working" };
+  if (v.watchdogConfirm !== "watchdog") return { ok: false, on, reason: "Type watchdog to confirm" };
+  return { ok: true, on, reason: on ? `Starts ${w.name} now and at every login` : `Stops ${w.name}; agents keep running` };
+}
+
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
 export const emptyAdmin = (): AdminView => ({
@@ -57,6 +83,7 @@ export const emptyAdmin = (): AdminView => ({
   restartSession: "", restartConfirm: "", sessions: null, startFor: "", startCommand: "", startCwd: "", startConfirm: "", busy: false, notice: "",
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
+  watchdog: null, watchdogConfirm: "",
 });
 
 const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");

@@ -93,6 +93,11 @@
                 <label for="settingsConfirm">Type settings to confirm</label><input id="settingsConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="settingsGate"></span><button type="button" id="settingsReload">Reload</button><button type="button" id="settingsSave" disabled>Save settings</button></div></div>
               </div>
+              <div class="adminpart" id="watchdogPart" hidden><div class="sectionheading"><h4>Watchdog</h4></div>
+                <p class="fineprint" id="watchdogState"></p>
+                <label for="watchdogConfirm">Type watchdog to confirm</label><input id="watchdogConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="watchdogGate"></span><button type="button" id="watchdogGo" disabled>Turn on</button></div>
+              </div>
               <p id="adminStatus" role="status"></p>
             </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
