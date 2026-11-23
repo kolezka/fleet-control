@@ -2,6 +2,19 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## File editor on the page (2026-11-23, branch `feat/file-editor`, not released)
+
+With `FLEET_CONTROL_ADMIN=1` and tokens, an operator opens and saves text files on the host from the fleet section, through the gateway like the other parts.
+
+- Where: only inside the allowed folders. Default: the folder of `fleet.conf` and the managed agent folders (`FLEET_CONTROL_AGENT_ROOTS`); `FLEET_CONTROL_FILE_ROOTS` (`:`-separated plain absolute folders, never `/`) replaces that list. A path is checked as asked and again where it really leads (`realpath`), so a symlink inside a folder that points out is refused for reading and for saving.
+- Never: the service's own files. The tokens folder (tokens, token files, the settings file), `fleet.conf` (it has its own editor with its own checks) and `fleet-control-agents.conf` are refused by path; files named `fc-*.mcp.json`, `tokens`, `token-*` or `settings.json` are refused anywhere, since an orchestrator's MCP config holds its token.
+- What: UTF-8 text files up to 32 KiB without NUL bytes; folders list up to 500 entries, folders first; symlinks and other entries show but are not followed from the list.
+- Save: needs the SHA-256 revision the file was read at (or `new` for a new file) and the typed file name. The old text goes to `<name>.bak-<time>-<id>` beside it with the file's mode (backups are not pruned); the new text is written to a temp file with the same mode, the file is compared again, then renamed over it. A hand edit between the check and the rename wins: nothing is written and the backup and temp file are removed. A new file is created owner-only (`0600`) and refused when it already exists or its folder is missing. Saving the same text writes nothing.
+- Page: a Files part lists the allowed folders as buttons, opens folders and files, Up stays inside the allowed folder, New file starts from the open folder. Save shows how many lines go out and in, and is held back until the typed name matches; a refused stale save keeps the edit visible to copy and blocks Save until the file is opened again.
+- Roles: operator only (viewer and agent tokens get 403); writes need the page's Origin and a JSON body. A host without the editor answers 503 and the page hides the part.
+- Tests: `src/file-editor.test.ts` (real service over real folders, real gateway: operator flow with backup and modes, refusals outside, through symlinks, the service's own files, size, NUL and non-UTF-8, roles, origin, content type, the check-then-rename race, path and folder rules) and three page tests in `web/app.test.ts`. RED on the old server, gateway and page; 13 server-side and 7 page mutations each fail a test.
+- Not done: no diff view (only line counts), no delete or rename, no binary files, no pruning of backups. The gateway shortens long error messages to 300 characters.
+
 ## Watchdog as a host service from the page (2026-11-23, branch `feat/watchdog-service`, not released)
 
 With `FLEET_CONTROL_ADMIN=1` the Fleet section has a Watchdog part. An operator types `watchdog` and turns agent-fleet's watchdog on or off for the fleet in `fleet.conf`.

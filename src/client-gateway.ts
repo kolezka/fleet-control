@@ -271,6 +271,8 @@ function matchRoute(seg: string[]): Target | null {
   // The host's tokens file. The gateway's own line changes only through /api/manage, never from here.
   if (seg.length === 1 && a === "tokens") return http("/api/tokens", ["GET"]);
   if (seg.length === 1 && a === "settings") return http("/api/settings", ["GET", "PUT"]);
+  // The file editor; the path is checked again on the host against its allowed folders.
+  if (seg.length === 1 && a === "files") return http("/api/files", ["GET", "PUT"], { path: /^\/[^\x00-\x1f\x7f]{0,1023}$/ });
   // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
   if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
   if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);
