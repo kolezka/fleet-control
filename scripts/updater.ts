@@ -322,8 +322,8 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
   if (restoreFrom) {
     if (s.db && existsSync(join(restoreFrom, "state.db"))) {
       try {
-        // The new code's WAL goes first: SQLite would replay it onto the old file. A temp file and a rename,
-        // so a crash halfway never leaves a torn database.
+        // Copy to a temp file first, then drop the new code's WAL (SQLite would replay it onto the old file),
+        // then rename, so a failed copy or a crash halfway never leaves a torn database.
         copyFileSync(join(restoreFrom, "state.db"), `${s.db}.restore-tmp`);
         for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
         renameSync(`${s.db}.restore-tmp`, s.db);
