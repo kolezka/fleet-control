@@ -50,7 +50,7 @@ async function setup(name: string) {
   const tokens = join(base, "tokens"); writeFileSync(tokens, "op abc operator\n", { mode: 0o600 });
   const port = free();
   const env = { PATH: `/service/path:${process.env.PATH!}`, HOME: process.env.HOME!, PORT: String(port), FLEET_CONTROL_DB: db };
-  const manager = { kind: "test" as const, pidFile: join(base, "pid"), env, log: join(base, "service.log"), failStartsFile: join(base, "fail-starts") };
+  const manager = { kind: "test" as const, pidFile: join(base, "pid"), env, log: join(base, "service.log"), failStartsFile: join(base, "fail-starts"), failStopFile: join(base, "fail-stop") };
   managers.push(manager);
   const { startService } = await import("./updater.ts");
   startService(manager, dir);
@@ -68,7 +68,7 @@ async function setup(name: string) {
     return Job.read(f);
   };
   const running = async () => (await fetch(`${health}/api/whoami`).then((r) => r.text(), () => "down"));
-  return { base, dir, db, jobs, job, running, conf };
+  return { base, dir, db, jobs, job, running, conf, tokens };
 }
 
 test("an update checks the package, backs up, tries it on a scratch port, swaps and runs the new release", async () => {
@@ -83,7 +83,8 @@ test("an update checks the package, backs up, tries it on a scratch port, swaps 
   expect(JSON.parse(readFileSync(join(s.dir, "MANIFEST.json"), "utf8")).commit).toBe(commit);
   expect(JSON.parse(readFileSync(join(`${s.dir}.before-bbbbbbb`, "MANIFEST.json"), "utf8")).commit).toBe("a".repeat(40));
   const backup = join(s.base, "rollback-bbbbbbb");
-  expect(readdirSync(backup).sort()).toEqual(["SHA256SUMS", "fleet.conf", "state.before-upgrade.db", "tokens"]);
+  expect(readdirSync(backup).sort()).toEqual(["SHA256SUMS", "at-stop", "fleet.conf", "state.before-upgrade.db", "tokens"]);
+  expect(readdirSync(join(backup, "at-stop")).sort()).toEqual(["fleet.conf", "state.db", "tokens"]);
   expect(readFileSync(join(backup, "SHA256SUMS"), "utf8")).toContain("  state.before-upgrade.db");
   // fleet sync ran from the new code with the service's PATH, not the updater's.
   expect(readFileSync(`${s.conf}.sync`, "utf8")).toMatch(/^b synced PATH=\/service\/path:/);
@@ -127,7 +128,7 @@ test("new code that passes the scratch start but does not come up for real is ro
   await runJob(j);
   const after = Job.read(j.file).data;
   expect(after.state).toBe("rolled_back");
-  expect(after.steps.join("\n")).toMatch(/did not answer[\s\S]*rolling back[\s\S]*database put back from the backup[\s\S]*the old release answers again/);
+  expect(after.steps.join("\n")).toMatch(/did not answer[\s\S]*rolling back[\s\S]*database put back as the stopped service left it[\s\S]*the old release answers again/);
   expect(await s.running()).toBe("a".repeat(40));
   const rows = new Database(s.db).query("SELECT v FROM t").all();
   expect(rows).toEqual([{ v: "before" }]);
@@ -152,7 +153,7 @@ test("review fixes: a start that fails right after the stop is retried; one that
   await runJob(k);
   const after = Job.read(k.file).data;
   expect(after.state).toBe("rolled_back");
-  expect(after.steps.join("\n")).toMatch(/Bootstrap failed: 5[\s\S]*rolling back[\s\S]*old code back in place[\s\S]*database put back[\s\S]*files put back from the backup: tokens, fleet.conf[\s\S]*old fleet sync done/);
+  expect(after.steps.join("\n")).toMatch(/Bootstrap failed: 5[\s\S]*rolling back[\s\S]*old code back in place[\s\S]*database put back as the stopped service left it[\s\S]*files put back as the stopped service left them: tokens, fleet.conf[\s\S]*old fleet sync done/);
   expect(await t.running()).toBe("a".repeat(40));
   expect(readFileSync(`${t.conf}.sync`, "utf8")).toMatch(/^2 synced[\s\S]*\na synced/);
   expect(readFileSync(t.conf, "utf8")).toBe("FLEET=x\n");
@@ -200,3 +201,30 @@ test("review fixes: launchd and systemd are driven with the right commands, and 
     ]);
   } finally { process.env.PATH = path; }
 });
+
+test("review round 2: a stop that ends the service but reports an error still ends in a started service", async () => {
+  const s = await setup("stopfail");
+  writeFileSync(join(s.base, "fail-stop"), "");
+  const commit = "4".repeat(40);
+  const j = s.job(commit, publish("stopfail", commit));
+  await runJob(j);
+  const after = Job.read(j.file).data;
+  expect(after.state).toBe("rolled_back");
+  expect(after.steps.join("\n")).toMatch(/Boot-out failed: 5[^\n]*; rolling back[\s\S]*the old code never left its folder[\s\S]*the new code never ran; database and files left as they are[\s\S]*the old release answers again/);
+  expect(after.steps.join("\n")).toContain(`the new code was left in ${s.dir}.new-4444444; remove it by hand`);
+  expect(await s.running()).toBe("a".repeat(40));
+}, 90_000);
+
+test("review round 2: what the running service wrote after the backup survives a rollback (a rotated token stays rotated)", async () => {
+  const s = await setup("keep");
+  writeFileSync(join(s.base, "fail-starts"), "5");
+  const commit = "5".repeat(40);
+  // Stands in for the old service writing while the scratch start runs: after the backup, before the stop.
+  const rule = `if (process.env.FLEET_CONTROL_DB?.endsWith("scratch.db")) { require("node:fs").writeFileSync(${JSON.stringify(s.tokens)}, "op rotated operator\\n"); const { Database } = require("bun:sqlite"); const d = new Database(${JSON.stringify(s.db)}); d.run("INSERT INTO t VALUES ('written after the backup')"); d.close(); }`;
+  const j = s.job(commit, publish("keep", commit, rule));
+  await runJob(j);
+  expect(Job.read(j.file).data.state).toBe("rolled_back");
+  expect(readFileSync(s.tokens, "utf8")).toBe("op rotated operator\n");
+  const d = new Database(s.db); const rows = d.query("SELECT v FROM t ORDER BY rowid").all(); d.close();
+  expect(rows).toEqual([{ v: "before" }, { v: "written after the backup" }]);
+}, 120_000);

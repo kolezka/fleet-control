@@ -17,6 +17,8 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          # The write token stays out of .git/config while install and tests run.
+          persist-credentials: false
       - name: The tag must be on main
         run: |
           git fetch --quiet origin main

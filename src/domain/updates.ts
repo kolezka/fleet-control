@@ -33,7 +33,7 @@ export type Manager =
   | { kind: "systemd"; unit: string; unitFile: string | null }
   // Tests: the service is `bun index.ts` started from the folder, its pid in pidFile. failStartsFile, when it
   // holds a number above 0, makes that many starts fail first (a bootstrap that fails right after a bootout).
-  | { kind: "test"; pidFile: string; env: Record<string, string>; log: string; failStartsFile?: string };
+  | { kind: "test"; pidFile: string; env: Record<string, string>; log: string; failStartsFile?: string; failStopFile?: string };
 
 // The job file the service writes and the updater works through.
 export type JobFile = {
@@ -72,6 +72,8 @@ export type JobFile = {
 export function jobGone(j: Pick<JobFile, "state" | "pid" | "startedAt">, now: number, alive: (pid: number) => boolean): boolean {
   if (JOB_FINAL.includes(j.state)) return false;
   if (j.pid === null) return now - Date.parse(j.startedAt) >= 60_000;
+  // An update takes minutes; after two hours a living pid is another process that got the number after a reboot.
+  if (now - Date.parse(j.startedAt) >= 2 * 3_600_000) return true;
   return !alive(j.pid);
 }
 

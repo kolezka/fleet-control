@@ -1,7 +1,7 @@
 // Restart and update from the page: the release list read from GitHub's API shape, the job written for the
 // updater, one job at a time, and every refusal, through a real host service and a real gateway.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "./auth.ts";
@@ -212,6 +212,8 @@ test("review fixes: a job whose updater died reads as failed and frees the butto
   const job = seen.jobs.find((j: { id: string }) => j.id === first.job.id);
   expect(job.state).toBe("failed");
   expect(job.steps.at(-1)).toBe("the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped");
+  // The page's poll stops at endedAt, so a gone job needs one.
+  expect(typeof job.endedAt === "string" && job.endedAt.length > 0).toBe(true);
   // A job that never got its updater's pid, older than a minute, is gone too.
   writeFileSync(file, JSON.stringify({ ...data, state: "starting", pid: null, startedAt: new Date(Date.now() - 61_000).toISOString() }));
   expect((await (await page("/service")).json()).running).toBeNull();
@@ -263,4 +265,34 @@ test("review fixes: on systemd the updater starts in its own transient unit with
     "--user", "--unit=fleet-control-updater-0000abcd", "--collect", "--quiet", `--setenv=PATH=${bin}:${path}`,
     `--working-directory=${join(dir, "updates")}`, process.execPath, "/srv/fc/scripts/updater.ts", job,
   ]);
+});
+
+test("review round 2: a failed release list is kept a minute, and a job older than two hours is gone whatever its pid", async () => {
+  ghStatus = 500;
+  await page("/service");
+  const before = ghCalls;
+  for (let i = 0; i < 3; i++) expect((await (await page("/service")).json()).releaseError).toBe("GitHub answered 500 for the release list");
+  expect(ghCalls).toBe(before);
+  const { jobGone } = await import("./domain/updates.ts");
+  const started = new Date(Date.now() - 2 * 3_600_000 - 1000).toISOString();
+  expect(jobGone({ state: "running", pid: process.pid, startedAt: started }, Date.now(), () => true)).toBe(true);
+  expect(jobGone({ state: "running", pid: process.pid, startedAt: new Date().toISOString() }, Date.now(), () => true)).toBe(false);
+});
+
+test("review round 2: a stale lock replaced by another process in between is put back, not moved aside", async () => {
+  mkdirSync(join(dir, "updates"), { mode: 0o700 });
+  const stale = "upd-20260101T000000Z-deadbeef";
+  writeFileSync(join(dir, "updates", "lock"), stale);
+  writeFileSync(join(dir, "updates", `${stale}.json`), JSON.stringify({ id: stale, state: "running", pid: 2 ** 22 + 12345, startedAt: "2026-01-01T00:00:00Z", steps: [] }));
+  // The other process wins between the read and the rename.
+  const updates = new HostUpdates({
+    dir: join(dir, "service"), manager, db: null, files: [], fleetConf: join(dir, "fleet.conf"), rollbackRoot: dir, jobDir: join(dir, "updates"),
+    health: "http://127.0.0.1:1", api: github.url.origin, env: {}, launch: () => { launched.push({ job: "x" } as never); },
+    renameLock: (a, b) => { writeFileSync(a, "upd-20261123T000000Z-0ther000"); renameSync(a, b); },
+  });
+  let message = "";
+  try { await updates.start("restart", null, "op"); } catch (e) { message = (e as Error).message; }
+  expect(message).toBe("another restart or update just started; wait for it to end");
+  expect(readFileSync(join(dir, "updates", "lock"), "utf8")).toBe("upd-20261123T000000Z-0ther000");
+  expect(launched).toHaveLength(0);
 });

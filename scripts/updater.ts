@@ -58,6 +58,8 @@ export function stopService(m: Manager) {
       spawnSync("sleep", ["0.1"]);
     }
     rmSync(m.pidFile, { force: true });
+    // Tests: a stop that ends the process and still reports an error, as launchctl bootout can.
+    if (m.failStopFile && existsSync(m.failStopFile)) { rmSync(m.failStopFile); throw new StepFailed("Boot-out failed: 5: Input/output error (test)"); }
   }
 }
 
@@ -76,6 +78,7 @@ export async function startService(m: Manager, dir: string, tries: number[] = ST
       last = `launchctl bootstrap failed: ${r.out}`;
       if (!BOOTSTRAP_RETRY.test(r.out)) break;
     } else if (m.kind === "systemd") {
+      // Every failure is retried here; a permanent one costs the 15 s of the waits.
       const r = run("systemctl", ["--user", "start", m.unit]);
       if (r.ok) return;
       last = `systemctl --user start failed: ${r.out}`;
@@ -119,7 +122,11 @@ export async function waitHealthy(url: string, seconds: number): Promise<boolean
 export async function waitDown(url: string, seconds: number): Promise<boolean> {
   const until = Date.now() + seconds * 1000;
   while (Date.now() < until) {
-    try { await fetch(`${url}/api/whoami`, { tls: { rejectUnauthorized: false }, signal: AbortSignal.timeout(1000) } as RequestInit); } catch { return true; }
+    try { await fetch(`${url}/api/whoami`, { tls: { rejectUnauthorized: false }, signal: AbortSignal.timeout(1000) } as RequestInit); } catch (e) {
+      // A hung process that still holds the port times out; that is not down.
+      const name = e instanceof Error ? e.name : "";
+      if (name !== "TimeoutError" && name !== "AbortError") return true;
+    }
     await Bun.sleep(300);
   }
   return false;
@@ -141,9 +148,15 @@ async function download(url: string, to: string) {
   const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(300_000) });
   if (!r.ok) throw new StepFailed(`download ${url} answered ${r.status}`);
   if (Number(r.headers.get("content-length") ?? 0) > MAX_DOWNLOAD_BYTES) throw new StepFailed(`download ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
-  const bytes = await r.arrayBuffer();
-  if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new StepFailed(`download ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
-  await Bun.write(to, bytes);
+  // Counted while reading, so a body without content-length cannot fill the disk.
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of r.body as unknown as AsyncIterable<Uint8Array>) {
+    size += chunk.byteLength;
+    if (size > MAX_DOWNLOAD_BYTES) throw new StepFailed(`download ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+    parts.push(chunk);
+  }
+  await Bun.write(to, new Blob(parts as BlobPart[]));
 }
 
 // Returns the folder holding the unpacked, checked new code.
@@ -186,6 +199,18 @@ export function backupState(job: Job, short: string): string {
   return dir;
 }
 
+// The state as the stopped service left it: what a rollback puts back, so nothing written between the first
+// backup and the stop (commands, a rotated or revoked token) is lost.
+function snapshotAtStop(job: Job, backupDir: string): string {
+  const s = job.data.service;
+  const dir = join(backupDir, "at-stop");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (s.db && existsSync(s.db)) backup(s.db, join(dir, "state.db"));
+  for (const f of s.files) if (existsSync(f)) copyFileSync(f, join(dir, basename(f)));
+  job.step(`state at the stop copied to ${dir}`);
+  return dir;
+}
+
 // The scratch start gets only what it needs to start: no TLS, no tailnet, no admin, input, agents, peers or
 // settings, whatever a later release adds. A plain list, so a new switch never reaches the scratch start.
 const SCRATCH_KEPT = /^(PATH|HOME|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z]+|FLEET_CONF|FLEET_CONTROL_TOKENS|FLEET_CONTROL_HOST_NAME)$/;
@@ -219,6 +244,7 @@ export async function scratchRun(job: Job, code: string, backupDir: string) {
   }
 }
 
+// Files fleet sync writes; the old code's sync puts them back, not the copy.
 const SYNCED = new Set(["watchdog.sh", "dsh-agent.mjs"]);
 const fleetSync = (job: Job, dir: string, what: string) => {
   const s = job.data.service;
@@ -229,17 +255,28 @@ const fleetSync = (job: Job, dir: string, what: string) => {
 
 export async function swapAndStart(job: Job, code: string, backupDir: string, short: string) {
   const s = job.data.service;
-  const next = free(`${s.dir}.new-${short}`);
-  renameSync(code, next);
+  let next = free(`${s.dir}.new-${short}`);
+  try { renameSync(code, next); } catch (e) {
+    // The job folder may sit on another file system than the service folder.
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    const c = run("cp", ["-a", code, next]);
+    if (!c.ok) throw new StepFailed(`could not copy the new code beside the service: ${c.out}`);
+  }
   const before = free(`${s.dir}.before-${short}`);
-  stopService(s.manager);
-  job.step("service stopped");
+  // null: nothing to put back (the new code never ran); else the copy taken at the stop.
+  let restoreFrom: string | null = null;
   let why: string;
   try {
+    stopService(s.manager);
+    job.step("service stopped");
     if (!(await waitDown(s.health, 15))) throw new StepFailed(`something still answers on ${s.health} after the stop`);
+    const snap = snapshotAtStop(job, backupDir);
     renameSync(s.dir, before);
     renameSync(next, s.dir);
+    next = "";
     job.step(`folders swapped; the old code is in ${before}`);
+    // From here on the new code may write to the database and files.
+    restoreFrom = snap;
     fleetSync(job, s.dir, "new");
     await startService(s.manager, s.dir);
     if (await waitHealthy(s.health, s.waits?.start ?? 45)) {
@@ -250,16 +287,18 @@ export async function swapAndStart(job: Job, code: string, backupDir: string, sh
   } catch (e) {
     why = e instanceof Error ? e.message : String(e);
   }
-  await rollBack(job, before, backupDir, short, why);
+  await rollBack(job, before, backupDir, restoreFrom, next, short, why);
 }
 
 // Puts the old release back whatever state the swap stopped in, and starts it. Every step is written down,
 // so the last line says where the folders are even when the old code does not come up either.
-async function rollBack(job: Job, before: string, backupDir: string, short: string, why: string) {
+async function rollBack(job: Job, before: string, backupDir: string, restoreFrom: string | null, leftNew: string, short: string, why: string) {
   const s = job.data.service;
   job.step(`${why}; rolling back`);
   const problems: string[] = [];
   try { stopService(s.manager); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
+  // Whatever answers after the old start must be the old code, not the new one still shutting down.
+  if (!(await waitDown(s.health, 15))) job.step(`something still answers on ${s.health}; starting the old code anyway`);
   try {
     if (existsSync(before)) {
       if (existsSync(s.dir)) renameSync(s.dir, free(`${s.dir}.failed-${short}`));
@@ -267,22 +306,25 @@ async function rollBack(job: Job, before: string, backupDir: string, short: stri
       job.step("old code back in place");
     } else job.step("the old code never left its folder");
   } catch (e) { problems.push(`folders: ${e instanceof Error ? e.message : e}`); }
-  if (s.db && existsSync(join(backupDir, "state.before-upgrade.db"))) {
-    try {
-      copyFileSync(join(backupDir, "state.before-upgrade.db"), s.db);
-      for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
-      job.step("database put back from the backup");
-    } catch (e) { problems.push(`database: ${e instanceof Error ? e.message : e}`); }
-  }
-  // Config files go back as they were; the watchdog files come from the old code's fleet sync.
-  const restored: string[] = [];
-  for (const f of s.files) {
-    const copy = join(backupDir, basename(f));
-    if (SYNCED.has(basename(f)) || !existsSync(copy)) continue;
-    try { copyFileSync(copy, f); restored.push(basename(f)); } catch (e) { problems.push(`${basename(f)}: ${e instanceof Error ? e.message : e}`); }
-  }
-  if (restored.length) job.step(`files put back from the backup: ${restored.join(", ")}`);
-  if (existsSync(s.dir)) fleetSync(job, s.dir, "old");
+  if (leftNew && existsSync(leftNew)) job.step(`the new code was left in ${leftNew}; remove it by hand`);
+  if (restoreFrom) {
+    if (s.db && existsSync(join(restoreFrom, "state.db"))) {
+      try {
+        copyFileSync(join(restoreFrom, "state.db"), s.db);
+        for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
+        job.step("database put back as the stopped service left it");
+      } catch (e) { problems.push(`database: ${e instanceof Error ? e.message : e}`); }
+    }
+    // Config files go back as they were; the watchdog files come from the old code's fleet sync.
+    const restored: string[] = [];
+    for (const f of s.files) {
+      const copy = join(restoreFrom, basename(f));
+      if (SYNCED.has(basename(f)) || !existsSync(copy)) continue;
+      try { copyFileSync(copy, f); restored.push(basename(f)); } catch (e) { problems.push(`${basename(f)}: ${e instanceof Error ? e.message : e}`); }
+    }
+    if (restored.length) job.step(`files put back as the stopped service left them: ${restored.join(", ")}`);
+    if (existsSync(s.dir)) fleetSync(job, s.dir, "old");
+  } else job.step("the new code never ran; database and files left as they are");
   try { await startService(s.manager, s.dir); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
   const back = await waitHealthy(s.health, s.waits?.start ?? 45);
   const where = existsSync(before) ? `the old code is still in ${before}` : `the old code is in ${s.dir}`;
@@ -314,7 +356,7 @@ export async function runJob(job: Job) {
       rmSync(work, { recursive: true, force: true });
     }
   } catch (e) {
-    // Nothing was swapped when a step before the swap fails, so the running service is untouched.
+    // Steps before the swap do not stop the service; every step from the stop on ends in swapAndStart.
     if (job.data.state === "running") job.end("failed", `${e instanceof StepFailed ? "" : "error: "}${e instanceof Error ? e.message : e}`);
   } finally {
     // Only this job's lock: a lock another job took after this one was called stale stays.

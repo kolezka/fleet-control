@@ -12,6 +12,7 @@ export const urlHost = (host: string) => host.includes(":") && !host.startsWith(
 // Only these reach the job file: paths and switches, never a token.
 const ENV_KEPT = /^(FLEET_|PORT$|PATH$|HOME$|USER$|LOGNAME$|TMPDIR$|LANG$|LC_)/;
 const RELEASES_CACHE_MS = 5 * 60_000;
+const RELEASES_ERROR_CACHE_MS = 60_000;
 // Release assets come from GitHub only; anything else in the list is skipped.
 const ASSET_URL = /^https:\/\/(github\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com)\//;
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -44,11 +45,15 @@ export type HostUpdatesOptions = {
   api?: string;
   // Starts `bun scripts/updater.ts <job file>` so it survives the service; tests replace it.
   launch?: (job: string, manager: Manager | null, dir: string) => void;
+  // Tests: stands in for renameSync of the stale lock.
+  renameLock?: (from: string, to: string) => void;
   now?: () => Date;
 };
 
 export class HostUpdates implements UpdateHost {
   #cache: { at: number; releases: Release[] } | null = null;
+  // A failed read is kept a minute, so a page polling during a job does not spend GitHub's 60 calls an hour.
+  #failed: { at: number; message: string } | null = null;
   constructor(readonly o: HostUpdatesOptions) {}
 
   current() {
@@ -66,6 +71,14 @@ export class HostUpdates implements UpdateHost {
   async releases(): Promise<Release[]> {
     const now = (this.o.now ?? (() => new Date()))().getTime();
     if (this.#cache && now - this.#cache.at < RELEASES_CACHE_MS) return this.#cache.releases;
+    if (this.#failed && now - this.#failed.at < RELEASES_ERROR_CACHE_MS) throw new Error(this.#failed.message);
+    try { return await this.#readReleases(now); } catch (e) {
+      this.#failed = { at: now, message: e instanceof Error ? e.message : String(e) };
+      throw e;
+    }
+  }
+
+  async #readReleases(now: number): Promise<Release[]> {
     const url = `${this.o.api ?? "https://api.github.com"}/repos/${this.o.repo ?? REPO}/releases?per_page=20`;
     let r: Response;
     try { r = await fetch(url, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000) }); } catch (e) {
@@ -86,6 +99,7 @@ export class HostUpdates implements UpdateHost {
       releases.push({ tag: raw.tag_name, commit: PACKAGE_NAME.exec(pkg.name as string)![1]!, publishedAt: String(raw.published_at ?? ""), url: pkg.browser_download_url, sha256Url: sum.browser_download_url });
     }
     this.#cache = { at: now, releases };
+    this.#failed = null;
     return releases;
   }
 
@@ -115,7 +129,7 @@ export class HostUpdates implements UpdateHost {
         // An updater that died (crash, kill, reboot) never ends its job; it is shown as failed, not running.
         const gone = jobGone(j, Date.now(), alive);
         const steps = gone ? [...j.steps, "the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped"] : j.steps;
-        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? j.endedAt ?? "" : j.endedAt });
+        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? new Date().toISOString() : j.endedAt });
       } catch {}
     }
     return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10);
@@ -168,8 +182,14 @@ export class HostUpdates implements UpdateHost {
         if (busy) throw new AdminError("conflict", `another restart or update is running (${holder}); wait for it to end`);
         // Moved aside, not removed: of two requests that both saw a stale lock, only one rename succeeds,
         // so only one takes the lock next.
-        try { renameSync(lock, join(this.o.jobDir, `lock.stale-${id}`)); } catch { continue; }
-        rmSync(join(this.o.jobDir, `lock.stale-${id}`), { force: true });
+        const aside = join(this.o.jobDir, `lock.stale-${id}`);
+        try { (this.o.renameLock ?? renameSync)(lock, aside); } catch { continue; }
+        // Another service process may have replaced the stale lock with its own in between: put that back.
+        if (readFileSync(aside, "utf8").trim() !== holder) {
+          renameSync(aside, lock);
+          throw new AdminError("conflict", "another restart or update just started; wait for it to end");
+        }
+        rmSync(aside, { force: true });
       }
     }
     throw new AdminError("conflict", "could not take the update lock; try again");
