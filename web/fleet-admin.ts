@@ -33,9 +33,22 @@ export type AdminView = {
   // This gateway's own link to the host: rotate its token or remove the host.
   hostConfirm: string;
   hostRevoke: boolean;
+  // The service settings file: null until read; hosts without it hide the part.
+  settings: SettingsRead | null;
+  settingsDraft: SettingsDraft;
+  settingsConfirm: string;
+  // The host's reason the settings file cannot be read (broken by hand); the part shows it.
+  settingsError: string;
+  // An unsaved edit whose file changed on the host since; Reload takes the new file.
+  settingsChangedOnHost: boolean;
 };
 
 export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string | null; cwd: string } | null };
+export type SettingsValues = { agentRoots: string[]; agentModels: string[]; agentDshModels: string[]; agentMcpUrl: string | null; input: boolean };
+// saved: the keys the file holds; base: the plist's or unit's values.
+export type SettingsRead = { path: string; revision: string; running: SettingsValues; next: SettingsValues; base: SettingsValues; saved: string[]; restartNeeded: string[]; skipped: string | null };
+// One text field per list (one entry per line), as typed.
+export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
@@ -43,7 +56,46 @@ export const emptyAdmin = (): AdminView => ({
   status: "idle", error: "", conf: null, changedOnHost: false, draft: "", saveConfirm: "", logSource: "watchdog", logText: "",
   restartSession: "", restartConfirm: "", sessions: null, startFor: "", startCommand: "", startCwd: "", startConfirm: "", busy: false, notice: "",
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
+  settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
 });
+
+const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");
+const values = (x: unknown): SettingsValues | null => {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  if (!strings(o.agentRoots) || !strings(o.agentModels) || !strings(o.agentDshModels) || !(typeof o.agentMcpUrl === "string" || o.agentMcpUrl === null) || typeof o.input !== "boolean") return null;
+  return { agentRoots: o.agentRoots, agentModels: o.agentModels, agentDshModels: o.agentDshModels, agentMcpUrl: o.agentMcpUrl as string | null, input: o.input };
+};
+
+export function parseSettings(body: unknown): SettingsRead | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
+  const running = values(o.running), next = values(o.next);
+  if (typeof o.path !== "string" || typeof o.revision !== "string" || !running || !next || !strings(o.restartNeeded)) return null;
+  const saved = o.saved && typeof o.saved === "object" && !Array.isArray(o.saved) ? Object.keys(o.saved) : [];
+  return { path: o.path, revision: o.revision, running, next, base: values(o.base) ?? next, saved, restartNeeded: o.restartNeeded, skipped: typeof o.skipped === "string" ? o.skipped : null };
+}
+
+export const draftOf = (s: SettingsValues): SettingsDraft => ({
+  agentRoots: s.agentRoots.join("\n"), agentModels: s.agentModels.join("\n"), agentDshModels: s.agentDshModels.join("\n"), agentMcpUrl: s.agentMcpUrl ?? "", input: s.input,
+});
+
+const lines = (t: string) => t.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+// What the page sends: every setting. The host keeps in the file only those that differ from its plist or unit.
+export const settingsBody = (d: SettingsDraft) => ({
+  agentRoots: lines(d.agentRoots), agentModels: lines(d.agentModels), agentDshModels: lines(d.agentDshModels), agentMcpUrl: d.agentMcpUrl.trim() || null, input: d.input,
+});
+
+export function settingsGate(v: AdminView): { ok: boolean; reason: string } {
+  if (v.busy) return { ok: false, reason: "Working…" };
+  if (!v.settings) return { ok: false, reason: "Read the settings first" };
+  if (v.settingsChangedOnHost) return { ok: false, reason: "The settings file changed on the host; copy your edit, then Reload the settings" };
+  const body = settingsBody(v.settingsDraft);
+  const drops = v.settings.saved.some((k) => JSON.stringify(body[k as keyof typeof body]) === JSON.stringify(v.settings!.base[k as keyof SettingsValues]));
+  if (JSON.stringify(body) === JSON.stringify(settingsBody(draftOf(v.settings.next))) && !drops) return { ok: false, reason: "No changes" };
+  if (v.settingsConfirm !== "settings") return { ok: false, reason: "Type settings to confirm" };
+  return { ok: true, reason: "Saved to the settings file; the service takes it at its next start" };
+}
 
 export function parseTokens(body: unknown): TokenEntry[] | null {
   const list = body && typeof body === "object" ? (body as { tokens?: unknown }).tokens : undefined;

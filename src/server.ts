@@ -20,6 +20,7 @@ import { LeaseError, MAX_INPUT_BYTES } from "./domain/leases.ts";
 import { AdminError } from "./domain/fleet-admin.ts";
 import { adminUseCases, type AdminDeps } from "./application/fleet-admin.ts";
 import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./application/token-admin.ts";
+import { settingsUseCases, type SettingsDeps } from "./application/settings.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -115,7 +116,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -155,7 +156,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -179,6 +180,9 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const adminFor = (who: Principal | null) => (deps.admin ? adminUseCases(deps.admin, who ?? undefined) : null);
   const noAdmin = () => Response.json({ error: { kind: "unavailable", message: "fleet administration not configured on this host" } }, { status: 503 });
   if (deps.tokens && !auth) throw new Error("token administration needs tokens; set FLEET_CONTROL_TOKENS");
+  if (deps.settings && !auth) throw new Error("service settings need tokens; set FLEET_CONTROL_TOKENS");
+  const settingsFor = (who: Principal | null) => (deps.settings ? settingsUseCases(deps.settings, who ?? undefined) : null);
+  const noSettings = () => Response.json({ error: { kind: "unavailable", message: "service settings not configured on this host" } }, { status: 503 });
   const tokensFor = (who: Principal | null) => (deps.tokens ? tokenUseCases(deps.tokens, who ?? undefined) : null);
   const noTokens = () => Response.json({ error: { kind: "unavailable", message: "token administration not configured on this host" } }, { status: 503 });
   // Writes that take a JSON body: Origin checked, the body an object, errors mapped like fleet administration.
@@ -377,6 +381,24 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
         }),
       },
       // The tokens file: operator only. Names and roles, never hashes.
+      "/api/settings": {
+        GET: guard(async (_req, _s, who) => {
+          const st = settingsFor(who);
+          if (!st) return noSettings();
+          try { return Response.json(await st.get()); } catch (e) { return adminError(e); }
+        }),
+        PUT: guard(async (req, _s, who) => {
+          const st = settingsFor(who);
+          if (!st) return noSettings();
+          if (!originAllowed(req)) return forbidden();
+          if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+          try {
+            const body = await jsonBody(req);
+            if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+            return Response.json(await st.save(body));
+          } catch (e) { return adminError(e); }
+        }),
+      },
       "/api/tokens": {
         GET: guard(async (_req, _s, who) => {
           const t = tokensFor(who);

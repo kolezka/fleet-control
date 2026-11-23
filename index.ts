@@ -20,6 +20,9 @@ import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-term
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
+import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
+import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
+import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -35,12 +38,44 @@ const commands = new Commands(store.db);
 const unknown = commands.reconcileAfterRestart();
 if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
+// Settings saved from the page (a JSON file beside the tokens file) override the plist's or unit's values.
+// Only with fleet administration on: that is where the page shows and edits them. A file that does not load,
+// or that the start below could not use, is skipped with a message, so a bad save never keeps the page down.
+const baseEnv: Record<string, string | undefined> = { ...process.env };
+const settingsFile = process.env.FLEET_CONTROL_ADMIN === "1"
+  ? (() => { try { return settingsPath(baseEnv); } catch (e) { console.error(`${e instanceof Error ? e.message : e}`); process.exit(1); } })()
+  : null;
+// The checks a start runs on these settings, beyond parsing: managed agents' values, and a fleet that terminal
+// input can use. A save from the page runs them too.
+// Input is checked only when the file turns it on: the plist's own input is checked by the start below.
+const startCheck = async (next: Record<string, string | undefined>) => {
+  agentSettingsFromEnv(next);
+  if (next.FLEET_CONTROL_INPUT === "1" && baseEnv.FLEET_CONTROL_INPUT !== "1") { await fleetSocket(confPath); findTmux(); }
+};
+let env = baseEnv;
+let settingsSkipped: { reason: string; revision: string } | null = null;
+if (settingsFile) {
+  let text: string | null = null;
+  try {
+    text = HostSettingsFile.readSync(settingsFile);
+    if (text !== null) {
+      const next = settingsEnv(baseEnv, parseSettingsFile(text));
+      await startCheck(next);
+      env = next;
+      console.log(`settings from ${settingsFile}`);
+    }
+  } catch (e) {
+    // A file that could not even be read gets no revision any file can have, so its reason never shows for another.
+    settingsSkipped = { reason: e instanceof Error ? e.message : String(e), revision: text === null ? "unreadable" : settingsRevision(text) };
+    console.error(`settings file ${settingsFile} skipped: ${settingsSkipped.reason}`);
+  }
+}
 const options = await serveOptionsFromEnv();
 const port = portFromEnv(process.env.PORT);
 // Checked before anything binds, so a bad tailnet setting does not leave a half-started service.
 const tailnet = await tailnetOptionsFromEnv(process.env, options, port);
 reloadTokensOnHangup(options.auth);
-const agentSettings = agentSettingsFromEnv(process.env);
+const agentSettings = agentSettingsFromEnv(env);
 // Without tokens anyone on the machine could start an unattended agent, so managed agents need them even on loopback.
 if (agentSettings && !options.auth) {
   console.error("FLEET_CONTROL_AGENT_ROOTS needs FLEET_CONTROL_TOKENS");
@@ -54,7 +89,7 @@ const leaseTerminal = async () => {
     process.exit(1);
   }
 };
-const input = process.env.FLEET_CONTROL_INPUT === "1"
+const input = env.FLEET_CONTROL_INPUT === "1"
   ? leaseUseCases({ leases: new Leases(store.db), terminal: await leaseTerminal() })
   : undefined;
 if (input && !options.auth) {
@@ -95,6 +130,16 @@ const deps = {
   admin,
   // With fleet administration on, an operator also lists, rotates and revokes tokens from the page.
   tokens: admin && options.auth ? { file: new HostTokenFile(process.env.FLEET_CONTROL_TOKENS!, options.auth) } : undefined,
+  // With fleet administration on, an operator also edits the service settings; they apply at the next start.
+  settings: admin && settingsFile
+    ? {
+      file: new HostSettingsFile(settingsFile),
+      baseEnv,
+      running: settingsOf(env),
+      skipped: settingsSkipped,
+      check: startCheck,
+    }
+    : undefined,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),

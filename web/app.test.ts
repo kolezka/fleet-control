@@ -827,3 +827,134 @@ test("a hand-made session is offered for restart only after its start command, p
   expect(b.calls.some(c => c.path === "/api/hosts/a/sessions/hand/start?confirm=hand" && c.init?.method === "DELETE")).toBe(true);
   expect(b.element("adminStatus").textContent).toBe("A: saved start command for hand forgotten.");
 });
+
+test("service settings: the page shows what the next start uses, saves every setting with the read revision and the typed confirm, and says a restart is needed", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const running = { agentRoots: ["/r"], agentModels: ["sonnet"], agentDshModels: [], agentMcpUrl: null, input: false };
+  let settings = { path: "/c/settings.json", revision: "b".repeat(64), saved: {} as Record<string, unknown>, base: running, running, next: running, restartNeeded: [] as string[] };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      const next = body.settings;
+      settings = { ...settings, revision: "c".repeat(64), saved: { agentModels: next.agentModels, input: next.input }, next, restartNeeded: ["agentModels", "input"] };
+      return settings;
+    }
+    if (path.endsWith("/settings")) return settings;
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("settingsPart").hidden).toBe(false);
+  expect([b.element("setRoots").value, b.element("setModels").value, b.element("setMcp").value]).toEqual(["/r", "sonnet", ""]);
+  expect(b.element("settingsPending").textContent).toBe("The running service uses these settings.");
+  expect([b.element("settingsSave").disabled, b.element("settingsGate").textContent]).toEqual([true, "No changes"]);
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  await type("setModels", "haiku\nopus");
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  expect([b.element("settingsSave").disabled, b.element("settingsGate").textContent]).toEqual([true, "Type settings to confirm"]);
+  await type("settingsConfirm", "settings");
+  expect(b.element("settingsSave").disabled).toBe(false);
+  await b.listeners.get("settingsSave:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  const put = b.calls.find(c => c.path === "/api/hosts/a/settings" && c.init?.method === "PUT")!;
+  expect(JSON.parse(String(put.init!.body))).toEqual({ settings: { agentRoots: ["/r"], agentModels: ["haiku", "opus"], agentDshModels: [], agentMcpUrl: null, input: true }, revision: "b".repeat(64), confirm: "settings" });
+  expect(b.element("adminStatus").textContent).toBe("A: settings saved. They apply when the service restarts.");
+  expect(b.element("settingsPending").textContent).toBe("Waiting for a restart of the service: agentModels, input.");
+  expect(b.element("settingsGate").textContent).toBe("No changes");
+  expect(b.element("settingsSource").textContent).toBe("Set here (over the plist or unit): agentModels, input. Put a value back to the plist's to drop it from the file.");
+  // Putting the model list back to the plist's drops it from the file: a save is allowed even if the next start would not change.
+  settings = { ...settings, next: { ...settings.next, agentModels: ["sonnet"] }, saved: { agentModels: ["sonnet"], input: true } };
+  await b.listeners.get("settingsReload:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  await type("settingsConfirm", "settings");
+  expect(b.element("settingsSave").disabled).toBe(false);
+});
+
+test("a host without service settings hides the part", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings")) return { __status: 404 };
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("settingsPart").hidden).toBe(true);
+});
+
+test("service settings review fixes: a broken file is named, a skipped file is named, and a draft whose file changed on the host waits for Reload", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const running = { agentRoots: [], agentModels: ["sonnet", "opus", "haiku"], agentDshModels: [], agentMcpUrl: null, input: false };
+  let answer: unknown = { __status: 400, error: { kind: "invalid", message: "the settings file is not JSON; fix or remove it on the host" } };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings") && init?.method === "PUT") return { __status: 409, error: { kind: "conflict", message: "the settings file changed on the host since you read it; reload and edit again" } };
+    if (path.endsWith("/settings")) return answer;
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await settle();
+  expect([b.element("settingsPart").hidden, b.element("settingsError").hidden, b.element("settingsForm").hidden]).toEqual([false, false, true]);
+  expect(b.element("settingsError").textContent).toBe("The settings file cannot be used: the settings file is not JSON; fix or remove it on the host");
+  // A file the start skipped (it turns on input the fleet cannot take): named, and no restart promised.
+  answer = { path: "/c/settings.json", revision: "b".repeat(64), saved: { input: true }, base: running, running, next: { ...running, input: true }, restartNeeded: ["input"], skipped: "terminal input needs a local fleet (REMOTE_SSH is set)" };
+  await b.listeners.get("settingsReload:click")!({});
+  await settle();
+  expect([b.element("settingsForm").hidden, b.element("settingsError").textContent]).toEqual([false, "At its last start the service skipped the settings file: terminal input needs a local fleet (REMOTE_SSH is set). The file has not changed since; fix it on the host, or save from here to replace it."]);
+  expect(b.element("settingsPending").textContent).toBe("The running service uses the plist's or unit's values.");
+  expect(b.element("setModels").value).toBe("sonnet\nopus\nhaiku");
+  answer = { ...(answer as object), saved: {}, next: running, restartNeeded: [], skipped: null };
+  await b.listeners.get("settingsReload:click")!({});
+  await settle();
+  // An unsaved edit, then the file moves on the host: a background refresh keeps the edit and blocks the save.
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  answer = { ...(answer as object), revision: "c".repeat(64), skipped: null };
+  await b.click({ host: "a" });
+  await settle();
+  expect([b.element("setInput").checked, b.element("settingsGate").textContent, b.element("settingsSave").disabled]).toEqual([true, "The settings file changed on the host; copy your edit, then Reload the settings", true]);
+  // Reloading fleet.conf keeps the settings edit; the settings part's own Reload takes the host's file.
+  await b.listeners.get("confReload:click")!({});
+  await settle();
+  expect(b.element("setInput").checked).toBe(true);
+  await b.listeners.get("settingsReload:click")!({});
+  await settle();
+  expect([b.element("setInput").checked, b.element("settingsGate").textContent]).toEqual([false, "No changes"]);
+  // A 409 on save blocks the save too.
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  b.element("settingsConfirm").value = "settings";
+  await b.listeners.get("settingsConfirm:input")!({});
+  await b.listeners.get("settingsSave:click")!({});
+  await settle();
+  expect(b.element("settingsGate").textContent).toBe("The settings file changed on the host; copy your edit, then Reload the settings");
+});
+
+test("saving fleet.conf keeps an unsaved settings edit", async () => {
+  let conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const running = { agentRoots: [], agentModels: ["sonnet", "opus", "haiku"], agentDshModels: [], agentMcpUrl: null, input: false };
+  const settings = { path: "/c/settings.json", revision: "b".repeat(64), saved: {}, base: running, running, next: running, restartNeeded: [], skipped: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf") && init?.method === "PUT") { conf = { ...conf, text: JSON.parse(String(init.body)).text, revision: "d".repeat(64) }; return { saved: true, backup: null }; }
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/settings")) return settings;
+    if (path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await settle();
+  b.element("setInput").checked = true;
+  await b.listeners.get("setInput:change")!({});
+  b.element("confText").value = "FLEET=t\n# edited\n";
+  await b.listeners.get("confText:input")!({});
+  b.element("confConfirm").value = "fleet.conf";
+  await b.listeners.get("confConfirm:input")!({});
+  await b.listeners.get("confSave:click")!({});
+  await settle();
+  expect(b.element("adminStatus").textContent.startsWith("A: fleet.conf saved")).toBe(true);
+  expect([b.element("setInput").checked, b.element("settingsGate").textContent]).toEqual([true, "Type settings to confirm"]);
+});

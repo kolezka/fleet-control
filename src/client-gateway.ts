@@ -269,6 +269,7 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 3 && a === "sessions" && ok(b) && c === "restart") return { ...http(`/api/sessions/${b}/restart`, ["POST"]), timeoutMs: RESTART_TIMEOUT_MS };
   // The host's tokens file. The gateway's own line changes only through /api/manage, never from here.
   if (seg.length === 1 && a === "tokens") return http("/api/tokens", ["GET"]);
+  if (seg.length === 1 && a === "settings") return http("/api/settings", ["GET", "PUT"]);
   if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;
