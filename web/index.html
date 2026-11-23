@@ -106,6 +106,15 @@
                 <label for="watchdogConfirm">Type watchdog to confirm</label><input id="watchdogConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="watchdogGate"></span><button type="button" id="watchdogGo" disabled>Turn on</button></div>
               </div>
+              <div class="adminpart" id="filesPart" hidden><div class="sectionheading"><h4>Files</h4></div>
+                <p class="fineprint" id="fileRootsText"></p>
+                <label for="filePath">Path on the host</label><input id="filePath" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><button type="button" id="fileUp">Up</button><button type="button" id="fileNewBtn">New file</button><button type="button" id="fileOpenBtn">Open</button></div>
+                <ul class="filelist" id="fileList"></ul>
+                <textarea id="fileText" rows="14" spellcheck="false" hidden aria-label="File text"></textarea>
+                <div id="fileSaveRow" hidden><label for="fileConfirm" id="fileConfirmLabel">Type the file name to confirm</label><input id="fileConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="fileGate"></span><button type="button" id="fileSave" class="destructive" disabled>Save file</button></div></div>
+              </div>
               <div class="adminpart" id="infraPart" hidden><div class="sectionheading"><h4>Host</h4></div>
                 <ul class="tokenrows" id="infraCerts"></ul>
                 <ul class="tokenrows" id="infraServices"></ul>
