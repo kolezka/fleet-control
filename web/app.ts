@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, fileDirty, fileGate, fileName, parentIn, parseFileOpen, parseFileRoots, draftOf, emptyAdmin, fillStart, hostGate, parseConf, parseRestartable, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, draftOf, emptyAdmin, fileDirty, fileGate, fileName, fillStart, hostGate, parentIn, parseConf, parseFileOpen, parseFileRoots, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -40,6 +40,9 @@ export function modelDetail(m: Model): string {
 
 const READ_TIMEOUT_MS = 8000;
 const WRITE_TIMEOUT_MS = 15000;
+// An update downloads, backs up, starts a scratch copy and swaps; ten minutes covers it with room.
+const SERVICE_POLL_MS = 3000;
+const SERVICE_POLLS = 200;
 // The gateway gives a watchdog start 60 s; the page waits a little longer.
 const WATCHDOG_TIMEOUT_MS = 65000;
 const SHOWN_COMMANDS = 6;
@@ -711,6 +714,28 @@ function renderAdmin(h: HostState | undefined) {
     $("settingsGate").textContent = sg.reason;
     ($("settingsSave") as HTMLButtonElement).disabled = !sg.ok;
   }
+  $("servicePart").hidden = v.service === null;
+  if (v.service) {
+    const s = v.service;
+    const cur = s.current.commit ? `${s.current.tag ?? "built by hand"} (${s.current.commit.slice(0, 7)})` : "unknown (no MANIFEST.json)";
+    $("serviceCurrent").textContent = `Runs ${cur}.${s.releaseError ? ` Releases could not be read: ${s.releaseError}.` : ""}`;
+    ($("serviceAction") as HTMLSelectElement).value = v.serviceAction;
+    const tags = s.releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)} · ${esc(r.commit.slice(0, 7))}${r.commit === s.current.commit ? " · running" : ""}</option>`).join("");
+    const sel = $("serviceTag") as HTMLSelectElement;
+    if (sel.dataset.tags !== tags) { sel.innerHTML = `<option value="">Choose a release</option>${tags}`; sel.dataset.tags = tags; }
+    sel.value = v.serviceTag;
+    sel.hidden = $("serviceTagLabel").hidden = v.serviceAction !== "update";
+    $("serviceConfirmLabel").textContent = `Type ${serviceWord(v) || "the release tag"} to confirm`;
+    const c = $("serviceConfirm") as HTMLInputElement;
+    if (c.value !== v.serviceConfirm) c.value = v.serviceConfirm;
+    const g = serviceGate(v);
+    $("serviceGate").textContent = g.reason;
+    const go = $("serviceGo") as HTMLButtonElement;
+    go.disabled = !g.ok;
+    go.textContent = v.serviceAction === "restart" ? "Restart" : "Update";
+    const j = s.running ?? s.jobs[0];
+    $("serviceSteps").innerHTML = j ? `<li><strong>${esc(j.action === "update" ? `Update to ${j.tag}` : "Restart")} · ${esc(j.state)}</strong> · ${esc(j.by)} · ${esc(j.startedAt)}</li>${j.steps.map((x) => `<li>${esc(x)}</li>`).join("")}` : "";
+  }
   $("watchdogPart").hidden = v.watchdog === null;
   if (v.watchdog) {
     const w = v.watchdog;
@@ -852,6 +877,9 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
       if (dirty) { v.settingsChangedOnHost = read.revision !== v.settings!.revision; if (!v.settingsChangedOnHost) v.settings = read; }
       else { v.settings = read; v.settingsDraft = draftOf(read.next); v.settingsChangedOnHost = false; }
     } else if (!dirty) { v.settings = null; v.settingsChangedOnHost = false; }
+    // Service restart and update: hidden where the host does not offer them.
+    const sv = await hostCall(host, "/service");
+    v.service = sv.outcome.ok ? parseService(sv.outcome.data) : null;
     // Watchdog: hidden where the host does not offer it.
     const wd = await hostCall(host, "/watchdog");
     v.watchdog = wd.outcome.ok ? parseWatchdog(wd.outcome.data) : null;
@@ -884,6 +912,45 @@ async function changeToken(hostId: string) {
     : `${host.name}: ${name} not changed: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
   await refreshAdmin(hostId);
+}
+
+// Restart or update the host service. The host answers 202 once the updater has its job; the page then polls
+// until the job ends, through the service going away and coming back.
+async function runService(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !serviceGate(v).ok) return;
+  const action = v.serviceAction;
+  const body = action === "restart" ? { confirm: v.serviceConfirm } : { tag: v.serviceTag, confirm: v.serviceConfirm };
+  v.busy = true; v.notice = action === "restart" ? `Restarting ${host.name}` : `Updating ${host.name} to ${v.serviceTag}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, `/service/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, WRITE_TIMEOUT_MS);
+  v.busy = false; v.serviceConfirm = "";
+  const id = outcome.ok ? ((outcome.data as { job?: { id?: unknown } }).job?.id) : undefined;
+  if (typeof id !== "string") {
+    v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the ${action} started.` : `${host.name}: ${action} not started: ${outcome.ok ? "malformed answer" : outcome.message}`;
+    renderAdmin(selectedHostState(fleet));
+    return;
+  }
+  v.notice = `${host.name}: ${action} started (${id}).`;
+  renderAdmin(selectedHostState(fleet));
+  for (let i = 0; i < SERVICE_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, SERVICE_POLL_MS));
+    const sv = await hostCall(host, "/service");
+    const read = sv.outcome.ok ? parseService(sv.outcome.data) : null;
+    if (!read) { v.notice = `${host.name}: ${action} ${id} running; the service is not answering yet.`; renderAdmin(selectedHostState(fleet)); continue; }
+    v.service = read;
+    const j = read.jobs.find((x) => x.id === id);
+    if (j && j.endedAt) {
+      v.notice = `${host.name}: ${action} ${j.state === "done" ? "done" : j.state === "rolled_back" ? "failed and was rolled back" : "failed"}. ${j.steps.at(-1) ?? ""}`;
+      renderAdmin(selectedHostState(fleet));
+      await refreshAdmin(hostId);
+      return;
+    }
+    renderAdmin(selectedHostState(fleet));
+  }
+  v.notice = `${host.name}: ${action} ${id} has not ended after ${Math.round(SERVICE_POLLS * SERVICE_POLL_MS / 60000)} min; its steps show where it is.`;
+  renderAdmin(selectedHostState(fleet));
 }
 
 async function setWatchdog(hostId: string) {
@@ -1222,7 +1289,7 @@ $("newTokenDone").addEventListener("click", () => { const h = selectedHostState(
 $("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
 $("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
 $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["watchdogGo", setWatchdog]] as const) {
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 adminField("filePath", (v, x) => { v.filePath = x; });
@@ -1255,6 +1322,26 @@ $("confReload").addEventListener("click", () => {
   const v = adminView(h.info.id);
   v.notice = ""; v.saveConfirm = "";
   void refreshAdmin(h.info.id, { conf: false });
+});
+$("serviceAction").addEventListener("change", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  const v = adminView(h.info.id);
+  v.serviceAction = ($("serviceAction") as HTMLSelectElement).value === "update" ? "update" : "restart";
+  v.serviceConfirm = "";
+  renderAdmin(h);
+});
+$("serviceTag").addEventListener("change", () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  adminView(h.info.id).serviceTag = ($("serviceTag") as HTMLSelectElement).value;
+  renderAdmin(h);
+});
+for (const ev of ["input", "change"]) $("serviceConfirm").addEventListener(ev, () => {
+  const h = selectedHostState(fleet);
+  if (!h) return;
+  adminView(h.info.id).serviceConfirm = ($("serviceConfirm") as HTMLInputElement).value;
+  renderAdmin(h);
 });
 $("settingsReload").addEventListener("click", () => {
   const h = selectedHostState(fleet);

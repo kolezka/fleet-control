@@ -273,6 +273,8 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "settings") return http("/api/settings", ["GET", "PUT"]);
   // The file editor; the path is checked again on the host against its allowed folders.
   if (seg.length === 1 && a === "files") return http("/api/files", ["GET", "PUT"], { path: /^\/[^\x00-\x1f\x7f]{0,1023}$/ });
+  if (seg.length === 1 && a === "service") return http("/api/service", ["GET"]);
+  if (seg.length === 2 && a === "service" && (b === "restart" || b === "update")) return http(`/api/service/${b}`, ["POST"]);
   // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
   if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
   if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);

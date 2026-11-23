@@ -21,6 +21,7 @@ import { AdminError } from "./domain/fleet-admin.ts";
 import { adminUseCases, type AdminDeps } from "./application/fleet-admin.ts";
 import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./application/token-admin.ts";
 import { settingsUseCases, type SettingsDeps } from "./application/settings.ts";
+import { updateUseCases, type UpdateHost } from "./application/updates.ts";
 import { watchdogUseCases, type WatchdogDeps } from "./application/watchdog.ts";
 import { filesUseCases, type FilesDeps } from "./application/files.ts";
 
@@ -118,7 +119,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/watchdog" | "/api/files" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/files" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -160,7 +161,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; watchdog?: WatchdogDeps; files?: FilesDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; files?: FilesDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -186,6 +187,20 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   if (deps.tokens && !auth) throw new Error("token administration needs tokens; set FLEET_CONTROL_TOKENS");
   if (deps.settings && !auth) throw new Error("service settings need tokens; set FLEET_CONTROL_TOKENS");
   const settingsFor = (who: Principal | null) => (deps.settings ? settingsUseCases(deps.settings, who ?? undefined) : null);
+  if (deps.updates && !auth) throw new Error("service restart and update need tokens; set FLEET_CONTROL_TOKENS");
+  const updatesFor = (who: Principal | null) => (deps.updates ? updateUseCases(deps.updates, who ?? undefined) : null);
+  const noUpdates = () => Response.json({ error: { kind: "unavailable", message: "service restart and update not configured on this host" } }, { status: 503 });
+  const serviceJob = async (req: Request, who: Principal | null, action: "restart" | "update") => {
+    const u = updatesFor(who);
+    if (!u) return noUpdates();
+    if (!originAllowed(req)) return forbidden();
+    if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+    try {
+      const body = await jsonBody(req);
+      if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+      return Response.json(await u[action](body), { status: 202 });
+    } catch (e) { return adminError(e); }
+  };
   const noSettings = () => Response.json({ error: { kind: "unavailable", message: "service settings not configured on this host" } }, { status: 503 });
   if (deps.watchdog && !auth) throw new Error("the watchdog service needs tokens; set FLEET_CONTROL_TOKENS");
   const watchdogFor = (who: Principal | null) => (deps.watchdog ? watchdogUseCases(deps.watchdog, who ?? undefined) : null);
@@ -390,6 +405,16 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           } catch (e) { return adminError(e); }
         }),
       },
+      // Restart or update this service through the separate updater process.
+      "/api/service": {
+        GET: guard(async (_req, _s, who) => {
+          const u = updatesFor(who);
+          if (!u) return noUpdates();
+          try { return Response.json(await u.get(), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/service/restart": { POST: guard((req, _s, who) => serviceJob(req, who, "restart")) },
+      "/api/service/update": { POST: guard((req, _s, who) => serviceJob(req, who, "update")) },
       // The tokens file: operator only. Names and roles, never hashes.
       "/api/settings": {
         GET: guard(async (_req, _s, who) => {
