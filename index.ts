@@ -1,5 +1,6 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { agentSettingsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
 import { agentUseCases } from "./src/application/agents.ts";
@@ -25,6 +26,7 @@ import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
 import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
+import { detectManager, HostUpdates, urlHost } from "./src/update-host.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -121,6 +123,27 @@ if (admin && !options.auth) {
   console.error("FLEET_CONTROL_ADMIN needs FLEET_CONTROL_TOKENS");
   process.exit(1);
 }
+// With fleet administration on, an operator also restarts this service and updates it to a release from the
+// page. A separate updater process does it (scripts/updater.ts); its job files and backups go beside the tokens.
+const updatesSetup = () => {
+  const home = process.env.HOME ?? "";
+  const tokens = process.env.FLEET_CONTROL_TOKENS!;
+  const manager = detectManager(process.env, home);
+  const fleetDir = dirname(confPath);
+  const files = [tokens, confPath, join(fleetDir, "watchdog.sh"), join(fleetDir, "fleet-control-agents.conf")];
+  if (settingsFile) files.push(settingsFile);
+  if (manager?.kind === "launchd") files.push(manager.plist);
+  if (manager?.kind === "systemd" && manager.unitFile) files.push(manager.unitFile);
+  const db = process.env.FLEET_CONTROL_DB && process.env.FLEET_CONTROL_DB !== ":memory:" ? resolve(process.env.FLEET_CONTROL_DB) : null;
+  return {
+    host: new HostUpdates({
+      dir: process.cwd(), manager, db, files, fleetConf: resolve(confPath),
+      rollbackRoot: dirname(resolve(tokens)), jobDir: join(dirname(resolve(tokens)), "updates"),
+      health: `${options.tls ? "https" : "http"}://${urlHost(options.hostname ?? "127.0.0.1")}:${port}`,
+      env: baseEnv,
+    }),
+  };
+};
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
 const deps = {
   fleet: new FleetCli({ fleetBin, confPath }),
@@ -149,6 +172,7 @@ const deps = {
       check: startCheck,
     }
     : undefined,
+  updates: admin && options.auth ? updatesSetup() : undefined,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),

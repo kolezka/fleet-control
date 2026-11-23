@@ -1,0 +1,37 @@
+# A tag like v2026.11.23 builds the release package a host installs from the page: the code at that commit,
+# the pinned agent-fleet files and production node_modules, with its SHA-256 beside it.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Pinned by commit: actions/checkout v7.0.1, oven-sh/setup-bun v2.2.0.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          # The write token stays out of .git/config while install and tests run.
+          persist-credentials: false
+      - name: The tag must be on main
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main" >&2; exit 1; }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.5
+      - run: sudo apt-get update -q && sudo apt-get install -y -q tmux
+      - run: bun install --frozen-lockfile
+      - run: bun check
+      - run: bun test
+      - run: bun scripts/package-release.ts . dist "$GITHUB_REF_NAME"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/fleet-control-*.tar.gz dist/fleet-control-*.tar.gz.sha256 --title "$GITHUB_REF_NAME" --notes "Package built from ${GITHUB_SHA}."

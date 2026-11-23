@@ -959,6 +959,72 @@ test("saving fleet.conf keeps an unsaved settings edit", async () => {
   expect([b.element("setInput").checked, b.element("settingsGate").textContent]).toEqual([true, "Type settings to confirm"]);
 });
 
+test("service: restart and update need the typed word, the update offers releases with a package, and the page follows the job to its end", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const now = "a".repeat(40), next = "b".repeat(40);
+  const job = { id: "upd-20261123T120000Z-0000abcd", action: "update", tag: "v2", commit: next, by: "op", state: "running", steps: ["t downloaded"], startedAt: "2026-11-23T12:00:00Z", endedAt: null as string | null };
+  let service: Record<string, unknown> = { current: { commit: now, tag: "v1" }, unavailable: null, releaseError: null, running: null, jobs: [],
+    releases: [{ tag: "v2", commit: next, publishedAt: "x" }, { tag: "v1", commit: now, publishedAt: "y" }] };
+  let posted = null as { path: string; body: unknown } | null;
+  const timers: { fn: () => void; ms: number }[] = [];
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.includes("/service/") && init?.method === "POST") { posted = { path, body: JSON.parse(String(init.body)) }; return { __status: 202, job }; }
+    if (path.endsWith("/service")) return service;
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 404 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  }, [], timers);
+  const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await settle();
+  expect(b.element("servicePart").hidden).toBe(false);
+  expect(b.element("serviceCurrent").textContent).toBe(`Runs v1 (${now.slice(0, 7)}).`);
+  expect([b.element("serviceGo").disabled, b.element("serviceGate").textContent]).toEqual([true, "Type restart to confirm"]);
+  const set = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  await set("serviceAction", "update", "change");
+  expect(b.element("serviceGate").textContent).toBe("Choose a release");
+  await set("serviceTag", "v1", "change");
+  expect(b.element("serviceGate").textContent).toBe("This service already runs v1");
+  await set("serviceTag", "v2", "change");
+  await set("serviceConfirm", "restart");
+  expect([b.element("serviceGo").disabled, b.element("serviceGate").textContent]).toEqual([true, "Type v2 to confirm"]);
+  await set("serviceConfirm", "v2");
+  expect(b.element("serviceGo").disabled).toBe(false);
+  await b.listeners.get("serviceGo:click")!({});
+  await settle();
+  expect(posted).toEqual({ path: "/api/hosts/a/service/update", body: { tag: "v2", confirm: "v2" } });
+  expect(b.element("adminStatus").textContent).toBe(`A: update started (${job.id}).`);
+  // While the job runs the page polls; the service may be down for a moment.
+  service = { ...service, running: job, jobs: [job] };
+  timers.splice(0).find((t) => t.ms === 3000)!.fn();
+  await settle();
+  expect(b.element("serviceGate").textContent).toBe("Updating to v2: wait for it to end");
+  expect(b.element("serviceSteps").innerHTML).toContain("t downloaded");
+  const ended = { ...job, state: "rolled_back", endedAt: "2026-11-23T12:02:00Z", steps: [...job.steps, "t the old release answers again"] };
+  service = { ...service, running: null, jobs: [ended] };
+  timers.splice(0).find((t) => t.ms === 3000)!.fn();
+  await settle();
+  expect(b.element("adminStatus").textContent).toBe("A: update failed and was rolled back. t the old release answers again");
+});
+
+test("a host without restart and update hides the part, and one without a service manager says why", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  let service: unknown = { __status: 404 };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/service")) return service;
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 404 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("servicePart").hidden).toBe(true);
+  service = { current: { commit: null, tag: null }, unavailable: "this service was not started by launchd or systemd, so the page cannot restart or update it", releases: [], releaseError: null, jobs: [], running: null };
+  await b.listeners.get("confReload:click")!({});
+  for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("servicePart").hidden).toBe(false);
+  expect(b.element("serviceCurrent").textContent).toBe("Runs unknown (no MANIFEST.json).");
+  expect(b.element("serviceGate").textContent).toBe("this service was not started by launchd or systemd, so the page cannot restart or update it");
+});
+
 test("watchdog: the part says off, turns it on only after the typed confirm, then offers Turn off", async () => {
   const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
   let wd = { fleet: "t", manager: "launchd", name: "pl.raqz.fleet-watchdog.t", installed: false, running: false, pid: null as number | null, inTmux: false };

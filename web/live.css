@@ -84,3 +84,5 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .fleetadmin .checkrow { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .fleetadmin #settingsForm { display: grid; gap: 6px; }
 .fleetadmin #settingsForm[hidden] { display: none; }
+.fleetadmin .servicesteps { margin: 6px 0 0; padding-left: 18px; font: 12px/1.5 var(--mono, ui-monospace, monospace); color: var(--muted); max-height: 180px; overflow: auto; }
+.fleetadmin .servicesteps li:first-child { list-style: none; margin-left: -18px; color: var(--ink); }
