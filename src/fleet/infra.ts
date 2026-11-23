@@ -38,7 +38,7 @@ export type InfraOptions = {
   docker?: string;
   runner?: Runner;
   now?: () => Date;
-  // Test seam: the rename used to put the new files in place.
+  // Test seam: the rename used to put the new files in place. index.ts never sets it.
   rename?: (from: string, to: string) => Promise<void>;
 };
 // Status reads give up sooner than actions, so one slow tool shows as unknown instead of stalling the page.
@@ -79,10 +79,14 @@ export class HostInfra implements InfraHost {
     if (!f || !f.name) throw new AdminError("failed", "this host has no tailnet certificate to renew");
     if (!this.#o.tailscale) throw new AdminError("failed", "tailscale is not installed where the service can find it");
     const rename = this.#o.rename ?? fsRename;
-    const [certPath, keyPath] = await Promise.all([realpath(f.cert), realpath(f.key)]);
+    const [certPath, keyPath] = await Promise.all([realpath(f.cert), realpath(f.key)]).catch((e) => {
+      throw new AdminError("failed", `the certificate or key file cannot be read (${e instanceof Error ? firstLine(e.message) : e}); nothing was asked of tailscale`);
+    });
     const id = randomUUID().slice(0, 8);
     const tmp = (p: string, kind: string) => join(dirname(p), `.${kind}-${id}.pem`);
     const tmpCert = tmp(certPath, "cert"), tmpKey = tmp(keyPath, "key"), oldCert = tmp(certPath, "old-cert"), oldKey = tmp(keyPath, "old-key");
+    // The copies of the old pair stay only when a put-back lost a file; the error names them.
+    let keepCopies = false;
     try {
       const r = await this.#run([this.#o.tailscale, "cert", "--cert-file", tmpCert, "--key-file", tmpKey, f.name], { timeoutMs: 120_000 });
       if (r.exitCode !== 0) {
@@ -105,13 +109,12 @@ export class HostInfra implements InfraHost {
       } catch (e) {
         const back = await Promise.allSettled([fsRename(oldKey, keyPath), fsRename(oldCert, certPath)]);
         const lost = back.some((b) => b.status === "rejected");
+        keepCopies = lost;
         throw new AdminError("failed", `the new files could not be put in place (${e instanceof Error ? firstLine(e.message) : e}); ${lost ? `the old ones could not all be put back either: copies are in ${oldCert} and ${oldKey}` : "the old ones are back"}`);
       }
     } finally {
-      await Promise.all([tmpCert, tmpKey].map((p) => rm(p, { force: true })));
+      await Promise.all([tmpCert, tmpKey, ...(keepCopies ? [] : [oldCert, oldKey])].map((p) => rm(p, { force: true }).catch(() => undefined)));
     }
-    // Both renames worked: the copies of the old pair are no longer needed. After a failed put-back they stay.
-    await Promise.all([oldCert, oldKey].map((p) => rm(p, { force: true }).catch(() => undefined)));
     return this.#state(f);
   }
 
@@ -126,9 +129,9 @@ export class HostInfra implements InfraHost {
     if (s.kind === "launchd") {
       const r = await this.#run([this.#o.launchctl ?? "launchctl", "print", `gui/${this.#o.uid}/${s.label}`], { timeoutMs: STATUS_MS });
       if (r.exitCode !== 0) {
-        const why = firstLine(r.stderr || r.stdout);
-        if (/could not find service/i.test(why)) return { ...base, running: false, detail: "not loaded" };
-        throw new Error(why || `launchctl exited ${r.exitCode}`);
+        // Real launchctl prints "Bad request." first and "Could not find service ..." on the next line (exit 113).
+        if (/could not find service/i.test(`${r.stderr}\n${r.stdout}`)) return { ...base, running: false, detail: "not loaded" };
+        throw new Error(firstLine(r.stderr || r.stdout) || `launchctl exited ${r.exitCode}`);
       }
       const pid = /^\tpid = (\d+)$/m.exec(r.stdout)?.[1];
       return { ...base, running: !!pid, detail: pid ? `pid ${pid}` : (/^\tstate = (.+)$/m.exec(r.stdout)?.[1] ?? "not running") };

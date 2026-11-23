@@ -42,7 +42,8 @@ if (me === "tailscale" && args[0] === "cert") {
   process.exit(p.exitCode);
 }
 if (me === "tailscale" && args[0] === "serve") { console.log("https://h.example (tailnet only)\\n|-- / proxy http://127.0.0.1:3080"); process.exit(0); }
-if (me === "launchctl" && args[0] === "print" && knob("printfail")) { console.error(knob("printfail")); process.exit(knob("printfail").includes("Could not find") ? 113 : 125); }
+if (me === "launchctl" && args[0] === "print" && knob("printfail") === "missing") { console.error("Bad request.\\nCould not find service " + JSON.stringify(args[1].split("/").pop()) + " in domain for user gui: 501"); process.exit(113); }
+if (me === "launchctl" && args[0] === "print" && knob("printfail")) { console.error(knob("printfail")); process.exit(5); }
 if (me === "launchctl" && args[0] === "print") { if (knob("dshdown")) { console.log("\\tstate = not running"); } else console.log("\\tstate = running\\n\\tpid = 4242"); process.exit(0); }
 if (me === "launchctl" && args[0] === "kickstart") { if (knob("failrestart")) { console.error("Could not kickstart service: 37"); process.exit(1); } process.exit(0); }
 if (me === "systemctl") { if (args[1] === "show") console.log("ActiveState=active\\nMainPID=77"); process.exit(0); }
@@ -178,15 +179,25 @@ test("a renewal whose second rename fails puts the old pair back, and a symlinke
   expect(await readFile(join(tls, "real", "cert.pem"), "utf8")).not.toBe(c0);
   expect(new X509Certificate(await readFile(join(tls, "real", "cert.pem"))).checkPrivateKey(createPrivateKey(await readFile(join(tls, "real", "key.pem"))))).toBe(true);
   expect(readdirSync(join(tls, "real")).sort()).toEqual(["cert.pem", "key.pem"]);
+  // A failure after the copies were made (here the first rename) leaves no copy behind.
+  const firstFails = new HostInfra({ certs: files, tailscale: join(dir, "bin", "tailscale"), uid: 501, rename: async () => { throw new Error("EIO: first"); } });
+  await expect(firstFails.renew()).rejects.toThrow("the old ones are back");
+  expect(readdirSync(join(tls, "real")).sort()).toEqual(["cert.pem", "key.pem"]);
+  // A missing key file is a refusal before tailscale runs, not an unknown outcome.
+  await knob("calls", null);
+  const gone = new HostInfra({ certs: [{ ...files[0]!, key: join(tls, "nokey.pem") }], tailscale: join(dir, "bin", "tailscale"), uid: 501 });
+  const e = await gone.renew().catch((x) => x);
+  expect([e.constructor.name, e.kind, String(e.message).startsWith("the certificate or key file cannot be read (ENOENT")]).toEqual(["AdminError", "failed", true]);
+  expect(calls().filter((c) => c.startsWith("tailscale cert"))).toEqual([]);
 });
 
 test("a launchd label that is not loaded reads as stopped; any other launchctl error reads as unknown", async () => {
-  await knob("printfail", "Could not find service \"pl.raqz.dsh\" in domain for user gui: 501");
+  await knob("printfail", "missing");
   let v = await (await page("/infra")).json();
   expect(v.services[0]).toEqual({ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: false, detail: "not loaded" });
-  await knob("printfail", "Bad request.");
+  await knob("printfail", "Operation not permitted");
   v = await (await page("/infra")).json();
-  expect(v.services[0]).toEqual({ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: null, detail: "Bad request." });
+  expect(v.services[0]).toEqual({ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: null, detail: "Operation not permitted" });
   await knob("printfail", null);
 });
 
