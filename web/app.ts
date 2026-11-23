@@ -795,7 +795,13 @@ async function runInfra(hostId: string) {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: v.infraConfirm }),
   }, INFRA_TIMEOUT_MS);
   v.busy = false; v.infraConfirm = ""; v.infraService = "";
-  if (outcome.ok) v.notice = g.action === "renew" ? `${host.name}: tailnet certificate renewed. The service takes it at its next start.` : `${host.name}: ${what} restarted.`;
+  if (outcome.ok) {
+    const r = outcome.data as { renewed?: unknown; cert?: { notAfter?: unknown } };
+    const until = typeof r.cert?.notAfter === "string" ? r.cert.notAfter.slice(0, 10) : "?";
+    v.notice = g.action !== "renew" ? `${host.name}: ${what} restarted.`
+      : r.renewed === true ? `${host.name}: tailnet certificate renewed (valid to ${until}). The service takes it at its next start.`
+      : `${host.name}: tailscale returned the current certificate (valid to ${until}); nothing changed.`;
+  }
   else v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether ${g.action === "renew" ? "the certificate was renewed" : `${what} restarted`}; read the host again.` : `${host.name}: ${g.action === "renew" ? "certificate not renewed" : `${what} not restarted`}: ${outcome.message}`;
   await refreshAdmin(hostId);
 }

@@ -1116,12 +1116,17 @@ test("host part: certificates, services and Serve show; a restart runs only afte
   let infra = {
     certs: [{ id: "lan", path: "/c/lan.pem", names: ["192.168.1.2"], notAfter: "2029-02-09T00:00:00.000Z", daysLeft: 800, renewable: false }, { id: "tailnet", path: "/c/t.pem", names: ["h.example"], notAfter: "2026-12-01T00:00:00.000Z", daysLeft: 8, renewable: true }],
     renewedAt: null as string | null, serve: { text: "https://h.example\n|-- / proxy http://127.0.0.1:3080" },
-    services: [{ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: true, detail: "pid 4242" }],
+    services: [{ name: "dsh", kind: "launchd", target: "pl.raqz.dsh", running: true, detail: "pid 4242" }, { name: "odd", kind: "launchd", target: "x", running: null, detail: "<img src=x onerror=alert(1)>" }],
   };
+  let renewals = 0;
   const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path, init) => {
     if (path.endsWith("/fleet/conf")) return conf;
     if (path.endsWith("/infra/services/dsh/restart") && init?.method === "POST") return infra.services[0];
-    if (path.endsWith("/infra/renew") && init?.method === "POST") { infra = { ...infra, renewedAt: "2026-11-23T12:00:00.000Z" }; return { cert: infra.certs[1], renewed: true }; }
+    if (path.endsWith("/infra/renew") && init?.method === "POST") {
+      renewals++;
+      if (renewals === 1) return { cert: infra.certs[1], renewed: false };
+      infra = { ...infra, renewedAt: "2026-11-23T12:00:00.000Z" }; return { cert: { ...infra.certs[1], notAfter: "2027-02-20T00:00:00.000Z" }, renewed: true };
+    }
     if (path.endsWith("/infra")) return infra;
     if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
     return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
@@ -1135,7 +1140,7 @@ test("host part: certificates, services and Serve show; a restart runs only afte
     "LAN certificate for 192.168.1.2: valid to 2029-02-09, 800 days left; made by hand",
     "Tailnet certificate for h.example: valid to 2026-12-01, 8 days left (renew soon)",
   ]);
-  expect(text("infraServices")).toEqual(["dsh (pl.raqz.dsh): running, pid 4242"]);
+  expect(text("infraServices")).toEqual(["dsh (pl.raqz.dsh): running, pid 4242", "odd (x): unknown, &lt;img src=x onerror=alert(1)&gt;"]);
   expect([b.element("infraGo").disabled, b.element("infraGate").textContent]).toEqual([true, "Choose what to do"]);
   b.element("infraAction").value = "dsh";
   await b.listeners.get("infraAction:change")!({});
@@ -1154,7 +1159,14 @@ test("host part: certificates, services and Serve show; a restart runs only afte
   await b.listeners.get("infraConfirm:input")!({});
   await b.listeners.get("infraGo:click")!({});
   await tick();
-  expect(b.element("adminStatus").textContent).toBe("A: tailnet certificate renewed. The service takes it at its next start.");
+  expect(b.element("adminStatus").textContent).toBe("A: tailscale returned the current certificate (valid to 2026-12-01); nothing changed.");
+  b.element("infraAction").value = "renew";
+  await b.listeners.get("infraAction:change")!({});
+  b.element("infraConfirm").value = "renew";
+  await b.listeners.get("infraConfirm:input")!({});
+  await b.listeners.get("infraGo:click")!({});
+  await tick();
+  expect(b.element("adminStatus").textContent).toBe("A: tailnet certificate renewed (valid to 2027-02-20). The service takes it at its next start.");
   expect(text("infraCerts").at(-1)).toBe("Renewed 2026-11-23 12:00 UTC; the service takes it at its next start.");
 });
 

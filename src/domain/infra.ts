@@ -33,10 +33,10 @@ export type InfraView = {
 export const RENEW_BEFORE_DAYS = 30;
 
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
-const LABEL = /^[A-Za-z0-9._-]{1,128}$/;
-const UNIT = /^[A-Za-z0-9@._-]{1,128}\.service$/;
+const LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const UNIT = /^[A-Za-z0-9][A-Za-z0-9@._-]{0,127}\.service$/;
 const DIR = /^\/[A-Za-z0-9._\/-]{1,512}$/;
-const SERVICE = /^[A-Za-z0-9._-]{1,64}$/;
+const SERVICE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 // FLEET_CONTROL_OTHER_SERVICES: comma separated `name=launchd:<label>`, `name=systemd:<unit>.service` or
 // `name=compose:<project dir>:<service>`. Only services named here can be restarted from the page.

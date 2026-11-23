@@ -21,7 +21,8 @@ import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 import { findBash, managerOf, WatchdogService } from "./src/fleet/watchdog-service.ts";
-import { findTailscale, HostInfra, renewIfDue, type CertFiles } from "./src/fleet/infra.ts";
+import { findTailscale, HostInfra, type CertFiles } from "./src/fleet/infra.ts";
+import { infraUseCases } from "./src/application/infra.ts";
 import { parseOtherServices } from "./src/domain/infra.ts";
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
@@ -223,7 +224,7 @@ if (tailnet) {
 }
 if (deps.infra) {
   // Once at start and then daily: renew the tailnet certificate when it nears its end.
-  const due = () => renewIfDue(deps.infra!.host).catch((e) => console.error(`certificate check failed: ${e instanceof Error ? e.message : e}`));
+  const due = () => infraUseCases(deps.infra!).renewIfDue().catch((e) => console.error(`certificate check failed: ${e instanceof Error ? e.message : e}`));
   void due();
   setInterval(due, 24 * 3600_000).unref();
 }

@@ -24,6 +24,14 @@ let renewedAt: string | null = null;
 
 export function infraUseCases(deps: InfraDeps, caller?: Caller) {
   const now = deps.now ?? (() => new Date());
+  const renewNow = async () => {
+    const before = (await deps.host.certs()).find((c) => c.id === "tailnet");
+    if (!before) throw new AdminError("failed", "this host has no tailnet certificate to renew");
+    const after = await deps.host.renew();
+    const renewed = after.notAfter !== before.notAfter;
+    if (renewed) renewedAt = now().toISOString();
+    return { cert: after, renewed, renewBeforeDays: RENEW_BEFORE_DAYS };
+  };
   return {
     async get(): Promise<InfraView> {
       requirePermission(caller, "operate");
@@ -38,11 +46,24 @@ export function infraUseCases(deps: InfraDeps, caller?: Caller) {
     renew: (input: unknown) => serial(async () => {
       requirePermission(caller, "operate");
       checkRenewRequest(input);
-      const before = (await deps.host.certs()).find((c) => c.id === "tailnet");
-      if (!before) throw new AdminError("failed", "this host has no tailnet certificate to renew");
-      const after = await deps.host.renew();
-      renewedAt = now().toISOString();
-      return { cert: after, renewed: after.notAfter !== before.notAfter, renewBeforeDays: RENEW_BEFORE_DAYS };
+      return renewNow();
+    }),
+
+    // The service's own daily check; it shares the queue with page actions so two renewals never interleave.
+    // Renews when fewer than RENEW_BEFORE_DAYS are left. The listener keeps the old certificate until the service restarts.
+    renewIfDue: (log: (line: string) => void = console.log) => serial(async () => {
+      const c = (await deps.host.certs()).find((x) => x.id === "tailnet");
+      if (!c || !c.renewable || c.error || c.daysLeft >= RENEW_BEFORE_DAYS) return false;
+      try {
+        const r = await renewNow();
+        log(r.renewed
+          ? `tailnet certificate renewed: valid to ${r.cert.notAfter}; the listener takes it at the next service start`
+          : `tailnet certificate checked: tailscale returned the current one (valid to ${r.cert.notAfter})`);
+        return r.renewed;
+      } catch (e) {
+        log(`tailnet certificate renewal failed (${c.daysLeft} days left): ${e instanceof Error ? e.message : e}`);
+        return false;
+      }
     }),
 
     restart: (name: string, input: unknown) => serial(async () => {
