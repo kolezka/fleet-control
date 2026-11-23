@@ -19,7 +19,12 @@ function decode(path: string, bytes: Uint8Array): string {
 }
 const missing = (e: unknown) => ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "");
 
+// Test seams: run between the size check and the read, and just before the rename, so a race can be staged.
+export type DiskHooks = { afterSize?: (path: string) => Promise<void>; beforeBackup?: (path: string) => Promise<void>; afterBackup?: (path: string) => Promise<void>; beforeRename?: (path: string) => Promise<void> };
+
 export class DiskFiles implements FilesHost {
+  readonly #hooks: DiskHooks;
+  constructor(hooks: DiskHooks = {}) { this.#hooks = hooks; }
   async real(path: string) {
     try { return await realpath(path); } catch (e) {
       if (!missing(e)) throw e;
@@ -66,7 +71,9 @@ export class DiskFiles implements FilesHost {
     try {
       const st = await fh.stat();
       if (!st.isFile()) throw new AdminError("invalid", `${path} is not a regular file`);
+      if (st.nlink > 1) throw new AdminError("invalid", `${path} has ${st.nlink} hard links; one of them may be a file this editor must not touch, so it does not open it`);
       if (st.size > MAX_FILE_BYTES) throw tooBig(path, st.size);
+      await this.#hooks.afterSize?.(path);
       const buf = new Uint8Array(MAX_FILE_BYTES + 1);
       let got = 0;
       for (;;) {
@@ -109,12 +116,16 @@ export class DiskFiles implements FilesHost {
       // The backup holds the bytes just read through the no-follow handle, not a copy of whatever the path names now.
       const old = await this.#bytes(path);
       if (decode(path, old) !== expected) throw new AdminError("conflict", `${path} changed on the host during the save; nothing was written. Reload it and edit again`);
+      await this.#hooks.beforeBackup?.(path);
       const bh = await open(backup, "wx", mode);
       try { await bh.writeFile(old); await bh.sync(); } finally { await bh.close(); }
+      await chmod(backup, mode);
+      await this.#hooks.afterBackup?.(path);
       const fh = await open(tmp, "wx", mode);
       try { await fh.writeFile(text); await fh.sync(); } finally { await fh.close(); }
       await chmod(tmp, mode);
       if ((await now()) !== expected) throw new AdminError("conflict", `${path} changed on the host during the save; nothing was written. Reload it and edit again`);
+      await this.#hooks.beforeRename?.(path);
       await sameFolder();
       await rename(tmp, path);
     } catch (e) {

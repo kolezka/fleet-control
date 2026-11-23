@@ -1178,3 +1178,29 @@ test("files: opening another path with unsaved changes asks for a second click b
   await tick();
   expect([reads(), b.element("fileText").hidden]).toEqual([1, true]);
 });
+
+test("files: while a read is on its way, Open is disabled and a second Open sends nothing", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/files")) return { roots: ["/r"] };
+    if (path.endsWith("/files?path=%2Fr")) return held.then(() => ({ kind: "dir", path: "/r", root: "/r", entries: [], truncated: false }));
+    if (path.endsWith("/settings") || path.endsWith("/tokens") || path.endsWith("/watchdog")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
+  await tick(3);
+  b.element("filePath").value = "/r";
+  await b.listeners.get("filePath:input")!({});
+  void b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  expect(b.element("fileOpenBtn").disabled).toBe(true);
+  void b.listeners.get("fileOpenBtn:click")!({});
+  await tick();
+  expect(b.calls.filter(c => c.path === "/api/hosts/a/files?path=%2Fr").length).toBe(1);
+  release();
+  await tick(6);
+  expect(b.element("fileOpenBtn").disabled).toBe(false);
+});

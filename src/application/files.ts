@@ -45,8 +45,9 @@ export function filesUseCases(deps: FilesDeps, caller?: Caller) {
   const resolved = async (paths: readonly string[]) => (await Promise.all(paths.map(async (p) => [p, await deps.host.real(p)] as const)));
   const allowed = async (path: string) => {
     const asked = checkPath(path);
-    const roots = (await resolved(deps.roots)).flatMap(([p, r]) => (r === null ? [] : r === p ? [p] : [p, r]));
-    const realRoots = (await resolved(deps.roots)).map(([, r]) => r).filter((r): r is string => r !== null);
+    const rootPairs = await resolved(deps.roots);
+    const roots = rootPairs.flatMap(([p, r]) => (r === null ? [] : r === p ? [p] : [p, r]));
+    const realRoots = rootPairs.map(([, r]) => r).filter((r): r is string => r !== null);
     rootOf(asked, roots);
     const real = await deps.host.real(asked);
     if (real === null) throw new AdminError("not_found", `${asked} does not exist, nor does its folder`);

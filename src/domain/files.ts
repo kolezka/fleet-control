@@ -44,10 +44,13 @@ export function rootOf(path: string, roots: readonly string[]): string {
 // Files the page never edits here even inside an allowed folder: the service's own secrets and settings,
 // and fleet.conf, which has its own editor with its own checks.
 // Names refused anywhere: an orchestrator's MCP config holds its token, and token files hold tokens.
-export const PROTECTED_NAME = /^(fc-[a-z0-9-]+\.mcp\.json|tokens|tokens\.lock|token-.+|settings\.json)$/;
+// Compared without regard to case: on macOS (APFS) FLEET.CONF and fleet.conf are one file, also before it exists.
+// Refusing a few extra names on a case-sensitive disk costs nothing.
+export const PROTECTED_NAME = /^(fc-[a-z0-9-]+\.mcp\.json|tokens|tokens\.lock|token-.+|settings\.json)$/i;
 export function refuseProtected(path: string, protectedPaths: readonly string[]): void {
   const refuse = () => { throw new AdminError("invalid", `${path} belongs to the Fleet Control service; this editor does not change it`); };
-  for (const p of protectedPaths) if (path === p || inside(path, p)) refuse();
+  const low = path.toLowerCase();
+  for (const p of protectedPaths) { const lp = p.toLowerCase(); if (low === lp || inside(low, lp)) refuse(); }
   if (PROTECTED_NAME.test(basename(path))) refuse();
 }
 

@@ -1,7 +1,7 @@
 // The file editor end to end: a real host service over real folders and files, a real gateway, and the page's
 // calls through it. Only an operator, only inside the allowed folders, never the service's own files.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth, newToken, tokenLine } from "./auth.ts";
@@ -194,8 +194,10 @@ test("review: a hard link is refused, a file that became a symlink is refused at
   const hl = join(root, "hl.txt");
   linkSync(join(cfgDir, "tokens"), hl);
   expect(await errorOf(await hostOpen(hl))).toEqual({ status: 400, message: `${hl} has 2 hard links; one of them may be a file this editor must not touch, so it does not open it` });
-  // The host side: a path swapped for a symlink after the checks is not followed.
+  // The host side: a file that gained a second link after the checks is refused on the open handle too.
   const files = new DiskFiles();
+  await expect(files.read(hl)).rejects.toThrow(`${hl} has 2 hard links`);
+  // The host side: a path swapped for a symlink after the checks is not followed.
   const swapped = join(root, "swapped.txt");
   symlinkSync(join(outside, "secret.txt"), swapped);
   await expect(files.read(swapped)).rejects.toThrow("became a symlink after it was checked");
@@ -206,4 +208,37 @@ test("review: a hard link is refused, a file that became a symlink is refused at
   const big = join(root, "big.txt");
   writeFileSync(big, "a".repeat(MAX_FILE_BYTES + 5));
   await expect(files.read(big)).rejects.toThrow(`this editor opens files up to ${MAX_FILE_BYTES / 1024} KiB`);
+});
+
+test("review 2: names are compared without case, also for protected files that do not exist yet", async () => {
+  const fleetDir = join(dir, "fleet2");
+  mkdirSync(fleetDir);
+  const u = filesUseCases({ host: new DiskFiles(), roots: [fleetDir], protectedPaths: [join(fleetDir, "fleet.conf"), join(fleetDir, "fleet-control-agents.conf")] }, { name: "op", role: "operator" });
+  for (const name of ["FLEET.CONF", "Fleet-Control-Agents.conf", "Settings.json", "TOKENS", "Token-mini"]) {
+    await expect(u.save({ path: join(fleetDir, name), text: "x\n", revision: "new", confirm: name })).rejects.toThrow("belongs to the Fleet Control service");
+  }
+  expect(readdirSync(fleetDir)).toEqual([]);
+});
+
+test("review 2: a file that grows after its size check is refused, a folder swapped before the rename stops the save, and the backup is the bytes read", async () => {
+  const file = join(root, "work dir", "notes.md");
+  // Grows past the limit between the size check and the read.
+  const growing = new DiskFiles({ afterSize: async (p) => { if (p.endsWith("grow.txt")) writeFileSync(p, "a".repeat(MAX_FILE_BYTES + 10)); } });
+  writeFileSync(join(root, "grow.txt"), "small\n");
+  await expect(growing.read(join(root, "grow.txt"))).rejects.toThrow(`KiB or more; this editor opens files up to ${MAX_FILE_BYTES / 1024} KiB`);
+  // The folder is swapped for a symlink to outside just before the rename: nothing lands outside, the file stays.
+  const work = join(root, "work dir");
+  const swapper = new DiskFiles({ beforeRename: async () => { renameSync(work, join(root, "moved")); symlinkSync(outside, work); } });
+  await expect(swapper.write(file, "one\ntwo\n", "evil\n")).rejects.toThrow("changed on the host during the save");
+  expect(readdirSync(outside)).toEqual(["secret.txt"]);
+  expect(readFileSync(join(root, "moved", "notes.md"), "utf8")).toBe("one\ntwo\n");
+  rmSync(work); renameSync(join(root, "moved"), work);
+  // The backup holds what was read through the handle, even if the path names other bytes by the time it is written.
+  chmodSync(file, 0o664);
+  // The path names other bytes while the backup is written, and the old bytes again afterwards: the backup is what was read.
+  const late = new DiskFiles({ beforeBackup: async (p) => { writeFileSync(p, "someone else\n"); }, afterBackup: async (p) => { writeFileSync(p, "one\ntwo\n"); } });
+  const backup = await late.write(file, "one\ntwo\n", "three\n");
+  expect(readFileSync(backup!, "utf8")).toBe("one\ntwo\n");
+  expect(readFileSync(file, "utf8")).toBe("three\n");
+  expect(statSync(backup!).mode & 0o777).toBe(0o664);
 });
