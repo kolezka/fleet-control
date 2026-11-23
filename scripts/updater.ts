@@ -302,9 +302,12 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
   // Whatever answers after the old start must be the old code, not the new one still shutting down.
   const down = await waitDown(s.health, 15);
   if (!down) job.step(`something still answers on ${s.health}; starting the old code anyway`);
+  // The new code's fleet sync ran once restoreFrom was set; the old code's sync puts the watchdog files back
+  // whatever happens to the database.
+  const newRan = restoreFrom !== null;
   // A process that may still hold the database must not get a file copied under it.
   if (restoreFrom && !(stopped && down)) {
-    job.step(`the new code may still be running; database and files not put back; the copy is in ${restoreFrom}`);
+    job.step(`${!stopped ? "the stop reported an error" : "the new code may still be running"}; database and files not put back; the copy is in ${restoreFrom}`);
     problems.push(`database and files not put back, the copy is in ${restoreFrom}`);
     restoreFrom = null;
   } else if (restoreFrom === null) job.step("the new code never ran; database and files left as they are");
@@ -321,11 +324,11 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
       try {
         // The new code's WAL goes first: SQLite would replay it onto the old file. A temp file and a rename,
         // so a crash halfway never leaves a torn database.
-        for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
         copyFileSync(join(restoreFrom, "state.db"), `${s.db}.restore-tmp`);
+        for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
         renameSync(`${s.db}.restore-tmp`, s.db);
         job.step("database put back as the stopped service left it");
-      } catch (e) { problems.push(`database: ${e instanceof Error ? e.message : e}`); }
+      } catch (e) { rmSync(`${s.db}.restore-tmp`, { force: true }); problems.push(`database: ${e instanceof Error ? e.message : e}`); }
     }
     // Config files go back as they were; the watchdog files come from the old code's fleet sync.
     const restored: string[] = [];
@@ -335,8 +338,8 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
       try { copyFileSync(copy, f); restored.push(basename(f)); } catch (e) { problems.push(`${basename(f)}: ${e instanceof Error ? e.message : e}`); }
     }
     if (restored.length) job.step(`files put back as the stopped service left them: ${restored.join(", ")}`);
-    if (existsSync(s.dir)) fleetSync(job, s.dir, "old");
   }
+  if (newRan && existsSync(s.dir)) fleetSync(job, s.dir, "old");
   try { await startService(s.manager, s.dir); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
   const back = await waitHealthy(s.health, s.waits?.start ?? 45);
   const where = existsSync(before) ? `the old code is still in ${before}` : `the old code is in ${s.dir}`;

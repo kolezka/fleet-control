@@ -243,6 +243,7 @@ test("review round 3: a new release that will not stop keeps the database it may
     const steps = after.steps.join("\n");
     expect(steps).toContain(`the new code may still be running; database and files not put back; the copy is in ${join(s.base, "rollback-6666666", "at-stop")}`);
     expect(steps).not.toContain("database put back");
+    expect(steps).toMatch(/not put back[\s\S]*old fleet sync/);
     const d = new Database(s.db); const rows = d.query("SELECT v FROM t ORDER BY rowid").all(); d.close();
     expect(rows).toEqual([{ v: "before" }, { v: "written by the hung release" }]);
     expect(existsSync(join(s.base, "rollback-6666666", "at-stop", "SHA256SUMS"))).toBe(true);
@@ -262,3 +263,18 @@ test("review round 3: a process that holds the port but does not answer is not d
   } finally { for (const c of held) c.destroy(); hung.close(); }
   expect(await waitDown(`http://127.0.0.1:${free()}`, 3)).toBe(true);
 }, 30_000);
+
+test("review round 4: a rollback stop that reports an error leaves the database alone and still runs the old fleet sync", async () => {
+  const s = await setup("stoperr");
+  const commit = "7".repeat(40);
+  // The real start writes a row, arms the failing stop and exits: the start fails and the rollback stop throws.
+  const rule = `if (!process.env.FLEET_CONTROL_DB?.endsWith("scratch.db")) { const { Database } = require("bun:sqlite"); const d = new Database(process.env.FLEET_CONTROL_DB); d.run("INSERT INTO t VALUES ('written by the new release')"); d.close(); require("node:fs").writeFileSync(${JSON.stringify(join(s.base, "fail-stop"))}, ""); process.exit(4); }`;
+  const j = s.job(commit, publish("stoperr", commit, rule));
+  await runJob(j);
+  const steps = Job.read(j.file).data.steps.join("\n");
+  expect(steps).toContain(`the stop reported an error; database and files not put back; the copy is in ${join(s.base, "rollback-7777777", "at-stop")}`);
+  expect(steps).toMatch(/not put back[\s\S]*old fleet sync/);
+  const d = new Database(s.db); const rows = d.query("SELECT v FROM t ORDER BY rowid").all(); d.close();
+  expect(rows).toEqual([{ v: "before" }, { v: "written by the new release" }]);
+  expect(readFileSync(`${s.conf}.sync`, "utf8").trim().split("\n").map((l) => l.slice(0, 1))).toEqual(["7", "a"]);
+}, 150_000);
