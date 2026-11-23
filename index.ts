@@ -24,7 +24,7 @@ import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
 import { parseSettingsFile, settingsRevision } from "./src/application/settings.ts";
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
-import { detectManager, HostUpdates } from "./src/update-host.ts";
+import { detectManager, HostUpdates, urlHost } from "./src/update-host.ts";
 
 const confPath = process.env.FLEET_CONF;
 if (!confPath) {
@@ -137,7 +137,7 @@ const updatesSetup = () => {
     host: new HostUpdates({
       dir: process.cwd(), manager, db, files, fleetConf: resolve(confPath),
       rollbackRoot: dirname(resolve(tokens)), jobDir: join(dirname(resolve(tokens)), "updates"),
-      health: `${options.tls ? "https" : "http"}://${options.hostname ?? "127.0.0.1"}:${port}`,
+      health: `${options.tls ? "https" : "http"}://${urlHost(options.hostname ?? "127.0.0.1")}:${port}`,
       env: baseEnv,
     }),
   };

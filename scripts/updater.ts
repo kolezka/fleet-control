@@ -5,49 +5,16 @@
 // Update: download the release package and its SHA-256, check both, unpack beside the service folder, back up
 // the state database and config files, start the new code on a scratch loopback port with a copy of the
 // database, then stop the service, swap the folders, run fleet sync, start it and wait until it answers.
-// If it does not answer, swap back, put the database copy back, start the old code again.
+// If it does not answer, or any step after the stop throws, put the old folder, database and files back, run
+// the old code's fleet sync and start the old code again.
 import { spawnSync } from "node:child_process";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync, fsyncSync } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { backup } from "./host-backup.ts";
+import type { JobFile, Manager } from "../src/domain/updates.ts";
 
-export type Manager =
-  | { kind: "launchd"; label: string; plist: string }
-  | { kind: "systemd"; unit: string; unitFile: string | null }
-  // Tests: the service is `bun index.ts` started from the folder, its pid in pidFile.
-  | { kind: "test"; pidFile: string; env: Record<string, string>; log: string };
-
-export type JobFile = {
-  id: string;
-  action: "restart" | "update";
-  tag: string | null;
-  commit: string | null;
-  packageUrl: string | null;
-  sha256Url: string | null;
-  by: string;
-  state: "starting" | "running" | "done" | "rolled_back" | "failed";
-  steps: string[];
-  startedAt: string;
-  endedAt: string | null;
-  pid: number | null;
-  // What the updater works on. Paths are absolute.
-  service: {
-    dir: string;
-    manager: Manager;
-    db: string | null;
-    // Files copied next to the database backup and put back on rollback.
-    files: string[];
-    fleetConf: string;
-    rollbackRoot: string;
-    // Where the service answers: 401 without a token means it is up.
-    health: string;
-    // The service's environment, for the scratch start of the new code.
-    env: Record<string, string>;
-    // Seconds to wait for an answer: scratch start, then the real start. Defaults 30 and 45.
-    waits?: { scratch: number; start: number };
-  };
-};
+export type { JobFile, Manager } from "../src/domain/updates.ts";
 
 const now = () => new Date().toISOString();
 
@@ -84,34 +51,55 @@ export function stopService(m: Manager) {
     if (!existsSync(m.pidFile)) return;
     const pid = Number(readFileSync(m.pidFile, "utf8"));
     try { process.kill(pid, "SIGTERM"); } catch {}
-    for (let i = 0; i < 50; i++) { try { process.kill(pid, 0); } catch { break; } spawnSync("sleep", ["0.1"]); }
+    // A child of this process stays a zombie until reaped, so ps decides, not kill(pid, 0).
+    for (let i = 0; i < 50; i++) {
+      const st = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+      if (!st || st.startsWith("Z")) break;
+      spawnSync("sleep", ["0.1"]);
+    }
     rmSync(m.pidFile, { force: true });
   }
 }
 
-export function startService(m: Manager, dir: string) {
-  if (m.kind === "launchd") {
-    const r = run("launchctl", ["bootstrap", `gui/${process.getuid!()}`, m.plist]);
-    if (!r.ok) throw new StepFailed(`launchctl bootstrap failed: ${r.out}`);
-  } else if (m.kind === "systemd") {
-    const r = run("systemctl", ["--user", "start", m.unit]);
-    if (!r.ok) throw new StepFailed(`systemctl --user start failed: ${r.out}`);
-  } else {
-    const log = openSync(m.log, "a");
-    const p = Bun.spawn([process.execPath, "index.ts"], { cwd: dir, env: m.env, stdio: ["ignore", log, log], detached: true });
-    p.unref();
-    writeFileSync(m.pidFile, String(p.pid));
+// launchctl bootstrap right after a bootout can fail while launchd still tears the old job down
+// ("Bootstrap failed: 5: Input/output error", 37 "Operation already in progress"); those are retried.
+const BOOTSTRAP_RETRY = /Bootstrap failed: (5|37)\b|already in progress/i;
+export const START_TRIES = [0, 1, 2, 4, 8];
+
+export async function startService(m: Manager, dir: string, tries: number[] = START_TRIES) {
+  let last = "";
+  for (const wait of tries) {
+    if (wait) await Bun.sleep(wait * 1000);
+    if (m.kind === "launchd") {
+      const r = run("launchctl", ["bootstrap", `gui/${process.getuid!()}`, m.plist]);
+      if (r.ok) return;
+      last = `launchctl bootstrap failed: ${r.out}`;
+      if (!BOOTSTRAP_RETRY.test(r.out)) break;
+    } else if (m.kind === "systemd") {
+      const r = run("systemctl", ["--user", "start", m.unit]);
+      if (r.ok) return;
+      last = `systemctl --user start failed: ${r.out}`;
+    } else {
+      const left = m.failStartsFile && existsSync(m.failStartsFile) ? Number(readFileSync(m.failStartsFile, "utf8")) : 0;
+      if (left > 0) { writeFileSync(m.failStartsFile!, String(left - 1)); last = "Bootstrap failed: 5: Input/output error (test)"; continue; }
+      const log = openSync(m.log, "a");
+      const p = Bun.spawn([process.execPath, "index.ts"], { cwd: dir, env: m.env, stdio: ["ignore", log, log], detached: true });
+      p.unref();
+      writeFileSync(m.pidFile, String(p.pid));
+      return;
+    }
   }
+  throw new StepFailed(last);
 }
 
-export function restartService(m: Manager, dir: string) {
+export async function restartService(m: Manager, dir: string) {
   if (m.kind === "launchd") {
     const r = run("launchctl", ["kickstart", "-k", `gui/${process.getuid!()}/${m.label}`]);
     if (!r.ok) throw new StepFailed(`launchctl kickstart failed: ${r.out}`);
   } else if (m.kind === "systemd") {
     const r = run("systemctl", ["--user", "restart", m.unit]);
     if (!r.ok) throw new StepFailed(`systemctl --user restart failed: ${r.out}`);
-  } else { stopService(m); startService(m, dir); }
+  } else { stopService(m); await startService(m, dir); }
 }
 
 // Up means the service answers its whoami route; without a token that is 401.
@@ -127,6 +115,16 @@ export async function waitHealthy(url: string, seconds: number): Promise<boolean
   return false;
 }
 
+// Down means nothing answers there any more, so whatever answers after the start is the new process.
+export async function waitDown(url: string, seconds: number): Promise<boolean> {
+  const until = Date.now() + seconds * 1000;
+  while (Date.now() < until) {
+    try { await fetch(`${url}/api/whoami`, { tls: { rejectUnauthorized: false }, signal: AbortSignal.timeout(1000) } as RequestInit); } catch { return true; }
+    await Bun.sleep(300);
+  }
+  return false;
+}
+
 const freePort = () => new Promise<number>((resolve, reject) => {
   const s = createServer();
   s.once("error", reject);
@@ -138,10 +136,14 @@ const free = (path: string) => { let p = path; for (let i = 2; existsSync(p); i+
 
 // ---- the steps -------------------------------------------------------------------------------------------
 
+export const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 async function download(url: string, to: string) {
   const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(300_000) });
   if (!r.ok) throw new StepFailed(`download ${url} answered ${r.status}`);
-  await Bun.write(to, r);
+  if (Number(r.headers.get("content-length") ?? 0) > MAX_DOWNLOAD_BYTES) throw new StepFailed(`download ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+  const bytes = await r.arrayBuffer();
+  if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new StepFailed(`download ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+  await Bun.write(to, bytes);
 }
 
 // Returns the folder holding the unpacked, checked new code.
@@ -151,7 +153,7 @@ export async function fetchPackage(job: Job, work: string): Promise<string> {
   const pkg = join(work, basename(new URL(d.packageUrl).pathname));
   await download(d.packageUrl, pkg);
   await download(d.sha256Url, `${pkg}.sha256`);
-  const want = /^([0-9a-f]{64})\s/.exec(readFileSync(`${pkg}.sha256`, "utf8"))?.[1];
+  const want = /^([0-9a-f]{64})(?:\s|$)/.exec(readFileSync(`${pkg}.sha256`, "utf8"))?.[1];
   if (!want) throw new StepFailed("the .sha256 file has no checksum");
   const got = sha256(pkg);
   if (got !== want) throw new StepFailed(`package checksum ${got} does not match the published ${want}`);
@@ -184,6 +186,15 @@ export function backupState(job: Job, short: string): string {
   return dir;
 }
 
+// The scratch start gets only what it needs to start: no TLS, no tailnet, no admin, input, agents, peers or
+// settings, whatever a later release adds. A plain list, so a new switch never reaches the scratch start.
+const SCRATCH_KEPT = /^(PATH|HOME|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z]+|FLEET_CONF|FLEET_CONTROL_TOKENS|FLEET_CONTROL_HOST_NAME)$/;
+export function scratchEnv(env: Record<string, string>, port: number, db: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) if (SCRATCH_KEPT.test(k)) out[k] = v;
+  return { ...out, PORT: String(port), FLEET_CONTROL_HOST: "127.0.0.1", FLEET_CONTROL_DB: db };
+}
+
 // The new code on a scratch loopback port with a copy of the database: it must start and answer.
 export async function scratchRun(job: Job, code: string, backupDir: string) {
   const s = job.data.service;
@@ -192,8 +203,7 @@ export async function scratchRun(job: Job, code: string, backupDir: string) {
   const work = dirname(dirname(code));
   const scratchDb = join(work, "scratch.db");
   if (s.db && existsSync(join(backupDir, "state.before-upgrade.db"))) copyFileSync(join(backupDir, "state.before-upgrade.db"), scratchDb);
-  const env: Record<string, string> = { ...s.env, PORT: String(port), FLEET_CONTROL_HOST: "127.0.0.1", FLEET_CONTROL_DB: s.db ? scratchDb : ":memory:" };
-  for (const k of ["FLEET_CONTROL_TLS_CERT", "FLEET_CONTROL_TLS_KEY", "FLEET_CONTROL_TAILNET_HOST", "FLEET_CONTROL_TAILNET_NAME", "FLEET_CONTROL_TAILNET_TLS_CERT", "FLEET_CONTROL_TAILNET_TLS_KEY", "FLEET_CONTROL_ADMIN", "FLEET_CONTROL_INPUT", "FLEET_CONTROL_AGENT_ROOTS", "FLEET_CONTROL_AGENT_MCP_URL"]) delete env[k];
+  const env = scratchEnv(s.env, port, s.db ? scratchDb : ":memory:");
   const log = join(work, "scratch.log");
   const fd = openSync(log, "w", 0o600);
   const p = Bun.spawn([process.execPath, "index.ts"], { cwd: code, env, stdio: ["ignore", fd, fd] });
@@ -202,10 +212,20 @@ export async function scratchRun(job: Job, code: string, backupDir: string) {
     if (!up) throw new StepFailed(`the new code did not answer on a scratch port: ${readFileSync(log, "utf8").trim().split("\n").slice(-3).join(" | ")}`);
     job.step(`scratch start on 127.0.0.1:${port} answered`);
   } finally {
-    p.kill(); await p.exited; closeSync(fd);
+    p.kill();
+    const killer = setTimeout(() => p.kill("SIGKILL"), 10_000);
+    await p.exited; clearTimeout(killer); closeSync(fd);
     rmSync(scratchDb, { force: true });
   }
 }
+
+const SYNCED = new Set(["watchdog.sh", "dsh-agent.mjs"]);
+const fleetSync = (job: Job, dir: string, what: string) => {
+  const s = job.data.service;
+  // The service's own environment (on systemd the updater runs with the user manager's).
+  const r = run(join(dir, "vendor/agent-fleet/scripts/fleet"), ["sync"], { env: { ...s.env, FLEET_CONF: s.fleetConf } });
+  job.step(r.ok ? `${what} fleet sync done` : `${what} fleet sync failed (${r.out}); the watchdog files stay as they were`);
+};
 
 export async function swapAndStart(job: Job, code: string, backupDir: string, short: string) {
   const s = job.data.service;
@@ -214,28 +234,60 @@ export async function swapAndStart(job: Job, code: string, backupDir: string, sh
   const before = free(`${s.dir}.before-${short}`);
   stopService(s.manager);
   job.step("service stopped");
-  renameSync(s.dir, before);
-  renameSync(next, s.dir);
-  job.step(`folders swapped; the old code is in ${before}`);
-  const sync = run(join(s.dir, "vendor/agent-fleet/scripts/fleet"), ["sync"], { env: { ...process.env, FLEET_CONF: s.fleetConf } });
-  job.step(sync.ok ? "fleet sync done" : `fleet sync failed (${sync.out}); the old watchdog files stay`);
-  startService(s.manager, s.dir);
-  if (await waitHealthy(s.health, s.waits?.start ?? 45)) {
-    job.end("done", `the service answers on ${s.health} with release ${short}`);
-    return;
+  let why: string;
+  try {
+    if (!(await waitDown(s.health, 15))) throw new StepFailed(`something still answers on ${s.health} after the stop`);
+    renameSync(s.dir, before);
+    renameSync(next, s.dir);
+    job.step(`folders swapped; the old code is in ${before}`);
+    fleetSync(job, s.dir, "new");
+    await startService(s.manager, s.dir);
+    if (await waitHealthy(s.health, s.waits?.start ?? 45)) {
+      job.end("done", `the service answers on ${s.health} with release ${short}`);
+      return;
+    }
+    why = `the service did not answer on ${s.health}`;
+  } catch (e) {
+    why = e instanceof Error ? e.message : String(e);
   }
-  job.step(`the service did not answer on ${s.health}; rolling back`);
-  stopService(s.manager);
-  renameSync(s.dir, free(`${s.dir}.failed-${short}`));
-  renameSync(before, s.dir);
+  await rollBack(job, before, backupDir, short, why);
+}
+
+// Puts the old release back whatever state the swap stopped in, and starts it. Every step is written down,
+// so the last line says where the folders are even when the old code does not come up either.
+async function rollBack(job: Job, before: string, backupDir: string, short: string, why: string) {
+  const s = job.data.service;
+  job.step(`${why}; rolling back`);
+  const problems: string[] = [];
+  try { stopService(s.manager); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
+  try {
+    if (existsSync(before)) {
+      if (existsSync(s.dir)) renameSync(s.dir, free(`${s.dir}.failed-${short}`));
+      renameSync(before, s.dir);
+      job.step("old code back in place");
+    } else job.step("the old code never left its folder");
+  } catch (e) { problems.push(`folders: ${e instanceof Error ? e.message : e}`); }
   if (s.db && existsSync(join(backupDir, "state.before-upgrade.db"))) {
-    copyFileSync(join(backupDir, "state.before-upgrade.db"), s.db);
-    for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
-    job.step("database put back from the backup");
+    try {
+      copyFileSync(join(backupDir, "state.before-upgrade.db"), s.db);
+      for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
+      job.step("database put back from the backup");
+    } catch (e) { problems.push(`database: ${e instanceof Error ? e.message : e}`); }
   }
-  startService(s.manager, s.dir);
+  // Config files go back as they were; the watchdog files come from the old code's fleet sync.
+  const restored: string[] = [];
+  for (const f of s.files) {
+    const copy = join(backupDir, basename(f));
+    if (SYNCED.has(basename(f)) || !existsSync(copy)) continue;
+    try { copyFileSync(copy, f); restored.push(basename(f)); } catch (e) { problems.push(`${basename(f)}: ${e instanceof Error ? e.message : e}`); }
+  }
+  if (restored.length) job.step(`files put back from the backup: ${restored.join(", ")}`);
+  if (existsSync(s.dir)) fleetSync(job, s.dir, "old");
+  try { await startService(s.manager, s.dir); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
   const back = await waitHealthy(s.health, s.waits?.start ?? 45);
-  job.end(back ? "rolled_back" : "failed", back ? "the old release answers again" : `the old release does not answer either; see the service log. Backup in ${backupDir}`);
+  const where = existsSync(before) ? `the old code is still in ${before}` : `the old code is in ${s.dir}`;
+  if (back) job.end("rolled_back", `the old release answers again${problems.length ? ` (${problems.join("; ")})` : ""}`);
+  else job.end("failed", `the old release does not answer either (${problems.join("; ") || "see the service log"}); ${where}; backup in ${backupDir}`);
 }
 
 export async function runJob(job: Job) {
@@ -245,7 +297,7 @@ export async function runJob(job: Job) {
   try {
     if (job.data.action === "restart") {
       job.step("restarting the service");
-      restartService(job.data.service.manager, job.data.service.dir);
+      await restartService(job.data.service.manager, job.data.service.dir);
       const up = await waitHealthy(job.data.service.health, 45);
       job.end(up ? "done" : "failed", up ? `the service answers on ${job.data.service.health}` : `the service does not answer on ${job.data.service.health}; see its log`);
       return;
@@ -265,7 +317,9 @@ export async function runJob(job: Job) {
     // Nothing was swapped when a step before the swap fails, so the running service is untouched.
     if (job.data.state === "running") job.end("failed", `${e instanceof StepFailed ? "" : "error: "}${e instanceof Error ? e.message : e}`);
   } finally {
-    rmSync(join(dirname(job.file), "lock"), { force: true });
+    // Only this job's lock: a lock another job took after this one was called stale stays.
+    const lock = join(dirname(job.file), "lock");
+    try { if (readFileSync(lock, "utf8").trim() === job.data.id) rmSync(lock, { force: true }); } catch {}
   }
 }
 

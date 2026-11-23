@@ -10,7 +10,7 @@ import { serve } from "./server.ts";
 import { startGateway, loadGatewayConfig } from "./client-gateway.ts";
 import { detectManager, HostUpdates } from "./update-host.ts";
 import { checkJobRequest } from "./domain/updates.ts";
-import type { JobFile, Manager } from "../scripts/updater.ts";
+import type { JobFile, Manager } from "./domain/updates.ts";
 
 const op = newToken(), agent = newToken();
 const commitNow = "a".repeat(40), commitNew = "b".repeat(40);
@@ -30,6 +30,10 @@ const releaseList = () => [
   // No checksum asset, a draft, a bad tag: never offered.
   { tag_name: "v3", draft: false, assets: [{ name: `fleet-control-${"c".repeat(40)}.tar.gz`, browser_download_url: "https://example.test/v3.tgz" }] },
   { tag_name: "v4", draft: true, assets: [] },
+  { tag_name: "v9", draft: false, assets: [
+    { name: `fleet-control-${"e".repeat(40)}.tar.gz`, browser_download_url: "https://example.test/v9.tgz" },
+    { name: `fleet-control-${"e".repeat(40)}.tar.gz.sha256`, browser_download_url: "https://example.test/v9.tgz.sha256" },
+  ] },
   { tag_name: "bad tag", draft: false, assets: [] },
 ];
 
@@ -37,7 +41,17 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "service-update-"));
   launched = []; ghCalls = 0; ghStatus = 200;
   manager = { kind: "launchd", label: "pl.test.fc", plist: join(dir, "x.plist") };
-  github = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => { ghCalls++; return new URL(req.url).pathname === "/repos/kolezka/fleet-control/releases" ? Response.json(releaseList(), { status: ghStatus }) : new Response("no", { status: 404 }); } });
+  github = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => {
+    ghCalls++;
+    const path = new URL(req.url).pathname;
+    if (path === "/repos/kolezka/fleet-control/releases") return Response.json(releaseList(), { status: ghStatus });
+    // v2 is an annotated tag on commitNew; v9 points at another commit than its package.
+    if (path === "/repos/kolezka/fleet-control/git/ref/tags/v2" && ghStatus !== 200) return new Response("down", { status: ghStatus });
+    if (path === "/repos/kolezka/fleet-control/git/ref/tags/v2") return Response.json({ object: { type: "tag", sha: "t".repeat(40) } });
+    if (path === `/repos/kolezka/fleet-control/git/tags/${"t".repeat(40)}`) return Response.json({ object: { type: "commit", sha: commitNew } });
+    if (path === "/repos/kolezka/fleet-control/git/ref/tags/v9") return Response.json({ object: { type: "commit", sha: "d".repeat(40) } });
+    return new Response("no", { status: 404 });
+  } });
   const code = join(dir, "service"); mkdirSync(code);
   writeFileSync(join(code, "MANIFEST.json"), JSON.stringify({ commit: commitNow, tag: "v1" }));
   writeFileSync(join(dir, "tokens"), `${tokenLine("op", op, "operator")}\n${tokenLine("worker", agent, "agent")}\n`, { mode: 0o600 });
@@ -70,7 +84,7 @@ test("the page sees the running release and only releases with a package and its
   expect(r.status).toBe(200);
   const body = await r.json();
   expect(body.current).toEqual({ commit: commitNow, tag: "v1" });
-  expect(body.releases.map((x: { tag: string }) => x.tag)).toEqual(["v2", "v1"]);
+  expect(body.releases.map((x: { tag: string }) => x.tag)).toEqual(["v2", "v1", "v9"]);
   expect(body.releases[0]).toEqual({ tag: "v2", commit: commitNew, publishedAt: "2026-11-23T10:00:00Z", url: "https://example.test/v2.tgz", sha256Url: "https://example.test/v2.tgz.sha256" });
   expect(body.unavailable).toBeNull();
   expect(body.running).toBeNull();
@@ -121,7 +135,8 @@ test("refusals: wrong confirm, unknown release, the release already running, oth
   }
   const upd: [object, number, string][] = [
     [{ tag: "v2", confirm: "v1" }, 400, "type v2 to confirm"],
-    [{ tag: "v9", confirm: "v9" }, 404, "no release v9 with a package"],
+    [{ tag: "v8", confirm: "v8" }, 404, "no release v8 with a package"],
+    [{ tag: "v9", confirm: "v9" }, 422, `release v9 has a package built from eeeeeee, but the tag points at ddddddd; nothing started`],
     [{ tag: "v3", confirm: "v3" }, 404, "no release v3 with a package"],
     [{ tag: "v1", confirm: "v1" }, 400, `this service already runs v1 (${commitNow.slice(0, 7)})`],
     [{ tag: "v2", confirm: "v2", force: true }, 400, "unknown field force"],
@@ -185,4 +200,67 @@ test("job requests are checked before anything else", () => {
   expect(checkJobRequest("update", { tag: "v1.2", confirm: "v1.2" })).toEqual({ tag: "v1.2" });
   expect(() => checkJobRequest("update", { tag: "../x", confirm: "../x" })).toThrow("tag must be a release tag");
   expect(() => checkJobRequest("restart", [])).toThrow("body must be an object");
+});
+
+test("review fixes: a job whose updater died reads as failed and frees the buttons; a GitHub failure on update is a definite refusal", async () => {
+  const first = await (await page("/service/restart", { confirm: "restart" })).json();
+  const file = launched[0]!.job;
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...data, state: "running", pid: 2 ** 22 + 12345 }));
+  const seen = await (await page("/service")).json();
+  expect(seen.running).toBeNull();
+  const job = seen.jobs.find((j: { id: string }) => j.id === first.job.id);
+  expect(job.state).toBe("failed");
+  expect(job.steps.at(-1)).toBe("the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped");
+  // A job that never got its updater's pid, older than a minute, is gone too.
+  writeFileSync(file, JSON.stringify({ ...data, state: "starting", pid: null, startedAt: new Date(Date.now() - 61_000).toISOString() }));
+  expect((await (await page("/service")).json()).running).toBeNull();
+  writeFileSync(file, JSON.stringify({ ...data, state: "starting", pid: null, startedAt: new Date().toISOString() }));
+  expect((await (await page("/service")).json()).running.id).toBe(first.job.id);
+  writeFileSync(file, JSON.stringify({ ...data, state: "done", pid: 1, endedAt: new Date().toISOString() }));
+  ghStatus = 500;
+  const r = await page("/service/update", { tag: "v2", confirm: "v2" });
+  // The release list is still cached; the tag lookup is not.
+  expect([r.status, (await r.json()).error.message]).toEqual([422, "nothing started: GitHub answered 500 for git/ref/tags/v2"]);
+});
+
+test("review fixes: a stale lock is taken by one of two requests; the other is refused while that job runs (one process: the race between processes is not reproduced here)", async () => {
+  mkdirSync(join(dir, "updates"), { mode: 0o700 });
+  writeFileSync(join(dir, "updates", "lock"), "upd-20260101T000000Z-deadbeef");
+  writeFileSync(join(dir, "updates", "upd-20260101T000000Z-deadbeef.json"), JSON.stringify({ id: "upd-20260101T000000Z-deadbeef", state: "running", pid: 2 ** 22 + 12345, startedAt: "2026-01-01T00:00:00Z", steps: [] }));
+  const answers = await Promise.all([page("/service/restart", { confirm: "restart" }), page("/service/restart", { confirm: "restart" })]);
+  expect(answers.map((r) => r.status).sort()).toEqual([202, 409]);
+  expect(launched).toHaveLength(1);
+  expect(readdirSync(join(dir, "updates")).filter((f) => f.startsWith("lock"))).toEqual(["lock"]);
+});
+
+test("review fixes: release assets outside GitHub are skipped, and an IPv6 host is bracketed", async () => {
+  const { urlHost } = await import("./update-host.ts");
+  expect([urlHost("::1"), urlHost("100.64.0.6"), urlHost("[::1]")]).toEqual(["[::1]", "100.64.0.6", "[::1]"]);
+  const live = new HostUpdates({ dir: join(dir, "service"), manager, db: null, files: [], fleetConf: "", rollbackRoot: dir, jobDir: join(dir, "u3"), health: "", env: {} });
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json([{ tag_name: "v2", draft: false, assets: [
+    { name: `fleet-control-${commitNew}.tar.gz`, browser_download_url: "https://evil.example/x.tgz" },
+    { name: `fleet-control-${commitNew}.tar.gz.sha256`, browser_download_url: "https://github.com/kolezka/fleet-control/releases/download/v2/x.sha256" },
+  ] }, { tag_name: "v1", draft: false, assets: [
+    { name: `fleet-control-${commitNow}.tar.gz`, browser_download_url: "https://github.com/kolezka/fleet-control/releases/download/v1/p.tgz" },
+    { name: `fleet-control-${commitNow}.tar.gz.sha256`, browser_download_url: "https://github.com/kolezka/fleet-control/releases/download/v1/p.tgz.sha256" },
+  ] }])) as unknown as typeof fetch;
+  try { expect((await live.releases()).map((r) => r.tag)).toEqual(["v1"]); } finally { globalThis.fetch = real; }
+});
+
+test("review fixes: on systemd the updater starts in its own transient unit with the service's PATH", async () => {
+  const { launchUpdater } = await import("./update-host.ts");
+  const bin = join(dir, "bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\nfor a in "$@"; do echo "$a"; done > ${join(dir, "argv")}\n`, { mode: 0o755 });
+  mkdirSync(join(dir, "updates"));
+  const job = join(dir, "updates", "upd-20261123T120000Z-0000abcd.json");
+  writeFileSync(job, "{}");
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try { launchUpdater(job, { kind: "systemd", unit: "fleet-control.service", unitFile: null }, "/srv/fc"); } finally { process.env.PATH = path; }
+  expect(readFileSync(join(dir, "argv"), "utf8").trim().split("\n")).toEqual([
+    "--user", "--unit=fleet-control-updater-0000abcd", "--collect", "--quiet", `--setenv=PATH=${bin}:${path}`,
+    `--working-directory=${join(dir, "updates")}`, process.execPath, "/srv/fc/scripts/updater.ts", job,
+  ]);
 });

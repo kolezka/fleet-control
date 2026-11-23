@@ -1,16 +1,20 @@
 // The host side of restart and update: which service manager runs this service, the release list from
 // GitHub, the job files, and starting the updater so it outlives the service.
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AdminError } from "./domain/fleet-admin.ts";
-import { JOB_FINAL, JOB_ID, PACKAGE_NAME, TAG, type JobAction, type Release, type UpdateJob } from "./domain/updates.ts";
+import { jobGone, JOB_FINAL, JOB_ID, PACKAGE_NAME, TAG, type JobAction, type JobFile, type Manager, type Release, type UpdateJob } from "./domain/updates.ts";
 import type { UpdateHost } from "./application/updates.ts";
-import type { JobFile, Manager } from "../scripts/updater.ts";
 
 export const REPO = "kolezka/fleet-control";
+// An IPv6 address goes in brackets in a URL.
+export const urlHost = (host: string) => host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 // Only these reach the job file: paths and switches, never a token.
 const ENV_KEPT = /^(FLEET_|PORT$|PATH$|HOME$|USER$|LOGNAME$|TMPDIR$|LANG$|LC_)/;
 const RELEASES_CACHE_MS = 5 * 60_000;
+// Release assets come from GitHub only; anything else in the list is skipped.
+const ASSET_URL = /^https:\/\/(github\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com)\//;
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 // launchd sets XPC_SERVICE_NAME to the job label; systemd puts the service in its own cgroup.
 export function detectManager(env: Record<string, string | undefined>, home: string, cgroup = "/proc/self/cgroup"): Manager | null {
@@ -78,10 +82,26 @@ export class HostUpdates implements UpdateHost {
       if (!pkg) continue;
       const sum = assets.find((a) => a.name === `${pkg.name}.sha256`);
       if (!sum || typeof pkg.browser_download_url !== "string" || typeof sum.browser_download_url !== "string") continue;
+      if (!this.o.api && (!ASSET_URL.test(pkg.browser_download_url) || !ASSET_URL.test(sum.browser_download_url))) continue;
       releases.push({ tag: raw.tag_name, commit: PACKAGE_NAME.exec(pkg.name as string)![1]!, publishedAt: String(raw.published_at ?? ""), url: pkg.browser_download_url, sha256Url: sum.browser_download_url });
     }
     this.#cache = { at: now, releases };
     return releases;
+  }
+
+  // The commit the tag points at on GitHub, following an annotated tag. The package must be built from it, so
+  // a package uploaded to a release by hand under another commit's name is refused.
+  async tagCommit(tag: string): Promise<string> {
+    const api = this.o.api ?? "https://api.github.com", repo = this.o.repo ?? REPO;
+    const get = async (path: string) => {
+      const r = await fetch(`${api}/repos/${repo}/${path}`, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) throw new Error(`GitHub answered ${r.status} for ${path}`);
+      return await r.json() as { object?: { type?: string; sha?: string } };
+    };
+    let o = (await get(`git/ref/tags/${encodeURIComponent(tag)}`)).object;
+    for (let i = 0; i < 3 && o?.type === "tag"; i++) o = (await get(`git/tags/${o.sha}`)).object;
+    if (o?.type !== "commit" || typeof o.sha !== "string") throw new Error(`tag ${tag} does not point at a commit`);
+    return o.sha;
   }
 
   async jobs(): Promise<UpdateJob[]> {
@@ -92,7 +112,10 @@ export class HostUpdates implements UpdateHost {
       if (f === id || !JOB_ID.test(id)) continue;
       try {
         const j = JSON.parse(readFileSync(join(this.o.jobDir, f), "utf8")) as JobFile;
-        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: j.state, steps: j.steps, startedAt: j.startedAt, endedAt: j.endedAt });
+        // An updater that died (crash, kill, reboot) never ends its job; it is shown as failed, not running.
+        const gone = jobGone(j, Date.now(), alive);
+        const steps = gone ? [...j.steps, "the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped"] : j.steps;
+        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? j.endedAt ?? "" : j.endedAt });
       } catch {}
     }
     return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10);
@@ -137,17 +160,16 @@ export class HostUpdates implements UpdateHost {
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
         const holder = readFileSync(lock, "utf8").trim();
-        let alive = false;
+        let busy = false;
         try {
           const j = JSON.parse(readFileSync(join(this.o.jobDir, `${holder}.json`), "utf8")) as JobFile;
-          if (!JOB_FINAL.includes(j.state)) {
-            // A job that has not started its updater yet, or whose updater still runs.
-            if (j.pid === null) alive = Date.now() - Date.parse(j.startedAt) < 60_000;
-            else { try { process.kill(j.pid, 0); alive = true; } catch {} }
-          }
+          busy = !JOB_FINAL.includes(j.state) && !jobGone(j, Date.now(), alive);
         } catch {}
-        if (alive) throw new AdminError("conflict", `another restart or update is running (${holder}); wait for it to end`);
-        rmSync(lock, { force: true });
+        if (busy) throw new AdminError("conflict", `another restart or update is running (${holder}); wait for it to end`);
+        // Moved aside, not removed: of two requests that both saw a stale lock, only one rename succeeds,
+        // so only one takes the lock next.
+        try { renameSync(lock, join(this.o.jobDir, `lock.stale-${id}`)); } catch { continue; }
+        rmSync(join(this.o.jobDir, `lock.stale-${id}`), { force: true });
       }
     }
     throw new AdminError("conflict", "could not take the update lock; try again");
@@ -162,7 +184,9 @@ export function launchUpdater(job: string, manager: Manager | null, dir: string)
   try {
     if (manager?.kind === "systemd") {
       const unit = `fleet-control-updater-${job.match(/upd-[^/]+(?=\.json$)/)![0].slice(-8)}`;
-      const r = Bun.spawnSync(["systemd-run", "--user", `--unit=${unit}`, "--collect", "--quiet", `--working-directory=${dirname(job)}`, process.execPath, script, job], { stdout: log, stderr: log });
+      // The transient unit starts with the user manager's environment; the service's PATH goes along.
+      const path = process.env.PATH ? [`--setenv=PATH=${process.env.PATH}`] : [];
+      const r = Bun.spawnSync(["systemd-run", "--user", `--unit=${unit}`, "--collect", "--quiet", ...path, `--working-directory=${dirname(job)}`, process.execPath, script, job], { env: process.env, stdout: log, stderr: log });
       if (r.exitCode !== 0) throw new Error(`systemd-run exited ${r.exitCode}; see ${job.replace(/\.json$/, "")}.log`);
     } else {
       const p = Bun.spawn([process.execPath, script, job], { cwd: dirname(job), stdio: ["ignore", log, log], detached: true });

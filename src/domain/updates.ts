@@ -27,7 +27,53 @@ export type UpdateJob = {
 export const JOB_ID = /^upd-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
 export const JOB_FINAL: readonly JobState[] = ["done", "rolled_back", "failed"];
 
-export const releasePackageOk = (name: string) => PACKAGE_NAME.exec(name)?.[1] ?? null;
+// How the service is run, so the updater can stop and start it.
+export type Manager =
+  | { kind: "launchd"; label: string; plist: string }
+  | { kind: "systemd"; unit: string; unitFile: string | null }
+  // Tests: the service is `bun index.ts` started from the folder, its pid in pidFile. failStartsFile, when it
+  // holds a number above 0, makes that many starts fail first (a bootstrap that fails right after a bootout).
+  | { kind: "test"; pidFile: string; env: Record<string, string>; log: string; failStartsFile?: string };
+
+// The job file the service writes and the updater works through.
+export type JobFile = {
+  id: string;
+  action: JobAction;
+  tag: string | null;
+  commit: string | null;
+  packageUrl: string | null;
+  sha256Url: string | null;
+  by: string;
+  state: JobState;
+  steps: string[];
+  startedAt: string;
+  endedAt: string | null;
+  pid: number | null;
+  // What the updater works on. Paths are absolute.
+  service: {
+    dir: string;
+    manager: Manager;
+    db: string | null;
+    // Files copied next to the database backup and put back on rollback.
+    files: string[];
+    fleetConf: string;
+    rollbackRoot: string;
+    // Where the service answers: 401 without a token means it is up.
+    health: string;
+    // The service's environment: paths and switches, never a token.
+    env: Record<string, string>;
+    // Seconds to wait for an answer: scratch start, then the real start. Defaults 30 and 45.
+    waits?: { scratch: number; start: number };
+  };
+};
+
+// A job that is not final but whose updater is gone: its pid no longer runs, or it never wrote one within a
+// minute. `alive(pid)` tells whether a process runs.
+export function jobGone(j: Pick<JobFile, "state" | "pid" | "startedAt">, now: number, alive: (pid: number) => boolean): boolean {
+  if (JOB_FINAL.includes(j.state)) return false;
+  if (j.pid === null) return now - Date.parse(j.startedAt) >= 60_000;
+  return !alive(j.pid);
+}
 
 // What the page sent to start a job; refused with the reason the operator reads.
 export function checkJobRequest(action: JobAction, input: unknown): { tag: string | null } {

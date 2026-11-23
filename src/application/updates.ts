@@ -10,6 +10,8 @@ export type UpdateHost = {
   // Why this service cannot be restarted or updated from the page; null when it can.
   unavailable(): string | null;
   releases(): Promise<Release[]>;
+  // The commit a release tag points at on GitHub.
+  tagCommit(tag: string): Promise<string>;
   jobs(): Promise<UpdateJob[]>;
   // Writes the job and starts the updater. Throws AdminError conflict while another job runs.
   start(action: JobAction, release: Release | null, by: string): Promise<UpdateJob>;
@@ -43,9 +45,13 @@ export function updateUseCases(deps: { host: UpdateHost }, caller?: Caller) {
       allow();
       const { tag } = checkJobRequest("update", input);
       ready();
-      const release = (await h.releases()).find((r) => r.tag === tag);
+      // Nothing has started yet, so a GitHub failure is a definite "not started".
+      const ask = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e) { throw new AdminError("failed", `nothing started: ${e instanceof Error ? e.message : e}`); } };
+      const release = (await ask(() => h.releases())).find((r) => r.tag === tag);
       if (!release) throw new AdminError("not_found", `no release ${tag} with a package`);
       if (release.commit === h.current().commit) throw new AdminError("invalid", `this service already runs ${tag} (${release.commit.slice(0, 7)})`);
+      const tagged = await ask(() => h.tagCommit(tag!));
+      if (tagged !== release.commit) throw new AdminError("failed", `release ${tag} has a package built from ${release.commit.slice(0, 7)}, but the tag points at ${tagged.slice(0, 7)}; nothing started`);
       return { job: await h.start("update", release, caller?.name ?? "local") };
     },
   };
