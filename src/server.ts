@@ -416,6 +416,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           if (!w) return noWatchdog();
           if (!originAllowed(req)) return forbidden();
           if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+          // Bun 1.4 does not time out a request with a body anyway; this keeps it so if that changes.
           srv.timeout(req, WATCHDOG_IDLE_SECONDS);
           try {
             const body = await jsonBody(req);

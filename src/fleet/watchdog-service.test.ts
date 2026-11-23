@@ -33,15 +33,17 @@ describe("watchdog rules", () => {
       ["error connecting to /private/tmp/tmux-501/fleet-t (Permission denied)", null],
       ["error connecting to /private/tmp/tmux-501/fleet-t (Socket operation on non-socket)", null],
       ["", null],
+      ["first line\nsecond line", null],
     ];
     try {
       for (const [text, want] of cases) {
         const fake = join(dir, "tmux");
-        await writeFile(fake, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(text)} >&2\nexit 1\n`);
+        await writeFile(fake, `#!/bin/sh\nprintf '%b\\n' ${JSON.stringify(text)} >&2\nexit 1\n`);
         await chmod(fake, 0o755);
         const w = new WatchdogService({ manager: "systemd", home: dir, uid: 1, bash: "/bin/bash", path: "/usr/bin:/bin", tmuxBin: fake, systemctl: "/usr/bin/true" });
         const st = await w.state({ fleet: "t", dir, socket: "fleet-t" });
         expect([text, st.inTmux]).toEqual([text, want]);
+        if (want === null) expect(st.inTmuxError).toBe(text ? text.split("\n")[0] : "tmux exited 1");
       }
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
@@ -378,7 +380,7 @@ describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand
     await w.start(st);
     process.kill(-JSON.parse(await readFile(join(dir, "state.json"), "utf8"))["pl.raqz.fleet-watchdog.linger"].pid);
     await Bun.sleep(300);
-    await writeFile(join(dir, "linger"), "0 9");
+    await writeFile(join(dir, "linger"), "0 5");
     const e = await w.start(st).catch((x) => x);
     expect([e.kind, /Bootstrap failed: 5/.test(e.message)]).toEqual(["failed", true]);
     expect(await Bun.file(join(dir, "Library/LaunchAgents/pl.raqz.fleet-watchdog.linger.plist")).exists()).toBe(false);
@@ -402,7 +404,7 @@ describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand
   });
 });
 
-test("the gateway waits for a slow watchdog start instead of answering 504 after its usual 10 s, and the host does not drop it either", async () => {
+test("the gateway waits for a slow watchdog start instead of answering 504 after its usual 10 s", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fleet-control-wd-slow-"));
   const op = newToken();
   await writeFile(join(dir, "tokens"), `${tokenLine("op", op, "operator")}\n`);

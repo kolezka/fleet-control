@@ -104,12 +104,14 @@ export class WatchdogService implements WatchdogHost {
 
   private async inTmux(f: WatchdogFleet): Promise<{ inTmux: boolean | null; inTmuxError?: string }> {
     const tmux = this.opts.tmuxBin ?? "tmux";
-    const r = await run([tmux, ...(f.socket ? ["-L", f.socket, "-f", "/dev/null"] : []), "has-session", "-t", `=${f.fleet}-watchdog`]);
+    const r = await run([tmux, ...(f.socket ? ["-L", f.socket, "-f", "/dev/null"] : []), "has-session", "-t", `=${f.fleet}-watchdog`], 3_000);
     if (r.exitCode === 0) return { inTmux: true };
     // Only a plain "not there" counts as no watchdog (no session, no socket, nothing listening); any other tmux
     // error leaves it unknown, and unknown never lets a second watchdog start.
     if (/can't find session|no server running|error connecting to .*\((No such file or directory|Connection refused)\)/i.test(r.stderr)) return { inTmux: false };
-    return { inTmux: null, inTmuxError: r.stderr.trim() || `tmux exited ${r.exitCode}` };
+    // One line, short: it is shown on the page as is.
+    const first = r.stderr.trim().split("\n")[0]!.slice(0, 200);
+    return { inTmux: null, inTmuxError: first || `tmux exited ${r.exitCode}` };
   }
 
   private async pid(name: string): Promise<number | null> {

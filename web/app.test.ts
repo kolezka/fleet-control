@@ -1029,3 +1029,18 @@ test("watchdog: when tmux cannot be asked the part still shows, Turn off stays o
   await b.listeners.get("watchdogConfirm:input")!({});
   expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled]).toEqual(["Turn off", false]);
 });
+
+test("watchdog: off as a service and tmux unknown says so, and Turn on waits for tmux", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/watchdog")) return { fleet: "t", manager: "systemd", name: "fleet-watchdog-t.service", installed: false, running: false, pid: null, inTmux: null, inTmuxError: "error connecting to /tmp/tmux-1000/fleet-t (Permission denied)" };
+    if (path.endsWith("/settings") || path.endsWith("/tokens")) return { __status: 503 };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("watchdogState").textContent).toBe("Off as a service. Cannot tell whether a watchdog runs in tmux: error connecting to /tmp/tmux-1000/fleet-t (Permission denied).");
+  b.element("watchdogConfirm").value = "watchdog";
+  await b.listeners.get("watchdogConfirm:input")!({});
+  expect([b.element("watchdogGo").textContent, b.element("watchdogGo").disabled, b.element("watchdogGate").textContent]).toEqual(["Turn on", true, "Cannot tell whether a watchdog runs in tmux (error connecting to /tmp/tmux-1000/fleet-t (Permission denied)); fix tmux first"]);
+});

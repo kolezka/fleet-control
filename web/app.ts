@@ -714,7 +714,7 @@ function renderAdmin(h: HostState | undefined) {
   $("watchdogPart").hidden = v.watchdog === null;
   if (v.watchdog) {
     const w = v.watchdog;
-    $("watchdogState").textContent = (!w.manager ? "This host has neither launchd nor systemd." : w.running && w.inTmux ? `On: ${w.name} runs (pid ${w.pid}), and a second watchdog runs by hand in tmux session ${w.fleet}-watchdog. Stop that one with fleet watchdog stop.` : w.running ? `On: ${w.name} runs (pid ${w.pid}). It checks every agent every 60 s and starts again at login.` : w.inTmux ? `Off as a service. A watchdog started by hand runs in tmux session ${w.fleet}-watchdog.` : `Off: no watchdog checks the agents of ${w.fleet}.`) + (w.inTmux === null ? ` Cannot tell whether a watchdog runs in tmux: ${w.inTmuxError ?? "tmux did not answer"}.` : "");
+    $("watchdogState").textContent = (!w.manager ? "This host has neither launchd nor systemd." : w.running && w.inTmux ? `On: ${w.name} runs (pid ${w.pid}), and a second watchdog runs by hand in tmux session ${w.fleet}-watchdog. Stop that one with fleet watchdog stop.` : w.running ? `On: ${w.name} runs (pid ${w.pid}). It checks every agent every 60 s and starts again at login.` : w.inTmux ? `Off as a service. A watchdog started by hand runs in tmux session ${w.fleet}-watchdog.` : w.inTmux === null ? "Off as a service." : `Off: no watchdog checks the agents of ${w.fleet}.`) + (w.inTmux === null ? ` Cannot tell whether a watchdog runs in tmux: ${w.inTmuxError ?? "tmux did not answer"}.` : "");
     const wc = $("watchdogConfirm") as HTMLInputElement;
     if (wc.value !== v.watchdogConfirm) wc.value = v.watchdogConfirm;
     const wg = watchdogGate(v);
