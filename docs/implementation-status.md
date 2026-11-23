@@ -2,7 +2,19 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
-## Service settings from the page (2026-11-23, branch `feat/service-settings`, not released)
+## Release d653eb9: service settings and saved start commands on .4 and .15 (2026-11-23)
+
+- Code: main at d653eb9 (PR #208 restart any session, PR #209 service settings). agent-fleet pin unchanged (c916b8d).
+- .4: backup `~/.config/fleet-control/rollback-d653eb9/` (state 10 tables 208 rows, tokens, plist, fleet.conf, watchdog.sh, agents conf, SHA256SUMS), second copy on .15 `~/fleet-control-backups/mac-mini-d653eb9/` (checksums match). Scratch run on 127.0.0.1:4879 with copies: 401 without a token, settings and sessions read. Old release kept as `fleet-control-service.before-d653eb9` (238817a). Rollback: bootout, swap the folders back, bootstrap.
+- .15: backup `~/.config/fleet-control/rollback-d653eb9/` (state 32 rows, tokens, unit, fleet.conf, watchdog.sh, agents conf), second copy on .4 `~/fleet-control-backups/local-arch-d653eb9/` (checksums match). Old release `fleet-control-service.before-d653eb9` (238817a). Rollback: stop the unit, swap the folders back, start.
+- The Mac mini gateway runs d653eb9.
+- Live check through the gateway in a headless browser (screens in `docs/goal2/40-45`):
+  - .4 settings: Claude models set to sonnet and haiku from the page; the file held only `agentModels`, mode 0600; the page said the change waits for a restart. After `launchctl kickstart -k` the service log said "settings from …/settings.json", `/api/agents` offered sonnet and haiku, and the page said the running service uses these settings. Putting opus back emptied the file (`{}`); after another restart the service offers sonnet, opus, haiku again.
+  - .4 saved start: a scratch session `live-start` (`sleep 3600` in `~/fleet-agents/sandbox`) on the test fleet socket. The page prefilled the command and folder from tmux, saved them with the typed name, and restarted it: new session id, same command and folder. The saved command was then forgotten from the page and the session removed.
+  - .15 settings part shows the unit's values with nothing set in the file.
+- Found while deploying: the .4 test fleet tmux server (socket `fleet-fctrl-test`) was not running; the cause is unknown (the socket file was last touched 02:54, the watchdog log has no entry about it). probe-shell was recreated by hand (`exec cat`, NO_COLOR unset, TERM xterm-256color).
+
+## Service settings from the page (2026-11-23, released in d653eb9)
 
 Owner decision 2026-11-23: settings saved from the page go to a file the service reads when it starts; nothing changes in the running service.
 
@@ -29,7 +41,7 @@ Live check through that gateway in a headless browser (screens in `docs/goal2/`)
 - 34: the gateway rotated its own token for .15: `token-arch` and the `macbook-gateway` hash on .15 both changed, no staged file left, sessions still read.
 - 35-36: a scratch host entry `mini-scratch` (principal `live-check-gateway` on .4, added with the connect command) removed with revoke: line gone on .4, entry and `token-mini-scratch` gone from the gateway, `client.json` mode still 0600.
 
-## Restart any session with a saved start command (2026-11-23, branch `feat/restart-any-session`, not released)
+## Restart any session with a saved start command (2026-11-23, released in d653eb9)
 
 Owner decision 2026-11-23: a session that is not a managed agent restarts with a command and folder an operator saved for it on the page. Before this, a restart always ran `fleet start`, which launches Claude Code, so a hand-made pane such as `probe-shell` (`exec cat`) did not come back.
 
