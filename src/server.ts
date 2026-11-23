@@ -23,6 +23,7 @@ import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./applic
 import { settingsUseCases, type SettingsDeps } from "./application/settings.ts";
 import { updateUseCases, type UpdateHost } from "./application/updates.ts";
 import { watchdogUseCases, type WatchdogDeps } from "./application/watchdog.ts";
+import { infraUseCases, type InfraDeps } from "./application/infra.ts";
 import { filesUseCases, type FilesDeps } from "./application/files.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
@@ -119,7 +120,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/files" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/fleet/sessions" | "/api/sessions/:name/start" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/api/settings" | "/api/service" | "/api/service/restart" | "/api/service/update" | "/api/watchdog" | "/api/files" | "/api/infra" | "/api/infra/renew" | "/api/infra/services/:name/restart" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -139,6 +140,8 @@ export const MAX_VIEWERS = 16;
 export const RESTART_IDLE_SECONDS = 200;
 // A watchdog start: unload wait, bootstrap retries, settle, cleanup on failure. The gateway waits 60 s.
 export const WATCHDOG_IDLE_SECONDS = 70;
+// A certificate renewal or a restart of another service (docker compose may take a while). The gateway waits 190 s.
+export const INFRA_IDLE_SECONDS = 200;
 
 // The open terminal sockets of one process. Two listeners share one, so together they stay under the cap.
 export class ViewerSlots {
@@ -161,7 +164,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; files?: FilesDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps; settings?: SettingsDeps; updates?: { host: UpdateHost }; watchdog?: WatchdogDeps; files?: FilesDeps; infra?: InfraDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -208,6 +211,22 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   const filesFor = (who: Principal | null) => (deps.files ? filesUseCases(deps.files, who ?? undefined) : null);
   const noFiles = () => Response.json({ error: { kind: "unavailable", message: "the file editor is not set up on this host" } }, { status: 503 });
   const noWatchdog = () => Response.json({ error: { kind: "unavailable", message: "the watchdog service is not configured on this host" } }, { status: 503 });
+  if (deps.infra && !auth) throw new Error("the infrastructure part needs tokens; set FLEET_CONTROL_TOKENS");
+  const infraFor = (who: Principal | null) => (deps.infra ? infraUseCases(deps.infra, who ?? undefined) : null);
+  const noInfra = () => Response.json({ error: { kind: "unavailable", message: "the infrastructure part is not set up on this host" } }, { status: 503 });
+  const infraWrite = (run: (u: ReturnType<typeof infraUseCases>, body: object, req: Request & { params: Record<string, string> }) => Promise<unknown>) =>
+    guard(async (req, srv, who) => {
+      const u = infraFor(who);
+      if (!u) return noInfra();
+      if (!originAllowed(req)) return forbidden();
+      if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+      srv.timeout(req, INFRA_IDLE_SECONDS);
+      try {
+        const body = await jsonBody(req);
+        if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+        return Response.json(await run(u, body, req as Request & { params: Record<string, string> }));
+      } catch (e) { return adminError(e); }
+    });
   const tokensFor = (who: Principal | null) => (deps.tokens ? tokenUseCases(deps.tokens, who ?? undefined) : null);
   const noTokens = () => Response.json({ error: { kind: "unavailable", message: "token administration not configured on this host" } }, { status: 503 });
   // Writes that take a JSON body: Origin checked, the body an object, errors mapped like fleet administration.
@@ -474,6 +493,15 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           } catch (e) { return adminError(e); }
         }),
       },
+      "/api/infra": {
+        GET: guard(async (_req, _s, who) => {
+          const u = infraFor(who);
+          if (!u) return noInfra();
+          try { return Response.json(await u.get(), { headers: { "cache-control": "no-store" } }); } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/infra/renew": { POST: infraWrite((u, body) => u.renew(body)) },
+      "/api/infra/services/:name/restart": { POST: infraWrite((u, body, req) => u.restart(req.params.name!, body)) },
       "/api/tokens": {
         GET: guard(async (_req, _s, who) => {
           const t = tokensFor(who);

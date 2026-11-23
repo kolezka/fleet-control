@@ -21,6 +21,9 @@ import { leaseUseCases } from "./src/application/leases.ts";
 import { findTmux, fleetSocket, tmuxLeaseTerminal } from "./src/fleet/lease-terminal.ts";
 import { FleetAdminHost, serviceLogFromEnv } from "./src/fleet/admin.ts";
 import { findBash, managerOf, WatchdogService } from "./src/fleet/watchdog-service.ts";
+import { findTailscale, HostInfra, type CertFiles } from "./src/fleet/infra.ts";
+import { infraUseCases } from "./src/application/infra.ts";
+import { parseOtherServices } from "./src/domain/infra.ts";
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
@@ -139,6 +142,16 @@ const filesSetup = () => {
 };
 // With fleet administration on, an operator also restarts this service and updates it to a release from the
 // page. A separate updater process does it (scripts/updater.ts); its job files and backups go beside the tokens.
+// The infrastructure part: the service's own certificates, Tailscale Serve (read only), and the services named
+// in FLEET_CONTROL_OTHER_SERVICES, which an operator may restart from the page.
+const infraSetup = async () => {
+  let services;
+  try { services = parseOtherServices(env.FLEET_CONTROL_OTHER_SERVICES); } catch (e) { console.error(`${e instanceof Error ? e.message : e}`); process.exit(1); }
+  const certs: CertFiles[] = [];
+  if (env.FLEET_CONTROL_TLS_CERT && env.FLEET_CONTROL_TLS_KEY) certs.push({ id: "lan", cert: env.FLEET_CONTROL_TLS_CERT, key: env.FLEET_CONTROL_TLS_KEY });
+  if (env.FLEET_CONTROL_TAILNET_TLS_CERT && env.FLEET_CONTROL_TAILNET_TLS_KEY) certs.push({ id: "tailnet", cert: env.FLEET_CONTROL_TAILNET_TLS_CERT, key: env.FLEET_CONTROL_TAILNET_TLS_KEY, name: env.FLEET_CONTROL_TAILNET_NAME });
+  return { host: new HostInfra({ certs, tailscale: await findTailscale(), uid: process.getuid?.() ?? 0 }), services };
+};
 const updatesSetup = () => {
   const home = process.env.HOME ?? "";
   const tokens = process.env.FLEET_CONTROL_TOKENS!;
@@ -189,6 +202,7 @@ const deps = {
     }
     : undefined,
   updates: admin && options.auth ? updatesSetup() : undefined,
+  infra: admin && options.auth ? await infraSetup() : undefined,
   agents: agentSettings
     ? {
       agents: new Agents(store.db),
@@ -223,6 +237,12 @@ if (tailnet) {
     console.error(`tailnet listener failed: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
   }
+}
+if (deps.infra) {
+  // Once at start and then daily: renew the tailnet certificate when it nears its end.
+  const due = () => infraUseCases(deps.infra!).renewIfDue().catch((e) => console.error(`certificate check failed: ${e instanceof Error ? e.message : e}`));
+  void due();
+  setInterval(due, 24 * 3600_000).unref();
 }
 if (admin) console.log(`fleet administration on: fleet.conf ${confPath}, service log ${process.env.FLEET_CONTROL_SERVICE_LOG?.trim() || "not set"}`);
 console.log(`Fleet Control service on ${server.url} (MCP at ${server.url}mcp)`);
