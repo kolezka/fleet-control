@@ -240,6 +240,8 @@ const NUM = /^[0-9]{1,4}$/;
 // fleet start waits up to 90 s for an agent's UI, after which the host answers; leave room above that.
 export const RESTART_TIMEOUT_MS = 180_000;
 export const WATCHDOG_TIMEOUT_MS = 60_000;
+// Restart and update first ask GitHub for the release list and the tag (5 to 15 s when the host's cache is cold).
+export const SERVICE_TIMEOUT_MS = 60_000;
 const INFRA_TIMEOUT_MS = 190_000;
 // Keyset paging on the host lists: the host checks the range and the cursor itself.
 const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
@@ -274,8 +276,8 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "settings") return http("/api/settings", ["GET", "PUT"]);
   // The file editor; the path is checked again on the host against its allowed folders.
   if (seg.length === 1 && a === "files") return http("/api/files", ["GET", "PUT"], { path: /^\/[^\x00-\x1f\x7f]{0,1023}$/ });
-  if (seg.length === 1 && a === "service") return http("/api/service", ["GET"]);
-  if (seg.length === 2 && a === "service" && (b === "restart" || b === "update")) return http(`/api/service/${b}`, ["POST"]);
+  if (seg.length === 1 && a === "service") return { ...http("/api/service", ["GET"]), timeoutMs: SERVICE_TIMEOUT_MS };
+  if (seg.length === 2 && a === "service" && (b === "restart" || b === "update")) return { ...http(`/api/service/${b}`, ["POST"]), timeoutMs: SERVICE_TIMEOUT_MS };
   // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
   if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
   // A renewal asks tailscale for a certificate; a restart of another service may wait on docker compose.
