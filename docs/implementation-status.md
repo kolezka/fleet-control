@@ -2,7 +2,21 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
-## Tokens from the page (2026-11-23, branch `feat/token-admin`, not released)
+## Release 238817a: tokens from the page on .4 and .15 (2026-11-23)
+
+PR #205 merged as 238817a after three Claude Opus review rounds (the owner's exception: DeepSeek answers 402). Full suite at the merged head 591be84: 2015 pass, 0 fail, exit 0.
+
+- .4: release built from `git archive 238817a` plus agent-fleet c916b8d (watchdog unchanged). Backup `~/.config/fleet-control/rollback-238817a/` (state 10 tables 208 rows, tokens, plist, fleet.conf, watchdog.sh, agents conf, SHA256SUMS), second copy on .15 `~/fleet-control-backups/mac-mini-238817a/` (6 OK). Scratch run on 127.0.0.1:4879 first (401 unauth, list without hashes, agent 403, plain-text POST 415). Old folder `fleet-control-service.before-238817a` (997bab3). Rollback: `launchctl bootout`, swap the folders back, `launchctl bootstrap`.
+- .15: same tree; backup `~/.config/fleet-control/rollback-238817a/`, copy on .4 `~/fleet-control-backups/local-arch-238817a/` (6 OK); old folder `fleet-control-service.before-238817a` (997bab3). Active, 401 unauth, list shows `local-operator` as self.
+- Mac mini gateway `~/fleet-control-gateway` moved to 238817a; `/api/hosts` says `enroll: true, manage: true`.
+
+Live check through that gateway in a headless browser (screens in `docs/goal2/`):
+- 30: the .4 token list, names and roles only, `macbook-gateway · this gateway`, not offered for change.
+- 31-33: a scratch `live-check-viewer` added by hand, rotated from the page (new hash in the file, new token shown once, blanked in the screenshot), then revoked (line gone). The tokens file ended byte-equal to the backup.
+- 34: the gateway rotated its own token for .15: `token-arch` and the `macbook-gateway` hash on .15 both changed, no staged file left, sessions still read.
+- 35-36: a scratch host entry `mini-scratch` (principal `live-check-gateway` on .4, added with the connect command) removed with revoke: line gone on .4, entry and `token-mini-scratch` gone from the gateway, `client.json` mode still 0600.
+
+## Tokens from the page (2026-11-23, released in 238817a)
 
 With `FLEET_CONTROL_ADMIN=1` the fleet section also lists the host's tokens file: names and roles only, never hashes. An operator can rotate a line (the new token is shown once on the page, kept nowhere, and only its hash goes into the file) or revoke it, each after typing the name. The file is changed under the same lock as `scripts/tokens.ts`, written atomically with mode 0600, and the running service takes the new file at once (no SIGHUP); sockets of a revoked token close. Any operator may rotate another operator's line and receives its new token: operators are equals here, so this is not an escalation, but it hands over that identity. Refused: the caller's own line (the gateway changes its own link, below), managed `fc-` agent lines (they end with the agent), unknown names, and revoking the last operator. Each check runs again on the file as it is under the lock.
 
