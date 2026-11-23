@@ -646,3 +646,112 @@ test("a restart whose start failed says the session is down, not that the outcom
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("adminStatus").textContent).toBe("A: the old probe-shell session ended, and it did not start again: probe-shell: start FAILED: workspace trust dialog");
 });
+
+test("tokens on a host: the gateway's own and managed lines are listed but not offered, rotate shows the new token once, and the gateway's link is rotated or removed only after the typed id", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const tokens = { tokens: [
+    { name: "macbook-gateway", role: "operator", self: true, managed: false },
+    { name: "watcher", role: "viewer", self: false, managed: false },
+    { name: "fc-run", role: "agent", self: false, managed: true },
+    { name: "orch", role: "agent", self: false, managed: false },
+  ] };
+  const fresh = "N".repeat(43);
+  let hostList: unknown = { hosts: [{ id: "a", name: "A", apiBase: "/api/hosts/a" }], enroll: true, manage: true };
+  const b = await browser(hostList as never, (path, init) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/tokens/orch/rotate")) return { name: "orch", token: fresh };
+    if (path.endsWith("/tokens")) return tokens;
+    if (path === "./api/manage/a/rotate") return { id: "a", principal: "macbook-gateway", rotated: true };
+    if (path === "./api/manage/a/remove") { hostList = { hosts: [], enroll: true, manage: true }; return { id: "a", removed: true, revokedOnHost: true, principal: "macbook-gateway", tokenFileRemoved: true }; }
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("tokenPart").hidden).toBe(false);
+  expect(b.element("tokenRows").innerHTML).toContain("macbook-gateway <small>operator · this gateway</small>");
+  expect(b.element("tokenRows").innerHTML).toContain("fc-run <small>agent · managed agent</small>");
+  expect(b.element("tokenName").innerHTML).toBe('<option value="watcher">watcher</option><option value="orch">orch</option>');
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+
+  await type("tokenName", "orch", "change");
+  await type("tokenAction", "rotate", "change");
+  await type("tokenConfirm", "orc");
+  expect(b.element("tokenGo").disabled).toBe(true);
+  await type("tokenConfirm", "orch");
+  expect(b.element("tokenGo").disabled).toBe(false);
+  await b.listeners.get("tokenGo:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const rot = b.calls.find(c => c.path.endsWith("/tokens/orch/rotate"))!;
+  expect([rot.path, rot.init?.method, JSON.parse(String(rot.init!.body))]).toEqual(["/api/hosts/a/tokens/orch/rotate", "POST", { confirm: "orch" }]);
+  expect(b.element("newTokenBox").hidden).toBe(false);
+  expect(b.element("newTokenText").textContent).toBe(fresh);
+  await b.listeners.get("newTokenDone:click")!({});
+  expect(b.element("newTokenBox").hidden).toBe(true);
+  expect(b.element("newTokenText").textContent).toBe("");
+
+  // The gateway's own link.
+  expect(b.element("hostPart").hidden).toBe(false);
+  expect(b.element("hostRemove").disabled).toBe(true);
+  await type("hostConfirm", "a");
+  expect(b.element("hostRotate").disabled).toBe(false);
+  await b.listeners.get("hostRotate:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const hr = b.calls.find(c => c.path === "./api/manage/a/rotate")!;
+  expect(JSON.parse(String(hr.init!.body))).toEqual({ confirm: "a" });
+  expect(b.element("adminStatus").textContent).toContain("this gateway now uses a new token");
+
+  await type("hostConfirm", "a");
+  b.element("hostRevoke").checked = false;
+  await b.listeners.get("hostRevoke:change")!({});
+  await b.listeners.get("hostRemove:click")!({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const rm = b.calls.find(c => c.path === "./api/manage/a/remove")!;
+  expect(JSON.parse(String(rm.init!.body))).toEqual({ confirm: "a", revoke: false });
+});
+
+test("a host without the tokens route hides the tokens part, and a gateway without manage hides the link part", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const b = await browser([{ id: "a", name: "A", apiBase: "/api/hosts/a" }], (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/tokens")) return { __status: 404, error: { message: "not found" } };
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("adminBox").hidden).toBe(false);
+  expect(b.element("tokenPart").hidden).toBe(true);
+  expect(b.element("hostPart").hidden).toBe(true);
+});
+
+test("a token refusal the gateway relays as upstream_forbidden reads as not changed, and a shown token is gone after picking another host", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const tokens = { tokens: [{ name: "watcher", role: "viewer", self: false, managed: false }] };
+  let refuse = true;
+  const b = await browser({ hosts: [{ id: "a", name: "A", apiBase: "/api/hosts/a" }, { id: "c", name: "C", apiBase: "/api/hosts/c" }] } as never, (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/tokens/watcher/rotate")) return refuse ? { __status: 502, error: { kind: "upstream_forbidden", message: "host refused the request" } } : { name: "watcher", token: "T".repeat(43) };
+    if (path.endsWith("/tokens")) return tokens;
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  const rotate = async () => {
+    await type("tokenAction", "rotate", "change");
+    await type("tokenConfirm", "watcher");
+    await b.listeners.get("tokenGo:click")!({});
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  await rotate();
+  expect(b.element("adminStatus").textContent).toBe("A: watcher not changed: the host refused this gateway (host refused the request).");
+  refuse = false;
+  await rotate();
+  expect(b.element("newTokenText").textContent).toBe("T".repeat(43));
+  await b.click({ host: "c" });
+  await b.click({ host: "a" });
+  expect(b.element("newTokenBox").hidden).toBe(true);
+  expect(b.element("newTokenText").textContent).toBe("");
+  // Picking a session on the other host also switches host, so it clears the shown token too.
+  await rotate();
+  expect(b.element("newTokenText").textContent).toBe("T".repeat(43));
+  await b.click({ host: "c", session: "s" });
+  await b.click({ host: "a", session: "s" });
+  expect(b.element("newTokenText").textContent).toBe("");
+});

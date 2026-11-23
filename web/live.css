@@ -77,3 +77,8 @@ a.hostbutton:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .fleetadmin .logtext:empty { display: none; }
 .fleetadmin button.destructive { color: var(--bad); border-color: var(--bad); }
 .fleetadmin textarea#confText { min-height: 160px; resize: vertical; padding: 6px; background: var(--terminal); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }
+.fleetadmin .tokenrows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+.fleetadmin .tokenrows small { color: var(--muted); }
+.fleetadmin .newtoken { display: grid; gap: 6px; padding: 6px; border: 1px solid var(--warn); border-radius: 4px; }
+.fleetadmin .newtoken code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; user-select: all; }
+.fleetadmin .checkrow { display: flex; gap: 6px; align-items: center; font-size: 12px; }

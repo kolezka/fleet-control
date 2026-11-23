@@ -19,6 +19,7 @@ import type { LeaseUseCases } from "./application/leases.ts";
 import { LeaseError, MAX_INPUT_BYTES } from "./domain/leases.ts";
 import { AdminError } from "./domain/fleet-admin.ts";
 import { adminUseCases, type AdminDeps } from "./application/fleet-admin.ts";
+import { tokenUseCases, type TokenAdminDeps, type TokenUseCases } from "./application/token-admin.ts";
 
 const httpStatus: Record<FleetError["kind"], number> = {
   invalid_name: 400,
@@ -114,7 +115,7 @@ function sameOrigin(req: Request): boolean {
   return origin !== null && origin === new URL(req.url).origin;
 }
 
-type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/mcp";
+type Routes = "/api/hosts" | "/" | "/login" | "/api/login" | "/logout" | "/api/whoami" | "/api/sessions" | "/api/sessions/:name/screen" | "/api/sessions/:name/terminal" | "/api/terminal" | "/api/commands" | "/api/commands/:id" | "/api/requests" | "/api/requests/:id/resolve" | "/api/agents" | "/api/agents/:name/stop" | "/api/sessions/:name/lease" | "/api/leases" | "/api/fleet/conf" | "/api/fleet/logs" | "/api/sessions/:name/restart" | "/api/tokens" | "/api/tokens/:name/rotate" | "/api/tokens/:name/revoke" | "/api/token/replace" | "/api/token/revoke" | "/mcp";
 
 export type Peer = { name: string; url: string };
 
@@ -154,7 +155,7 @@ function hostLabel(): string {
 const unauthorized = () =>
   Response.json({ error: { kind: "unauthorized", message: "missing or invalid token" } }, { status: 401, headers: { "www-authenticate": "Bearer" } });
 
-export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps }, port = 4871, opts: ServeOptions = {}) {
+export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: TerminalDeps; control?: ControlDeps; agents?: AgentDeps; input?: LeaseUseCases; admin?: AdminDeps; tokens?: TokenAdminDeps }, port = 4871, opts: ServeOptions = {}) {
   const hostname = opts.hostname ?? "127.0.0.1";
   if (!isLoopback(hostname) && !opts.auth) throw new Error(`refusing to bind ${hostname} without auth; set FLEET_CONTROL_TOKENS`);
   const auth = opts.auth;
@@ -177,6 +178,22 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
   if (deps.admin && !auth) throw new Error("fleet administration needs tokens; set FLEET_CONTROL_TOKENS");
   const adminFor = (who: Principal | null) => (deps.admin ? adminUseCases(deps.admin, who ?? undefined) : null);
   const noAdmin = () => Response.json({ error: { kind: "unavailable", message: "fleet administration not configured on this host" } }, { status: 503 });
+  if (deps.tokens && !auth) throw new Error("token administration needs tokens; set FLEET_CONTROL_TOKENS");
+  const tokensFor = (who: Principal | null) => (deps.tokens ? tokenUseCases(deps.tokens, who ?? undefined) : null);
+  const noTokens = () => Response.json({ error: { kind: "unavailable", message: "token administration not configured on this host" } }, { status: 503 });
+  // Writes that take a JSON body: Origin checked, the body an object, errors mapped like fleet administration.
+  const tokenWrite = (run: (t: TokenUseCases, body: Record<string, unknown>, req: any) => Promise<unknown>) => guard(async (req, _s, who) => {
+    const t = tokensFor(who);
+    if (!t) return noTokens();
+    if (!originAllowed(req)) return forbidden();
+    if ((req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== "application/json") return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
+    try {
+      const body = await jsonBody(req);
+      if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });
+      // A new token is shown once; no cache may keep it.
+      return Response.json(await run(t, body as Record<string, unknown>, req), { headers: { "cache-control": "no-store" } });
+    } catch (e) { return adminError(e); }
+  });
   const jsonBody = async (req: Request) => {
     const body: unknown = await req.json().catch(() => null);
     return body && typeof body === "object" && !Array.isArray(body) ? body : null;
@@ -333,6 +350,19 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
           } catch (e) { return adminError(e); }
         }),
       },
+      // The tokens file: operator only. Names and roles, never hashes.
+      "/api/tokens": {
+        GET: guard(async (_req, _s, who) => {
+          const t = tokensFor(who);
+          if (!t) return noTokens();
+          try { return Response.json(await t.list()); } catch (e) { return adminError(e); }
+        }),
+      },
+      "/api/tokens/:name/rotate": { POST: tokenWrite((t, body, req) => t.rotate(req.params.name, body)) },
+      "/api/tokens/:name/revoke": { POST: tokenWrite((t, body, req) => t.revoke(req.params.name, body)) },
+      // The caller's own token: a gateway replaces it with a hash it made, or gives it up.
+      "/api/token/replace": { POST: tokenWrite((t, body) => t.replaceOwn(body)) },
+      "/api/token/revoke": { POST: tokenWrite((t, body) => t.revokeOwn(body)) },
       "/api/agents/:name/stop": {
         POST: guard(async (req, _s, who) => {
           const agents = agentsFor(who);

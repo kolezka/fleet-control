@@ -184,7 +184,7 @@ test("a gateway with no hosts starts only when adding hosts is on, and the first
       }
       expect(out).toContain("no hosts yet; add one at /add-host");
       const url = /Fleet Control client on (http:\/\/127\.0\.0\.1:\d+\/)/.exec(out)![1]!;
-      expect(await (await fetch(`${url}api/hosts`)).json()).toEqual({ hosts: [], enroll: true });
+      expect(await (await fetch(`${url}api/hosts`)).json()).toEqual({ hosts: [], enroll: true, manage: true });
       expect((await fetch(`${url}add-host`)).status).toBe(200);
     } finally { on.kill(); await on.exited; }
 
