@@ -29,7 +29,7 @@ export function watchdogUseCases(deps: WatchdogDeps, caller?: Caller) {
       throw new AdminError("invalid", `fleet.conf does not load: ${e instanceof Error ? e.message : e}`);
     }
     // The watchdog would run on the remote host; a service here would watch nothing.
-    if (f.remote) throw new AdminError("unavailable", "this fleet runs over REMOTE_SSH; run its watchdog on that host");
+    if (f.remote) throw new AdminError("failed", "this fleet runs over REMOTE_SSH; run its watchdog on that host");
     return { fleet: f.fleet, dir: f.dir, socket: f.socket };
   };
   return {
@@ -44,9 +44,10 @@ export function watchdogUseCases(deps: WatchdogDeps, caller?: Caller) {
       return serial(async () => {
         const f = await fleet();
         const now = await deps.watchdog.state(f);
-        if (!now.manager) throw new AdminError("unavailable", "this host has neither launchd nor systemd, so the page cannot run the watchdog as a service");
+        if (!now.manager) throw new AdminError("failed", "this host has neither launchd nor systemd, so the page cannot run the watchdog as a service");
         if (on) {
-          // Two watchdogs would both nudge and replace the same agents.
+          // Two watchdogs would both nudge and replace the same agents. A hand start right after this check
+          // still slips through; the page then shows both (state() reports running and inTmux).
           if (now.inTmux) throw new AdminError("conflict", `a watchdog already runs in tmux session ${f.fleet}-watchdog; stop it with fleet watchdog stop first`);
           if (!now.running) await deps.watchdog.start(f);
         } else if (now.installed || now.running) {

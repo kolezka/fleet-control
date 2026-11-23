@@ -30,7 +30,9 @@ export async function findBash(candidates = ["/opt/homebrew/bin/bash", "/usr/loc
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 // systemd unit values: quote words with spaces, double % and backslashes.
+// In ExecStart systemd also expands $VAR, so $ is doubled there.
 const unitWord = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%")}"`;
+const execWord = (s: string) => unitWord(s).replace(/\$/g, "$$$$");
 const LOG = "watchdog.service.log";
 
 export function launchdPlist(label: string, f: WatchdogFleet, bash: string, path: string): string {
@@ -64,7 +66,7 @@ Description=agent-fleet watchdog for fleet ${f.fleet} (set up by Fleet Control)
 [Service]
 WorkingDirectory=${f.dir.replace(/%/g, "%%")}
 Environment=${unitWord(`PATH=${path}`)}
-ExecStart=${unitWord(bash)} ${unitWord(join(f.dir, "watchdog.sh"))} --quiet-start
+ExecStart=${execWord(bash)} ${execWord(join(f.dir, "watchdog.sh"))} --quiet-start
 Restart=on-failure
 RestartSec=30
 # Only the watchdog itself stops: tmux servers and agents it started keep running.
@@ -103,13 +105,17 @@ export class WatchdogService implements WatchdogHost {
   private async inTmux(f: WatchdogFleet) {
     const tmux = this.opts.tmuxBin ?? "tmux";
     const r = await run([tmux, ...(f.socket ? ["-L", f.socket, "-f", "/dev/null"] : []), "has-session", "-t", `=${f.fleet}-watchdog`]);
-    return r.exitCode === 0;
+    if (r.exitCode === 0) return true;
+    // Only a plain "not there" counts as no watchdog; any other tmux error must not let a second one start.
+    if (/can't find session|no server running|error connecting to/i.test(r.stderr)) return false;
+    throw new AdminError("conflict", `cannot tell whether a watchdog runs in tmux (${r.stderr.trim() || `tmux exited ${r.exitCode}`})`);
   }
 
   private async pid(name: string): Promise<number | null> {
     if (this.opts.manager === "launchd") {
       const r = await this.launchctl("print", `gui/${this.opts.uid}/${name}`);
-      const m = r.exitCode === 0 ? /^\s*pid = (\d+)$/m.exec(r.stdout) : null;
+      // launchd's top-level "\tpid = N" line, not a nested block's.
+      const m = r.exitCode === 0 ? /^\tpid = (\d+)$/m.exec(r.stdout) : null;
       return m ? Number(m[1]) : null;
     }
     const r = await this.systemctl("show", "-p", "MainPID", "--value", name);
@@ -126,6 +132,10 @@ export class WatchdogService implements WatchdogHost {
     return { manager: this.opts.manager, name, installed, running: pid !== null, pid, inTmux };
   }
 
+  private async loaded(name: string) {
+    return (await this.launchctl("print", `gui/${this.opts.uid}/${name}`)).exitCode === 0;
+  }
+
   private async lastLog(f: WatchdogFleet) {
     const t = await readFile(join(f.dir, LOG), "utf8").catch(() => "");
     return t.trim().split("\n").slice(-3).join(" ") || "no output";
@@ -133,25 +143,37 @@ export class WatchdogService implements WatchdogHost {
 
   async start(f: WatchdogFleet): Promise<void> {
     const manager = this.opts.manager!;
-    if (!this.opts.bash) throw new AdminError("unavailable", "no bash 4 or newer on this host; the watchdog needs it (on macOS: brew install bash)");
-    if (!(await Bun.file(join(f.dir, "watchdog.sh")).exists())) throw new AdminError("unavailable", `${join(f.dir, "watchdog.sh")} is missing; run fleet sync first`);
+    if (!this.opts.bash) throw new AdminError("failed", "no bash 4 or newer on this host; the watchdog needs it (on macOS: brew install bash)");
+    if (!(await Bun.file(join(f.dir, "watchdog.sh")).exists())) throw new AdminError("failed", `${join(f.dir, "watchdog.sh")} is missing; run fleet sync first`);
     const name = watchdogName(manager, f.fleet);
     const file = this.file(name);
     await mkdir(join(file, ".."), { recursive: true });
-    if (manager === "launchd") {
-      await writeFile(file, launchdPlist(name, f, this.opts.bash, this.opts.path), { mode: 0o644 });
-      const r = await this.launchctl("bootstrap", `gui/${this.opts.uid}`, file);
-      // Already loaded (a stopped KeepAlive job): kick it instead.
-      if (r.exitCode !== 0) {
-        const k = await this.launchctl("kickstart", `gui/${this.opts.uid}/${name}`);
-        if (k.exitCode !== 0) throw new AdminError("failed", `launchctl could not start ${name}: ${(r.stderr || k.stderr).trim()}`);
+    try {
+      if (manager === "launchd") {
+        // A job still loaded (exited, or loaded by hand) keeps its old definition: unload it first, and wait
+        // until launchd has let go, or the bootstrap fails with 5.
+        if (await this.loaded(name)) {
+          await this.launchctl("bootout", `gui/${this.opts.uid}/${name}`);
+          for (let i = 0; i < 50 && await this.loaded(name); i++) await Bun.sleep(100);
+        }
+        await writeFile(file, launchdPlist(name, f, this.opts.bash, this.opts.path), { mode: 0o644 });
+        let r = await this.launchctl("bootstrap", `gui/${this.opts.uid}`, file);
+        for (let i = 0; r.exitCode !== 0 && /: (5|37):/.test(r.stderr) && i < 4; i++) {
+          await Bun.sleep(500 * 2 ** i);
+          r = await this.launchctl("bootstrap", `gui/${this.opts.uid}`, file);
+        }
+        if (r.exitCode !== 0) throw new AdminError("failed", `launchctl could not start ${name}: ${r.stderr.trim()}`);
+      } else {
+        await writeFile(file, systemdUnit(f, this.opts.bash, this.opts.path), { mode: 0o644 });
+        const d = await this.systemctl("daemon-reload");
+        if (d.exitCode !== 0) throw new AdminError("failed", `systemctl daemon-reload failed: ${d.stderr.trim()}`);
+        const r = await this.systemctl("enable", "--now", name);
+        if (r.exitCode !== 0) throw new AdminError("failed", `systemctl could not start ${name}: ${r.stderr.trim()}`);
       }
-    } else {
-      await writeFile(file, systemdUnit(f, this.opts.bash, this.opts.path), { mode: 0o644 });
-      const d = await this.systemctl("daemon-reload");
-      if (d.exitCode !== 0) throw new AdminError("failed", `systemctl daemon-reload failed: ${d.stderr.trim()}`);
-      const r = await this.systemctl("enable", "--now", name);
-      if (r.exitCode !== 0) throw new AdminError("failed", `systemctl could not start ${name}: ${r.stderr.trim()}`);
+    } catch (e) {
+      // A file left behind would read as installed but off.
+      await this.stop(f).catch(() => undefined);
+      throw e;
     }
     // A watchdog that cannot load fleet.conf or finds an old bash exits at once.
     await Bun.sleep(this.opts.settleMs ?? 2_000);

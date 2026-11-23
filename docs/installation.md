@@ -144,7 +144,7 @@ ssh me@192.168.50.4 'tail -20 ~/Library/Logs/fleet-control.log'
 Remove completely:
 
 ```bash
-ssh me@192.168.50.4 'launchctl bootout gui/$(id -u)/pl.raqz.fleet-control; rm ~/Library/LaunchAgents/pl.raqz.fleet-control.plist; tmux -L fleet-fctrl-test kill-server'
+ssh me@192.168.50.4 'launchctl bootout gui/$(id -u)/pl.raqz.fleet-watchdog.fctrl-test; rm -f ~/Library/LaunchAgents/pl.raqz.fleet-watchdog.fctrl-test.plist; launchctl bootout gui/$(id -u)/pl.raqz.fleet-control; rm ~/Library/LaunchAgents/pl.raqz.fleet-control.plist; tmux -L fleet-fctrl-test kill-server'
 claude mcp remove --scope user fleet-control-mini
 # optional: rm -rf ~/Development/fleet-control-service ~/.config/fleet-control ~/.local/share/fleet-control "~/Library/Application Support/fleet-control" on .4
 ```
@@ -177,7 +177,7 @@ systemd user unit `fleet-control.service` for user `me` on `me-desktop` (Manjaro
 | Tokens (hashes with roles) and plain tokens of `local-orchestrator` (agent) and `local-operator` (operator), kept on `.15` with the owner's approval until the MacBook gateway takes the operator token | `~/.config/fleet-control/` (dir 700, files 600) |
 | Log | `journalctl --user -u fleet-control` |
 
-Operate: `systemctl --user status|restart fleet-control`. Remove: `systemctl --user disable --now fleet-control`, delete the unit, `tmux -L fleet-fctrl-test kill-server`. After a reboot the unit starts, `probe-shell` does not: `tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"`.
+Operate: `systemctl --user status|restart fleet-control`. Remove: turn the watchdog off on the page first, or `systemctl --user disable --now fleet-watchdog-fctrl-test.service` and delete that unit too; then `systemctl --user disable --now fleet-control`, delete the unit, `tmux -L fleet-fctrl-test kill-server`. After a reboot the unit starts, `probe-shell` does not: `tmux -L fleet-fctrl-test -f /dev/null new-session -d -s probe-shell -x 120 -y 30 "exec cat"`.
 
 ## launchd draft (history)
 

@@ -239,6 +239,7 @@ type Target =
 const NUM = /^[0-9]{1,4}$/;
 // fleet start waits up to 90 s for an agent's UI, after which the host answers; leave room above that.
 export const RESTART_TIMEOUT_MS = 180_000;
+export const WATCHDOG_TIMEOUT_MS = 60_000;
 // Keyset paging on the host lists: the host checks the range and the cursor itself.
 const PAGE_QUERY = { limit: NUM, cursor: /^[A-Za-z0-9_-]{1,4096}$/ };
 
@@ -270,7 +271,8 @@ function matchRoute(seg: string[]): Target | null {
   // The host's tokens file. The gateway's own line changes only through /api/manage, never from here.
   if (seg.length === 1 && a === "tokens") return http("/api/tokens", ["GET"]);
   if (seg.length === 1 && a === "settings") return http("/api/settings", ["GET", "PUT"]);
-  if (seg.length === 1 && a === "watchdog") return http("/api/watchdog", ["GET", "PUT"]);
+  // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
+  if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
   if (seg.length === 3 && a === "tokens" && ok(b) && (c === "rotate" || c === "revoke")) return http(`/api/tokens/${b}/${c}`, ["POST"]);
   if (seg.length === 1 && a === "mcp") return { kind: "mcp" };
   return null;

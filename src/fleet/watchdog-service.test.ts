@@ -38,6 +38,8 @@ describe("watchdog rules", () => {
   });
 
   test("the service files run watchdog.sh from FLEET_DIR with bash 4 and keep agents alive on stop", () => {
+    // systemd expands $VAR in ExecStart: a literal $ in a folder name must be written $$.
+    expect(systemdUnit({ fleet: "t", dir: "/x/$HOME 100%", socket: "" }, "/b/bash", "/p")).toContain('ExecStart="/b/bash" "/x/$$HOME 100%%/watchdog.sh" --quiet-start');
     const f = { fleet: "t", dir: "/home/x/fleet 100%", socket: "fleet-t" };
     const unit = systemdUnit(f, "/usr/bin/bash", "/usr/bin:/bin");
     expect(unit).toContain('ExecStart="/usr/bin/bash" "/home/x/fleet 100%%/watchdog.sh" --quiet-start');
@@ -72,6 +74,8 @@ describe("watchdog rules", () => {
     await expect(op.set({ on: true, confirm: "watchdog" })).rejects.toThrow("a watchdog already runs in tmux session t-watchdog; stop it with fleet watchdog stop first");
     inTmux = false; remote = "ssh x";
     await expect(op.get()).rejects.toThrow("this fleet runs over REMOTE_SSH; run its watchdog on that host");
+    // A refusal the operator can act on is 422 on the wire; 503 would reach the page as "unknown".
+    expect(await op.get().catch((e) => e.kind)).toBe("failed");
     expect(calls).toEqual(["start", "stop"]);
   });
 });
@@ -184,3 +188,163 @@ else if (cmd === "bootout") { if (!alive()) { console.error("No such process"); 
     }
   });
 });
+
+// Stand-ins that model what matters for a stop: launchd kills the job's whole process group unless the plist
+// sets AbandonProcessGroup; systemd kills the unit's processes unless KillMode=process. A loaded launchd job
+// keeps its old definition until bootout, and a bootstrap of a loaded label fails with 5.
+const MANAGERS = `
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync, openSync } from "node:fs";
+import { dirname, join } from "node:path";
+const home = process.env.STANDIN_HOME;
+const tool = process.argv[1].split("/").pop();
+const a = process.argv.slice(2).filter((x) => x !== "--user");
+appendFileSync(join(home, "calls"), tool + " " + a.join(" ") + "\\n");
+const st = join(home, "state.json");
+const S = existsSync(st) ? JSON.parse(readFileSync(st, "utf8")) : {};
+const save = () => writeFileSync(st, JSON.stringify(S));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const start = (argv, cwd, out, path) => { const fd = openSync(out, "a"); const p = Bun.spawn(argv, { cwd, stdio: ["ignore", fd, fd], detached: true, env: { HOME: process.env.HOME, PATH: path } }); p.unref(); return p.pid; };
+const kill = (pid, group) => { try { process.kill(group ? -pid : pid, "SIGTERM"); } catch {} };
+const un = (x) => x.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+if (tool === "launchctl") {
+  const [cmd, target, file] = a;
+  const label = cmd === "bootstrap" ? /<key>Label<\\/key><string>([^<]*)</.exec(readFileSync(file, "utf8"))[1] : target.split("/").pop();
+  const job = S[label];
+  if (cmd === "bootstrap") {
+    if (job) { console.error("Bootstrap failed: 5: Input/output error"); process.exit(5); }
+    const x = readFileSync(file, "utf8");
+    let argv = [...x.split("<key>ProgramArguments</key><array>")[1].split("</array>")[0].matchAll(/<string>([^<]*)<\\/string>/g)].map((m) => un(m[1]));
+    if (argv[0] === "/usr/bin/caffeinate") argv = argv.slice(2);
+    const out = un(/<key>StandardOutPath<\\/key><string>([^<]*)</.exec(x)[1]);
+    const path = un(/<key>PATH<\\/key><string>([^<]*)</.exec(x)[1]);
+    S[label] = { argv, abandon: x.includes("<key>AbandonProcessGroup</key><true/>"), pid: start(argv, dirname(argv[1]), out, path), out, path };
+    save();
+  } else if (cmd === "print") {
+    if (!job) { console.error("Could not find service"); process.exit(113); }
+    console.log("gui/501/" + label + " = {\\n\\tstate = " + (alive(job.pid) ? "running" : "not running") + (alive(job.pid) ? "\\n\\tpid = " + job.pid : "") + "\\n\\tendpoints = {\\n\\t\\tpid = 1\\n\\t}\\n}");
+  } else if (cmd === "bootout") {
+    if (!job) { console.error("Boot-out failed: 3: No such process"); process.exit(3); }
+    kill(job.pid, !job.abandon); delete S[label]; save(); await Bun.sleep(200);
+  } else if (cmd === "kickstart") {
+    if (!job) process.exit(113);
+    if (!alive(job.pid)) { job.pid = start(job.argv, dirname(job.argv[1]), job.out, job.path); save(); }
+  }
+} else {
+  const [cmd, ...rest] = a;
+  const name = rest.at(-1);
+  const unitFile = join(home, ".config/systemd/user", name ?? "");
+  if (cmd === "daemon-reload") {}
+  else if (cmd === "enable") {
+    const x = readFileSync(unitFile, "utf8");
+    const words = [...(/^ExecStart=(.*)$/m.exec(x)[1]).matchAll(/"((?:[^"\\\\]|\\\\.)*)"|(\\S+)/g)].map((m) => (m[1] ?? m[2]).replace(/\\$\\$/g, "$").replace(/%%/g, "%").replace(/\\\\(.)/g, "$1"));
+    const out = /^StandardOutput=append:(.*)$/m.exec(x)[1].replace(/%%/g, "%");
+    const path = /^Environment="PATH=(.*)"$/m.exec(x)[1].replace(/%%/g, "%");
+    S[name] = { pid: start(words, dirname(words[1]), out, path), killProcessOnly: /^KillMode=process$/m.test(x), argv: words };
+    save();
+  } else if (cmd === "show") { console.log(S[name] && alive(S[name].pid) ? S[name].pid : 0); }
+  else if (cmd === "disable") { if (S[name]) { kill(S[name].pid, !S[name].killProcessOnly); delete S[name]; save(); await Bun.sleep(200); } }
+}
+`;
+
+describe.skipIf(bash === null)("stop keeps agents, on launchd and systemd (stand-in managers)", () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "fleet-control-wd-model-"));
+    for (const tool of ["launchctl", "systemctl"]) { await writeFile(join(dir, tool), `#!${process.execPath}\n${MANAGERS}`); await chmod(join(dir, tool), 0o755); }
+    process.env.STANDIN_HOME = dir;
+  });
+  afterAll(async () => {
+    const st = JSON.parse(await readFile(join(dir, "state.json"), "utf8").catch(() => "{}")) as Record<string, { pid: number }>;
+    for (const j of Object.values(st)) { try { process.kill(-j.pid); } catch {} }
+    delete process.env.STANDIN_HOME;
+    if (dir.includes("fleet-control-wd-model-")) await rm(dir, { recursive: true, force: true });
+  });
+
+  // A watchdog that starts an "agent" in its own process group and then loops, as a real one does.
+  const fakeFleet = async (name: string) => {
+    const fdir = join(dir, `fleet $HOME ${name}`);
+    await Bun.write(join(fdir, "watchdog.sh"), `echo "watchdog up PATH=$PATH"\n/bin/sleep 300 &\necho $! > agent.pid\nwhile true; do /bin/sleep 1; done\n`);
+    return { fleet: name, dir: fdir, socket: "" };
+  };
+  const agentAlive = async (f: { dir: string }) => { const pid = Number(await readFile(join(f.dir, "agent.pid"), "utf8")); try { process.kill(pid, 0); return pid; } catch { return 0; } };
+  const service = (manager: "launchd" | "systemd", path = "/usr/bin:/bin") => new WatchdogService({ manager, home: dir, uid: 501, bash: bash!, path, launchctl: join(dir, "launchctl"), systemctl: join(dir, "systemctl"), tmuxBin: "/usr/bin/false", settleMs: 600 });
+
+  for (const manager of ["launchd", "systemd"] as const) {
+    test(`${manager}: on starts watchdog.sh from a folder with spaces and $, off stops only the watchdog, and the agent it started keeps running`, async () => {
+      const f = await fakeFleet(manager);
+      const w = service(manager);
+      // tmux as /usr/bin/false: an error other than "no session" refuses rather than guessing.
+      await expect(w.state(f)).rejects.toThrow("cannot tell whether a watchdog runs in tmux");
+      const ok = new WatchdogService({ ...w.opts, tmuxBin: undefined });
+      const st = { ...f, socket: `fc-wd-none-${process.pid}` };
+      await ok.start(st);
+      const on = await ok.state(st);
+      expect([on.running, on.installed, on.inTmux]).toEqual([true, true, false]);
+      for (let i = 0; i < 30 && !(await Bun.file(join(f.dir, "agent.pid")).exists()); i++) await Bun.sleep(100);
+      const agent = await agentAlive(f);
+      expect(agent).toBeGreaterThan(0);
+      expect(await readFile(join(f.dir, "watchdog.service.log"), "utf8")).toContain("watchdog up PATH=/usr/bin:/bin");
+      await ok.stop(st);
+      expect((await ok.state(st)).running).toBe(false);
+      expect(await agentAlive(f)).toBe(agent);
+      process.kill(agent);
+    }, 20_000);
+  }
+
+  test("launchd: a job still loaded with an old definition is unloaded first, so the new plist is the one that runs", async () => {
+    const f = await fakeFleet("stale");
+    const st = { ...f, socket: `fc-wd-none-${process.pid}` };
+    const old = new WatchdogService({ ...service("launchd", "/old/path").opts, tmuxBin: undefined });
+    await old.start(st);
+    // The watchdog exits (END_AT, or killed): the job stays loaded with the old definition.
+    const S = JSON.parse(await readFile(join(dir, "state.json"), "utf8"));
+    process.kill(-S["pl.raqz.fleet-watchdog.stale"].pid);
+    await Bun.sleep(300);
+    const w = new WatchdogService({ ...service("launchd", "/new/path").opts, tmuxBin: undefined });
+    expect((await w.state(st)).running).toBe(false);
+    await w.start(st);
+    let log = "";
+    for (let i = 0; i < 30 && !log.includes("/new/path"); i++) { await Bun.sleep(100); log = await readFile(join(f.dir, "watchdog.service.log"), "utf8"); }
+    expect(log.trim().split("\n").at(-1)).toBe("watchdog up PATH=/new/path");
+    const calls = (await readFile(join(dir, "calls"), "utf8")).split("\n").filter((l) => l.includes("stale") && !l.includes(" print "));
+    expect(calls.slice(-2).map((l) => l.split(" ").slice(0, 2).join(" "))).toEqual(["launchctl bootout", "launchctl bootstrap"]);
+    await w.stop(st);
+    try { process.kill(Number(await readFile(join(f.dir, "agent.pid"), "utf8"))); } catch {}
+  }, 20_000);
+
+  test("a start the manager refuses leaves no file behind, and refusals the operator can fix are 422, not 503", async () => {
+    const f = await fakeFleet("refused");
+    const st = { ...f, socket: `fc-wd-none-${process.pid}` };
+    await writeFile(join(dir, "systemctl-fail"), "");
+    const broken = join(dir, "systemctl-broken");
+    await writeFile(broken, `#!/bin/sh\n[ "$2" = enable ] && { echo "Failed to enable unit: Access denied" >&2; exit 1; }\nexit 0\n`);
+    await chmod(broken, 0o755);
+    const w = new WatchdogService({ ...service("systemd").opts, systemctl: broken, tmuxBin: undefined });
+    await expect(w.start(st)).rejects.toThrow("systemctl could not start fleet-watchdog-refused.service: Failed to enable unit: Access denied");
+    expect(await Bun.file(join(dir, ".config/systemd/user/fleet-watchdog-refused.service")).exists()).toBe(false);
+    const nob = new WatchdogService({ ...w.opts, bash: null });
+    await nob.start(st).catch((e) => { expect([e.kind, e.message]).toEqual(["failed", "no bash 4 or newer on this host; the watchdog needs it (on macOS: brew install bash)"]); });
+    const nos = new WatchdogService({ ...w.opts });
+    await nos.start({ ...st, dir: join(dir, "nowhere") }).catch((e) => { expect(e.kind).toBe("failed"); });
+  });
+});
+
+test("the gateway waits for a slow watchdog start instead of answering 504 after its usual 10 s", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fleet-control-wd-slow-"));
+  const op = newToken();
+  await writeFile(join(dir, "tokens"), `${tokenLine("op", op, "operator")}\n`);
+  let running = false;
+  const slow = {
+    state: async () => ({ manager: "launchd" as const, name: "pl.raqz.fleet-watchdog.t", installed: running, running, pid: running ? 1 : null, inTmux: false }),
+    start: async () => { await Bun.sleep(11_000); running = true; },
+    stop: async () => { running = false; },
+  };
+  const host = { read: async () => "", facts: async () => ({ fleet: "t", dir, socket: "", remote: "", sessions: [] }) };
+  const server = serve({ fleet: { status: async () => ({ sessions: [], raw: "" }), screen: async () => "" } as never, store: new Store(":memory:"), watchdog: { host: host as never, watchdog: slow } }, 0, { auth: await Auth.fromFile(join(dir, "tokens")) });
+  const gateway = startGateway({ hosts: [{ id: "h", name: "H", origin: server.url.origin }], credentials: new Credentials(new Map([["h", op]])) }, { port: 0 });
+  try {
+    const r = await fetch(`${gateway.url.origin}/api/hosts/h/watchdog`, { method: "PUT", headers: { origin: gateway.url.origin, "content-type": "application/json" }, body: JSON.stringify({ on: true, confirm: "watchdog" }) });
+    expect(r.status).toBe(200);
+    expect((await r.json()).running).toBe(true);
+  } finally { gateway.stop(true); server.stop(true); await rm(dir, { recursive: true, force: true }); }
+}, 30_000);

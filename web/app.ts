@@ -40,6 +40,8 @@ export function modelDetail(m: Model): string {
 
 const READ_TIMEOUT_MS = 8000;
 const WRITE_TIMEOUT_MS = 15000;
+// The gateway gives a watchdog start 60 s; the page waits a little longer.
+const WATCHDOG_TIMEOUT_MS = 65000;
 const SHOWN_COMMANDS = 6;
 
 // One call to one host. A 401 from a single host service means this page has no sign-in: go to /login.
@@ -712,7 +714,7 @@ function renderAdmin(h: HostState | undefined) {
   $("watchdogPart").hidden = v.watchdog === null;
   if (v.watchdog) {
     const w = v.watchdog;
-    $("watchdogState").textContent = !w.manager ? "This host has neither launchd nor systemd." : w.running ? `On: ${w.name} runs (pid ${w.pid}). It checks every agent every 60 s and starts again after a reboot.` : w.inTmux ? `Off as a service. A watchdog started by hand runs in tmux session ${w.fleet}-watchdog.` : `Off: no watchdog checks the agents of ${w.fleet}.`;
+    $("watchdogState").textContent = !w.manager ? "This host has neither launchd nor systemd." : w.running && w.inTmux ? `On: ${w.name} runs (pid ${w.pid}), and a second watchdog runs by hand in tmux session ${w.fleet}-watchdog. Stop that one with fleet watchdog stop.` : w.running ? `On: ${w.name} runs (pid ${w.pid}). It checks every agent every 60 s and starts again at login.` : w.inTmux ? `Off as a service. A watchdog started by hand runs in tmux session ${w.fleet}-watchdog.` : `Off: no watchdog checks the agents of ${w.fleet}.`;
     const wc = $("watchdogConfirm") as HTMLInputElement;
     if (wc.value !== v.watchdogConfirm) wc.value = v.watchdogConfirm;
     const wg = watchdogGate(v);
@@ -806,7 +808,7 @@ async function setWatchdog(hostId: string) {
   renderAdmin(selectedHostState(fleet));
   const { status, outcome } = await hostCall(host, "/watchdog", {
     method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ on: g.on, confirm: v.watchdogConfirm }),
-  }, WRITE_TIMEOUT_MS);
+  }, WATCHDOG_TIMEOUT_MS);
   v.busy = false; v.watchdogConfirm = "";
   const read = outcome.ok ? parseWatchdog(outcome.data) : null;
   if (read) { v.watchdog = read; v.notice = `${host.name}: watchdog ${read.running ? "on" : "off"}.`; }
