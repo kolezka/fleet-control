@@ -9,7 +9,7 @@ export type ConfFacts = { fleet: string; dir: string; socket: string; remote: st
 
 // A session on the fleet's tmux server as tmux started it: its first pane's command (empty for the default
 // shell) and folder.
-export type PaneStart = { session: string; command: string; cwd: string };
+export type PaneStart = { session: string; command: string | null; cwd: string };
 export type RestartResult = { ok: true; output: string } | { ok: false; stage: "kill" | "start" | "timeout"; output: string };
 export type FleetHost = {
   path: string;
@@ -37,7 +37,7 @@ export type SessionStartStore = {
   remove(session: string): boolean;
 };
 
-export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: SessionStart | null; pane: { command: string; cwd: string } | null };
+export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: SessionStart | null; pane: { command: string | null; cwd: string } | null };
 
 export type AdminDeps = { host: FleetHost; starts?: SessionStartStore; now?: () => Date };
 
@@ -68,14 +68,17 @@ export function adminUseCases(deps: AdminDeps, caller?: Caller) {
     // A REMOTE_SSH fleet runs its sessions elsewhere: the kill here would miss and the start there would be a no-op.
     if (f.remote) throw new AdminError("unavailable", "this fleet runs over REMOTE_SSH; restart its sessions on that host");
     if (!PLAIN_SOCKET.test(f.socket)) throw new AdminError("unavailable", `fleet.conf names a tmux socket the page does not use: ${JSON.stringify(f.socket)}`);
-    const panes = (await host.panes(f.socket)).filter((p) => !MANAGED_SESSION.test(p.session));
-    const saved = (deps.starts?.list() ?? []).filter((s) => !MANAGED_SESSION.test(s.session));
+    // An empty socket is tmux's default server, shared with sessions outside the fleet: only fleet.conf names
+    // are offered then, and saved starts are neither read nor taken.
+    const own = f.socket !== "";
+    const panes = own ? (await host.panes(f.socket)).filter((p) => !MANAGED_SESSION.test(p.session)) : [];
+    const saved = own ? (deps.starts?.list() ?? []).filter((s) => !MANAGED_SESSION.test(s.session)) : [];
     const names = [...new Set([...f.sessions.filter((s) => !MANAGED_SESSION.test(s)), ...panes.map((p) => p.session), ...saved.map((s) => s.session)])].sort();
     const rows: SessionRow[] = names.map((session) => {
       const pane = panes.find((p) => p.session === session);
       return { session, inConf: f.sessions.includes(session), running: Boolean(pane), saved: saved.find((s) => s.session === session) ?? null, pane: pane ? { command: pane.command, cwd: pane.cwd } : null };
     });
-    return { f, rows };
+    return { f, rows, own };
   };
   const startsStore = () => {
     if (!deps.starts) throw new AdminError("unavailable", "saved start commands are not set up on this host");
@@ -91,8 +94,13 @@ export function adminUseCases(deps: AdminDeps, caller?: Caller) {
       const start = checkStartSave(session, input);
       const store = startsStore();
       return serial(async () => {
-        const { rows } = await sessionRows();
-        if (!rows.some((r) => r.session === session)) throw new AdminError("not_found", `${session} is not in fleet.conf and not running on the fleet's tmux server`);
+        const { rows, own } = await sessionRows();
+        if (!own) throw new AdminError("unavailable", "this fleet has no tmux socket of its own (FLEET_TMUX_SOCKET is empty), so the page does not keep start commands for it");
+        const row = rows.find((r) => r.session === session);
+        if (!row) throw new AdminError("not_found", `${session} is not in fleet.conf and not running on the fleet's tmux server`);
+        // fleet.conf sessions start with fleet start, and the watchdog would put its own agent back over a
+        // different command; their start is changed in fleet.conf.
+        if (row.inConf) throw new AdminError("invalid", `${session} is in fleet.conf; it restarts with fleet start, so change its start in fleet.conf`);
         const saved: SessionStart = { session, ...start, savedBy: caller!.name, savedAt: (deps.now?.() ?? new Date()).toISOString() };
         store.save(saved);
         return { saved };
@@ -156,9 +164,9 @@ export function adminUseCases(deps: AdminDeps, caller?: Caller) {
         const { f, rows } = await sessionRows();
         checkRestart(session, input, rows.map((r) => r.session));
         const row = rows.find((r) => r.session === session)!;
-        // A saved start wins over fleet.conf: the operator said how this session starts.
+        // fleet.conf sessions use fleet start; a start saved before a session was added to fleet.conf is ignored.
         if (!row.saved && !row.inConf) throw new AdminError("invalid", `${session} has no saved start command and is not in fleet.conf; save its start command first`);
-        const r = await host.restart(session, f.socket, row.saved ? { command: row.saved.command, cwd: row.saved.cwd } : undefined);
+        const r = await host.restart(session, f.socket, row.saved && !row.inConf ? { command: row.saved.command, cwd: row.saved.cwd } : undefined);
         if (!r.ok) {
           const why = r.output.trim().split("\n").slice(-3).join(" ") || "no output";
           if (r.stage === "kill") throw new AdminError("unavailable", `${session} was not restarted; the old session may still be running: ${why}`);

@@ -50,10 +50,16 @@ const endLine = (nonce: string) => `__fc_status=$?; __FLEET_CONTROL_END=${nonce}
 const EARLY_STOP = "it stops before its end (return or exit), so the lines after it, the managed agents among them, never load";
 
 // tmux shows a pane's start command in double quotes with backslash escapes; this gives back what was typed.
-export function unquoteTmux(shown: string): string {
+// Only \" \\ and \$ are read back. Any other escape (a tab shows as \t, a control byte as \ooo) gives null:
+// the page then fills nothing in rather than a command that differs from the one that runs.
+export function unquoteTmux(shown: string): string | null {
   if (!(shown.length >= 2 && shown.startsWith('"') && shown.endsWith('"'))) return shown;
-  return shown.slice(1, -1).replace(/\\(.)/g, "$1");
+  const inner = shown.slice(1, -1);
+  if (/\\[^"\\$]/.test(inner.replace(/\\\\/g, ""))) return null;
+  return inner.replace(/\\(["\\$])/g, "$1");
 }
+
+const SESSION_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 export class FleetAdminHost implements FleetHost {
   constructor(readonly opts: { confPath: string; fleetBin: string; serviceLog?: ServiceLog; tmuxBin?: string; restartTimeoutMs?: number; settleMs?: number }) {}
@@ -136,39 +142,59 @@ export class FleetAdminHost implements FleetHost {
     return r.stdout;
   }
 
-  // One line per session: its active pane's folder and start command. The command comes last, so a "|" in it
-  // stays in it; tmux prints it quoted ("exec cat") with \" and \$ escapes, or empty for the default shell.
+  // Each session's active pane: its name, folder and start command, from three reads joined on the session id.
+  // The id ($N) never holds a "|", so each line splits at its first one and the rest is one whole field.
+  // Names the page cannot use (a "|" in one, say) are dropped.
+  // -u: without a UTF-8 locale (a service usually has none) tmux prints every non-ASCII character as "_".
   async panes(fleetSocket: string): Promise<PaneStart[]> {
-    const tmux = this.opts.tmuxBin ?? "tmux";
-    const socket = fleetSocket ? ["-L", fleetSocket] : [];
-    const r = await run([tmux, ...socket, "list-sessions", "-F", "#{session_name}|#{pane_start_path}|#{pane_start_command}"], { timeoutMs: 10_000 });
-    if (r.exitCode !== 0) {
-      if (/no server running|error connecting to/.test(r.stderr)) return [];
-      throw new Error(`tmux list-sessions failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
-    }
-    return r.stdout.split("\n").filter(Boolean).map((line) => {
-      const [session = "", cwd = "", ...rest] = line.split("|");
-      return { session, cwd, command: unquoteTmux(rest.join("|")) };
-    });
+    const read = async (field: string) => {
+      const r = await run([this.tmux(), "-u", ...this.socket(fleetSocket), "list-sessions", "-F", `#{session_id}|${field}`], { timeoutMs: 10_000 });
+      if (r.exitCode !== 0) {
+        if (/no server running|error connecting to/.test(r.stderr)) return new Map<string, string>();
+        throw new Error(`tmux list-sessions failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
+      }
+      const m = new Map<string, string>();
+      for (const line of r.stdout.split("\n")) {
+        const at = line.indexOf("|");
+        if (at > 0 && /^\$\d+$/.test(line.slice(0, at))) m.set(line.slice(0, at), line.slice(at + 1));
+      }
+      return m;
+    };
+    const names = await read("#{session_name}");
+    const cwds = await read("#{pane_start_path}");
+    const commands = await read("#{pane_start_command}");
+    return [...names].filter(([id, name]) => SESSION_NAME.test(name) && cwds.has(id) && commands.has(id))
+      .map(([id, session]) => ({ session, cwd: cwds.get(id)!, command: unquoteTmux(commands.get(id)!) }));
   }
+
+  private tmux() { return this.opts.tmuxBin ?? "tmux"; }
+  private socket(fleetSocket: string) { return fleetSocket ? ["-L", fleetSocket] : []; }
 
   async restart(session: string, fleetSocket: string, start?: { command: string; cwd: string }): Promise<RestartResult> {
     const env = { FLEET_CONF: this.opts.confPath };
-    const tmux = this.opts.tmuxBin ?? "tmux";
-    const socket = fleetSocket ? ["-L", fleetSocket] : [];
+    const tmux = this.tmux();
+    const socket = this.socket(fleetSocket);
+    // "=name:" names the session exactly; without the colon tmux reads "a.1" as session a, pane 1.
+    const target = `=${session}:`;
+    // tmux falls back to $HOME without a word when -c names no folder; check before anything is stopped.
+    if (start && !(await stat(start.cwd).then((st) => st.isDirectory(), () => false))) {
+      return { ok: false, stage: "kill", output: `its saved folder ${start.cwd} is not a folder on this host; nothing was stopped` };
+    }
     // Ending a session that is not running is fine: the start below brings it up either way.
-    const k = await run([tmux, ...socket, "kill-session", "-t", `=${session}`], { timeoutMs: 10_000 });
+    const k = await run([tmux, ...socket, "kill-session", "-t", target], { timeoutMs: 10_000 });
     if (k.exitCode !== 0 && !/can't find session|no server running|error connecting to/.test(k.stderr)) {
       return { ok: false, stage: "kill", output: `tmux kill-session failed: ${k.stderr.trim()}` };
     }
     if (start) {
       // The saved command runs the way tmux runs any session command: through the default shell, in the folder.
-      const n = await run([tmux, ...socket, "new-session", "-d", "-s", session, "-c", start.cwd, ...(start.command ? [start.command] : [])], { timeoutMs: 10_000 });
+      // "--" keeps a command that starts with "-" from being read as new-session options.
+      const n = await run([tmux, ...socket, "new-session", "-d", "-s", session, "-c", start.cwd, "--", ...(start.command ? [start.command] : [])], { timeoutMs: 10_000 });
       if (n.exitCode !== 0) return { ok: false, stage: "start", output: `tmux new-session failed: ${n.stderr.trim() || `exit ${n.exitCode}`}` };
-      // A command that ends at once takes its session with it; that is a failed start, not a restart.
+      // A command that ends at once takes its session with it (or leaves a dead pane with remain-on-exit).
+      // This catches only a command that ends within the wait; one that dies later reads as started.
       await Bun.sleep(this.opts.settleMs ?? 1_000);
-      const h = await run([tmux, ...socket, "has-session", "-t", `=${session}`], { timeoutMs: 10_000 });
-      if (h.exitCode !== 0) return { ok: false, stage: "start", output: "the session ended right after it started; check its command and folder" };
+      const h = await run([tmux, ...socket, "display-message", "-p", "-t", target, "#{pane_dead}"], { timeoutMs: 10_000 });
+      if (h.exitCode !== 0 || h.stdout.trim() !== "0") return { ok: false, stage: "start", output: "the session ended right after it started; check its command and folder" };
       return { ok: true, output: `${session}: started with its saved command\n` };
     }
     const s = await run([this.opts.fleetBin, "start", session], { env, timeoutMs: this.opts.restartTimeoutMs ?? 150_000 });

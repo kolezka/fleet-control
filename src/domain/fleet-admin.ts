@@ -89,6 +89,8 @@ export function checkStartSave(session: string, input: unknown): { command: stri
   if (command.length > MAX_START_COMMAND) throw new AdminError("invalid", `command may be at most ${MAX_START_COMMAND} characters`);
   if (CONTROL.test(command)) throw new AdminError("invalid", "command must be one line without control characters");
   if (typeof cwd !== "string" || !cwd.startsWith("/") || cwd.length > MAX_START_CWD || CONTROL.test(cwd)) throw new AdminError("invalid", "folder must be an absolute path on the host");
+  // tmux expands #{...} in the -c folder, so such a folder would not be the one saved.
+  if (cwd.includes("#{")) throw new AdminError("invalid", "folder must not contain #{");
   if (confirm !== session) throw new AdminError("invalid", `type ${session} to confirm the start command`);
   return { command: command.trim(), cwd };
 }

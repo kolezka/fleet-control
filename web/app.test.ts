@@ -775,11 +775,12 @@ test("a hand-made session is offered for restart only after its start command, p
   await new Promise(resolve => setTimeout(resolve, 0));
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(b.element("restartSession").innerHTML).toBe('<option value="hand">hand · no start command</option><option value="probe-shell">probe-shell · fleet.conf</option>');
-  expect(b.element("startPart").hidden).toBe(false);
   const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
-  // The form follows the chosen session: probe-shell has no saved command, so tmux's folder is shown.
-  expect([b.element("restartSession").value, b.element("startCwd").value]).toEqual(["probe-shell", "/f"]);
+  // A fleet.conf session starts from fleet.conf: no start form for it.
+  await type("restartSession", "probe-shell", "change");
+  expect(b.element("startPart").hidden).toBe(true);
   await type("restartSession", "hand", "change");
+  expect(b.element("startPart").hidden).toBe(false);
   // Filled from tmux, not saved: Restart is blocked until a command is saved.
   expect([b.element("startCommand").value, b.element("startCwd").value]).toEqual(["exec cat", "/w"]);
   await type("restartConfirm", "hand");

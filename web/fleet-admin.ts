@@ -35,7 +35,7 @@ export type AdminView = {
   hostRevoke: boolean;
 };
 
-export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string; cwd: string } | null };
+export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string | null; cwd: string } | null };
 
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
@@ -101,7 +101,9 @@ export function parseRestartable(body: unknown): SessionRow[] | null {
     const o = r as Record<string, unknown>;
     if (!str(o.session) || typeof o.inConf !== "boolean" || typeof o.running !== "boolean") return null;
     const saved = cmd(o.saved);
-    rows.push({ session: o.session, inConf: o.inConf, running: o.running, pane: cmd(o.pane),
+        const p = o.pane && typeof o.pane === "object" ? o.pane as Record<string, unknown> : null;
+    const pane = p && str(p.cwd) && (str(p.command) || p.command === null) ? { command: p.command as string | null, cwd: p.cwd as string } : null;
+    rows.push({ session: o.session, inConf: o.inConf, running: o.running, pane,
       saved: saved ? { command: saved.command, cwd: saved.cwd, savedBy: str((o.saved as Record<string, unknown>).savedBy) ? (o.saved as { savedBy: string }).savedBy : "", savedAt: str((o.saved as Record<string, unknown>).savedAt) ? (o.saved as { savedAt: string }).savedAt : "" } : null });
   }
   return rows;
@@ -111,7 +113,8 @@ export function parseRestartable(body: unknown): SessionRow[] | null {
 export function fillStart(v: AdminView): void {
   if (v.startFor === v.restartSession) return;
   const row = v.sessions?.find((r) => r.session === v.restartSession);
-  const from = row?.saved ?? row?.pane;
+  // A pane whose command tmux showed with escapes the page cannot read back fills nothing in.
+  const from = row?.saved ?? (row?.pane?.command == null ? null : row.pane);
   v.startFor = v.restartSession;
   v.startCommand = from?.command ?? "";
   v.startCwd = from?.cwd ?? "";
@@ -122,6 +125,7 @@ export function startCommandGate(v: AdminView): { ok: boolean; reason: string } 
   if (v.busy) return { ok: false, reason: "Working…" };
   const row = v.sessions?.find((r) => r.session === v.restartSession);
   if (!row) return { ok: false, reason: "Choose a session" };
+  if (row.inConf) return { ok: false, reason: `${row.session} starts from fleet.conf` };
   if (!v.startCwd.startsWith("/")) return { ok: false, reason: "The folder must be an absolute path" };
   if (row.saved && row.saved.command === v.startCommand.trim() && row.saved.cwd === v.startCwd) return { ok: false, reason: "Saved" };
   if (v.startConfirm !== row.session) return { ok: false, reason: `Type ${row.session} to confirm` };
@@ -143,5 +147,5 @@ export function restartGate(v: AdminView): { ok: boolean; reason: string } {
   const row = v.sessions?.find((r) => r.session === v.restartSession);
   if (row && !row.saved && !row.inConf) return { ok: false, reason: `Save a start command for ${row.session} first` };
   if (v.restartConfirm !== v.restartSession) return { ok: false, reason: `Type ${v.restartSession} to confirm` };
-  return { ok: true, reason: row?.saved ? `Ends ${v.restartSession} and starts it again with its saved command` : `Ends ${v.restartSession} and starts it again from fleet.conf` };
+  return { ok: true, reason: row?.saved && !row.inConf ? `Ends ${v.restartSession} and starts it again with its saved command` : `Ends ${v.restartSession} and starts it again from fleet.conf` };
 }

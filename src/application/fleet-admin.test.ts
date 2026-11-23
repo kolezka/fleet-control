@@ -201,16 +201,15 @@ test("a session that is not in fleet.conf restarts with the command an operator 
   state.panes = [];
   expect((await use.sessions()).sessions.map((r) => [r.session, r.running, r.saved?.command ?? null])).toEqual([["hand", false, "exec sleep 600"], ["probe-shell", false, null]]);
   expect(await use.restart("hand", { confirm: "hand" })).toEqual({ session: "hand", output: "hand: started\n" });
-  // A saved start wins over fleet.conf for a fleet.conf session too.
-  await use.saveStart("probe-shell", { command: "exec cat", cwd: "/f", confirm: "probe-shell" });
+  // A fleet.conf session starts with fleet start; no start command is kept for it.
+  e = await fail(use.saveStart("probe-shell", { command: "exec cat", cwd: "/f", confirm: "probe-shell" }));
+  expect([e.kind, e.message]).toEqual(["invalid", "probe-shell is in fleet.conf; it restarts with fleet start, so change its start in fleet.conf"]);
   await use.restart("probe-shell", { confirm: "probe-shell" });
-  // Removing it brings fleet start back for that session.
-  e = await fail(use.removeStart("probe-shell", "probe"));
-  expect(e.message).toBe("type probe-shell to confirm removing its start command");
-  expect(await use.removeStart("probe-shell", "probe-shell")).toEqual({ removed: "probe-shell" });
-  await use.restart("probe-shell", { confirm: "probe-shell" });
-  expect((await fail(use.removeStart("probe-shell", "probe-shell"))).kind).toBe("not_found");
-  expect(calls).toEqual(["restart hand fleet-t [/w] exec sleep 600", "restart hand fleet-t [/w] exec sleep 600", "restart probe-shell fleet-t [/f] exec cat", "restart probe-shell fleet-t"]);
+  e = await fail(use.removeStart("hand", "han"));
+  expect(e.message).toBe("type hand to confirm removing its start command");
+  expect(await use.removeStart("hand", "hand")).toEqual({ removed: "hand" });
+  expect((await fail(use.removeStart("hand", "hand"))).kind).toBe("not_found");
+  expect(calls).toEqual(["restart hand fleet-t [/w] exec sleep 600", "restart hand fleet-t [/w] exec sleep 600", "restart probe-shell fleet-t"]);
   // Only an operator sees or changes saved starts.
   for (const role of ["agent", "viewer"] as const) {
     const other = adminUseCases({ host, starts, now }, { name: "x", role });
@@ -222,4 +221,37 @@ test("a session that is not in fleet.conf restarts with the command an operator 
   const bare = adminUseCases({ host }, operator);
   expect((await bare.sessions()).starts).toBe(false);
   expect((await fail(bare.saveStart("hand", { command: "x", cwd: "/w", confirm: "hand" }))).message).toBe("saved start commands are not set up on this host");
+});
+
+test("review fixes: an empty socket offers only fleet.conf names, and a start saved before a session joined fleet.conf is not used", async () => {
+  const { host, state, calls } = fakeHost(BASE.replace("FLEET=t\n", "FLEET=t\nFLEET_TMUX_SOCKET=\n"));
+  const starts = new SessionStarts(new Store(":memory:").db);
+  starts.save({ session: "other", command: "exec cat", cwd: "/w", savedBy: "op", savedAt: "x" });
+  const realFacts = host.facts;
+  host.facts = async (t) => ({ ...(await realFacts(t)), socket: "" });
+  let paneReads = 0;
+  host.panes = async () => { paneReads++; return [{ session: "tv-x", command: "x", cwd: "/" }]; };
+  const use = adminUseCases({ host, starts }, operator);
+  // tmux's default server is shared with sessions outside the fleet: it is not read, and saved starts are not offered.
+  expect((await use.sessions()).sessions.map((r) => r.session)).toEqual(["probe-shell"]);
+  expect(paneReads).toBe(0);
+  expect((await fail(use.restart("tv-x", { confirm: "tv-x" }))).kind).toBe("not_found");
+  expect((await fail(use.restart("other", { confirm: "other" }))).kind).toBe("not_found");
+  const e = await fail(use.saveStart("probe-shell", { command: "x", cwd: "/w", confirm: "probe-shell" }));
+  expect(e.message).toBe("this fleet has no tmux socket of its own (FLEET_TMUX_SOCKET is empty), so the page does not keep start commands for it");
+  expect(calls).toEqual([]);
+  // A start saved while probe-shell was not in fleet.conf: once it is, restart uses fleet start.
+  const own = fakeHost();
+  const s2 = new SessionStarts(new Store(":memory:").db);
+  s2.save({ session: "probe-shell", command: "exec cat", cwd: "/w", savedBy: "op", savedAt: "x" });
+  await adminUseCases({ host: own.host, starts: s2 }, operator).restart("probe-shell", { confirm: "probe-shell" });
+  expect(own.calls).toEqual(["restart probe-shell fleet-t"]);
+  void state;
+});
+
+test("a folder with #{ is refused: tmux would expand it into another folder", async () => {
+  const { host, state } = fakeHost();
+  state.panes = [{ session: "hand", command: "", cwd: "/w" }];
+  const use = adminUseCases({ host, starts: new SessionStarts(new Store(":memory:").db) }, operator);
+  expect((await fail(use.saveStart("hand", { command: "x", cwd: "/w#{session_name}", confirm: "hand" }))).message).toBe("folder must not contain #{");
 });

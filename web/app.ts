@@ -640,7 +640,7 @@ function renderAdmin(h: HostState | undefined) {
   ($("confReload") as HTMLButtonElement).disabled = v.busy;
   const sessions = restartable(v.conf, v.sessions);
   if (!sessions.includes(v.restartSession)) v.restartSession = sessions[0] ?? "";
-  const label = (s: string) => { const r = v.sessions?.find((x) => x.session === s); return r ? s + (r.saved ? " · saved command" : r.inConf ? " · fleet.conf" : " · no start command") + (r.running ? "" : " · not running") : s; };
+  const label = (s: string) => { const r = v.sessions?.find((x) => x.session === s); return r ? s + (r.inConf ? " · fleet.conf" : r.saved ? " · saved command" : " · no start command") + (r.running ? "" : " · not running") : s; };
   setHtml($("restartSession"), sessions.map(s => '<option value="' + esc(s) + '">' + esc(label(s)) + '</option>').join('') || '<option value="">No sessions</option>');
   ($("restartSession") as HTMLSelectElement).value = v.restartSession;
   const rc = $("restartConfirm") as HTMLInputElement;
@@ -648,11 +648,11 @@ function renderAdmin(h: HostState | undefined) {
   const restart = restartGate(v);
   $("restartGate").textContent = restart.reason;
   ($("restartGo") as HTMLButtonElement).disabled = !restart.ok;
-  $("startPart").hidden = v.sessions === null || !v.restartSession;
+  $("startPart").hidden = v.sessions === null || !v.restartSession || Boolean(v.sessions.find((r) => r.session === v.restartSession)?.inConf);
   if (v.sessions) {
     fillStart(v);
     const row = v.sessions.find((r) => r.session === v.restartSession);
-    $("startSource").textContent = row?.saved ? `Saved by ${row.saved.savedBy} at ${row.saved.savedAt}.` : row?.pane ? "Not saved yet. Filled in from what tmux reports for the running session; check it before saving." : "Not saved yet.";
+    $("startSource").textContent = row?.saved ? `Saved by ${row.saved.savedBy} at ${row.saved.savedAt}.` : row?.pane?.command != null ? "Not saved yet. Filled in from what tmux reports for the running session; check it before saving." : row?.pane ? "Not saved yet. tmux shows this command with characters the page cannot read back; type it in." : "Not saved yet.";
     for (const [id, value] of [["startCommand", v.startCommand], ["startCwd", v.startCwd], ["startConfirm", v.startConfirm]] as const) {
       const el = $(id) as HTMLInputElement;
       if (el.value !== value) el.value = value;
