@@ -39,14 +39,14 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q ripgrep build-essential pkg-config libevent-dev libncurses-dev bison
-          curl -fsSL -o /tmp/tmux.tar.gz https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
+          curl -fsSL --retry 3 --retry-connrefused -o /tmp/tmux.tar.gz https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
           echo "$TMUX_SHA256  /tmp/tmux.tar.gz" | sha256sum -c -
           tar -xzf /tmp/tmux.tar.gz -C /tmp
           (cd /tmp/tmux-3.8 && ./configure --prefix=/usr/local && make -j"$(nproc)" && sudo make install)
           sudo apt-get remove -y -q tmux || true
           hash -r
           tmux -V | grep -qx "tmux 3.8"
-          rg --version | head -1
+          rg --version
       - run: bun install --frozen-lockfile
       - run: bun check
       - run: bun test
