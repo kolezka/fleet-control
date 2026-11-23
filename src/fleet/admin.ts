@@ -49,15 +49,18 @@ const facts = (nonce: string) => `set -euo pipefail; . "$0" >/dev/null 2>&1; [ "
 const endLine = (nonce: string) => `__fc_status=$?; __FLEET_CONTROL_END=${nonce}; return "$__fc_status"`;
 const EARLY_STOP = "it stops before its end (return or exit), so the lines after it, the managed agents among them, never load";
 
-// tmux shows a pane's start command in double quotes with backslash escapes; this gives back what was typed.
-// Only \" \\ \$ and a leading \~ are read back. Any other escape (a tab shows as \t, a control byte as \ooo)
-// or a single-quoted form gives null: the page then fills nothing in rather than a command that differs from the one that runs.
+// tmux shows a pane's start command with backslash escapes, in double quotes when it has a space, " or $.
+// This gives back what was typed. Only \" \\ \$ and a leading \~ are read back. Any other escape (a tab shows
+// as \t, a control byte as \ooo) or a single-quoted form gives null: the page then fills nothing in rather than
+// a command that differs from the one that runs.
 export function unquoteTmux(shown: string): string | null {
   if (shown.startsWith("'")) return null;
-  if (!(shown.length >= 2 && shown.startsWith('"') && shown.endsWith('"'))) return shown;
-  const inner = shown.slice(1, -1);
-  if (/\\[^"\\$~]/.test(inner.replace(/\\\\/g, ""))) return null;
-  return inner.replace(/\\(["\\$~])/g, "$1");
+  const quoted = shown.length >= 2 && shown.startsWith('"') && shown.endsWith('"');
+  let inner = quoted ? shown.slice(1, -1) : shown;
+  const tilde = inner.startsWith("\\~");
+  if (tilde) inner = inner.slice(2);
+  if (/\\[^"\\$]/.test(inner.replace(/\\\\/g, ""))) return null;
+  return (tilde ? "~" : "") + inner.replace(/\\(["\\$])/g, "$1");
 }
 
 const SESSION_NAME = /^[A-Za-z0-9._-]{1,64}$/;

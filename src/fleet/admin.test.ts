@@ -228,7 +228,13 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     expect(unquoteTmux('"echo a\\tb"')).toBeNull();
     expect(unquoteTmux('"echo \\001"')).toBeNull();
     // tmux escapes a leading ~ and single-quotes some words.
-    expect(unquoteTmux('"\\~/bin/x"')).toBe("~/bin/x");
+    expect(unquoteTmux('"\\~/bin/x a"')).toBe("~/bin/x a");
+    // One word is shown without quotes, still escaped.
+    expect(unquoteTmux("\\~/bin/x")).toBe("~/bin/x");
+    expect(unquoteTmux("x\\\\y")).toBe("x\\y");
+    expect(unquoteTmux("echo\\ttab")).toBeNull();
+    // tmux escapes only a leading tilde.
+    expect(unquoteTmux('"a \\~"')).toBeNull();
     expect(unquoteTmux(`'exec"sleep"'`)).toBeNull();
   });
 
@@ -239,6 +245,10 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     await fleet.tmux("new-session", "-d", "-s", "barred", "-c", bar, "exec sleep 600 # é");
     await fleet.tmux("new-session", "-d", "-s", "tabbed", "-c", bar, "exec sleep 600 #\tx");
     await fleet.tmux("new-session", "-d", "-s", "x|y", "exec sleep 600");
+    // A one-word command with a leading ~: tmux shows it unquoted as \~... . The command need not exist;
+    // remain-on-exit keeps its session listed.
+    await fleet.tmux("set-option", "-g", "remain-on-exit", "on");
+    await fleet.tmux("new-session", "-d", "-s", "tilde", "-c", fleet.dir, "~/fc-no-such-command");
     // A service has no UTF-8 locale; tmux would print é as "_" without -u.
     const saved = { LANG: process.env.LANG, LC_ALL: process.env.LC_ALL, LC_CTYPE: process.env.LC_CTYPE };
     for (const k of Object.keys(saved)) delete process.env[k];
@@ -247,6 +257,8 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
     expect(panes.find((p) => p.session === "barred")).toEqual({ session: "barred", cwd: bar, command: "exec sleep 600 # é" });
     expect(panes.find((p) => p.session === "tabbed")?.command).toBeNull();
     expect(panes.some((p) => p.session.includes("|") || p.session === "x")).toBe(false);
+    await fleet.tmux("set-option", "-g", "remain-on-exit", "off");
+    expect(panes.find((p) => p.session === "tilde")?.command).toBe("~/fc-no-such-command");
     // A saved folder that is gone: refused before the old session is stopped.
     const id = async (s: string) => (await fleet.tmux("list-sessions", "-F", "#{session_name} #{session_id}")).stdout.split("\n").find((l) => l.startsWith(s + " "))?.split(" ")[1];
     const before = await id("barred");
@@ -269,7 +281,7 @@ describe.skipIf(!usable)("fleet administration on a private fleet", () => {
       await fleet.tmux("set-option", "-g", "remain-on-exit", "off");
       await fleet.tmux("kill-session", "-t", "=dies:").catch(() => undefined);
     }
-    for (const s of ["barred", "tabbed", "x|y", "dot.1", "dashed"]) await fleet.tmux("kill-session", "-t", `=${s}:`).catch(() => undefined);
+    for (const s of ["barred", "tabbed", "x|y", "dot.1", "dashed", "tilde"]) await fleet.tmux("kill-session", "-t", `=${s}:`).catch(() => undefined);
   });
 
   test("the host tells a failed kill, a failed start and a start cut off by time apart", async () => {

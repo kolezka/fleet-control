@@ -785,7 +785,12 @@ test("a hand-made session is offered for restart only after its start command, p
   await b.listeners.get("confReload:click")!({});
   for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
   await type("restartSession", "probe-shell", "change");
-  expect([b.element("startPart").hidden, b.element("startSave").disabled]).toEqual([false, true]);
+  expect([b.element("startPart").hidden, b.element("startSave").disabled, b.element("startRemove").disabled]).toEqual([false, true, true]);
+  await type("startConfirm", "probe-shell");
+  expect(b.element("startRemove").disabled).toBe(false);
+  await b.listeners.get("startRemove:click")!({});
+  for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.calls.some(c => c.path === "/api/hosts/a/sessions/probe-shell/start?confirm=probe-shell" && c.init?.method === "DELETE")).toBe(true);
   stale = null;
   await b.listeners.get("confReload:click")!({});
   for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0));
