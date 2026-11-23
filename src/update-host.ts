@@ -1,6 +1,6 @@
 // The host side of restart and update: which service manager runs this service, the release list from
 // GitHub, the job files, and starting the updater so it outlives the service.
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AdminError } from "./domain/fleet-admin.ts";
 import { jobGone, JOB_FINAL, JOB_ID, PACKAGE_NAME, TAG, type JobAction, type JobFile, type Manager, type Release, type UpdateJob } from "./domain/updates.ts";
@@ -127,9 +127,10 @@ export class HostUpdates implements UpdateHost {
       try {
         const j = JSON.parse(readFileSync(join(this.o.jobDir, f), "utf8")) as JobFile;
         // An updater that died (crash, kill, reboot) never ends its job; it is shown as failed, not running.
+        // Its end time is the job file's last write, so it stays the same from poll to poll.
         const gone = jobGone(j, Date.now(), alive);
         const steps = gone ? [...j.steps, "the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped"] : j.steps;
-        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? new Date().toISOString() : j.endedAt });
+        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? statSync(join(this.o.jobDir, f)).mtime.toISOString() : j.endedAt });
       } catch {}
     }
     return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10);
@@ -186,7 +187,9 @@ export class HostUpdates implements UpdateHost {
         try { (this.o.renameLock ?? renameSync)(lock, aside); } catch { continue; }
         // Another service process may have replaced the stale lock with its own in between: put that back.
         if (readFileSync(aside, "utf8").trim() !== holder) {
-          renameSync(aside, lock);
+          // A link, not a rename: if a third request took the lock meanwhile, theirs stays.
+          try { linkSync(aside, lock); } catch { /* the lock is someone's now */ }
+          rmSync(aside, { force: true });
           throw new AdminError("conflict", "another restart or update just started; wait for it to end");
         }
         rmSync(aside, { force: true });

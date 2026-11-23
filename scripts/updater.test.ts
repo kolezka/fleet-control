@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { Job, runJob, scratchEnv, startService, stopService, restartService, type JobFile } from "./updater.ts";
+import { Job, runJob, scratchEnv, startService, stopService, restartService, waitDown, type JobFile } from "./updater.ts";
 
 const root = mkdtempSync(join(tmpdir(), "updater-"));
 const managers: JobFile["service"]["manager"][] = [];
@@ -228,3 +228,36 @@ test("review round 2: what the running service wrote after the backup survives a
   const d = new Database(s.db); const rows = d.query("SELECT v FROM t ORDER BY rowid").all(); d.close();
   expect(rows).toEqual([{ v: "before" }, { v: "written after the backup" }]);
 }, 120_000);
+
+test("review round 3: a new release that will not stop keeps the database it may hold; the snapshot is named instead", async () => {
+  const s = await setup("hung");
+  const commit = "6".repeat(40);
+  const pidFile = join(s.base, "hung.pid");
+  // The real start writes a row, ignores SIGTERM, holds the port and never answers: a hung new release.
+  const rule = `if (!process.env.FLEET_CONTROL_DB?.endsWith("scratch.db")) { const { Database } = require("bun:sqlite"); const d = new Database(process.env.FLEET_CONTROL_DB); d.run("INSERT INTO t VALUES ('written by the hung release')"); d.close(); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.on("SIGTERM", () => {}); Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch: () => new Promise(() => {}) }); await new Promise(() => {}); }`;
+  const j = s.job(commit, publish("hung", commit, rule));
+  try {
+    await runJob(j);
+    const after = Job.read(j.file).data;
+    const steps = after.steps.join("\n");
+    expect(steps).toContain(`the new code may still be running; database and files not put back; the copy is in ${join(s.base, "rollback-6666666", "at-stop")}`);
+    expect(steps).not.toContain("database put back");
+    const d = new Database(s.db); const rows = d.query("SELECT v FROM t ORDER BY rowid").all(); d.close();
+    expect(rows).toEqual([{ v: "before" }, { v: "written by the hung release" }]);
+    expect(existsSync(join(s.base, "rollback-6666666", "at-stop", "SHA256SUMS"))).toBe(true);
+  } finally {
+    try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {}
+  }
+}, 150_000);
+
+test("review round 3: a process that holds the port but does not answer is not down; a closed port is", async () => {
+  const net = await import("node:net");
+  const held: import("node:net").Socket[] = [];
+  const hung = net.createServer((c) => { held.push(c); });
+  await new Promise<void>((r) => hung.listen(0, "127.0.0.1", () => r()));
+  const port = (hung.address() as import("node:net").AddressInfo).port;
+  try {
+    expect(await waitDown(`http://127.0.0.1:${port}`, 3)).toBe(false);
+  } finally { for (const c of held) c.destroy(); hung.close(); }
+  expect(await waitDown(`http://127.0.0.1:${free()}`, 3)).toBe(true);
+}, 30_000);

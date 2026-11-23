@@ -207,6 +207,7 @@ function snapshotAtStop(job: Job, backupDir: string): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (s.db && existsSync(s.db)) backup(s.db, join(dir, "state.db"));
   for (const f of s.files) if (existsSync(f)) copyFileSync(f, join(dir, basename(f)));
+  writeFileSync(join(dir, "SHA256SUMS"), readdirSync(dir).filter((f) => f !== "SHA256SUMS").sort().map((f) => `${sha256(join(dir, f))}  ${f}\n`).join(""), { mode: 0o600 });
   job.step(`state at the stop copied to ${dir}`);
   return dir;
 }
@@ -260,7 +261,7 @@ export async function swapAndStart(job: Job, code: string, backupDir: string, sh
     // The job folder may sit on another file system than the service folder.
     if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
     const c = run("cp", ["-a", code, next]);
-    if (!c.ok) throw new StepFailed(`could not copy the new code beside the service: ${c.out}`);
+    if (!c.ok) { rmSync(next, { recursive: true, force: true }); throw new StepFailed(`could not copy the new code beside the service: ${c.out}`); }
   }
   const before = free(`${s.dir}.before-${short}`);
   // null: nothing to put back (the new code never ran); else the copy taken at the stop.
@@ -296,9 +297,17 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
   const s = job.data.service;
   job.step(`${why}; rolling back`);
   const problems: string[] = [];
-  try { stopService(s.manager); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
+  let stopped = true;
+  try { stopService(s.manager); } catch (e) { stopped = false; problems.push(e instanceof Error ? e.message : String(e)); }
   // Whatever answers after the old start must be the old code, not the new one still shutting down.
-  if (!(await waitDown(s.health, 15))) job.step(`something still answers on ${s.health}; starting the old code anyway`);
+  const down = await waitDown(s.health, 15);
+  if (!down) job.step(`something still answers on ${s.health}; starting the old code anyway`);
+  // A process that may still hold the database must not get a file copied under it.
+  if (restoreFrom && !(stopped && down)) {
+    job.step(`the new code may still be running; database and files not put back; the copy is in ${restoreFrom}`);
+    problems.push(`database and files not put back, the copy is in ${restoreFrom}`);
+    restoreFrom = null;
+  } else if (restoreFrom === null) job.step("the new code never ran; database and files left as they are");
   try {
     if (existsSync(before)) {
       if (existsSync(s.dir)) renameSync(s.dir, free(`${s.dir}.failed-${short}`));
@@ -310,8 +319,11 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
   if (restoreFrom) {
     if (s.db && existsSync(join(restoreFrom, "state.db"))) {
       try {
-        copyFileSync(join(restoreFrom, "state.db"), s.db);
+        // The new code's WAL goes first: SQLite would replay it onto the old file. A temp file and a rename,
+        // so a crash halfway never leaves a torn database.
         for (const ext of ["-wal", "-shm"]) rmSync(`${s.db}${ext}`, { force: true });
+        copyFileSync(join(restoreFrom, "state.db"), `${s.db}.restore-tmp`);
+        renameSync(`${s.db}.restore-tmp`, s.db);
         job.step("database put back as the stopped service left it");
       } catch (e) { problems.push(`database: ${e instanceof Error ? e.message : e}`); }
     }
@@ -324,7 +336,7 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
     }
     if (restored.length) job.step(`files put back as the stopped service left them: ${restored.join(", ")}`);
     if (existsSync(s.dir)) fleetSync(job, s.dir, "old");
-  } else job.step("the new code never ran; database and files left as they are");
+  }
   try { await startService(s.manager, s.dir); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
   const back = await waitHealthy(s.health, s.waits?.start ?? 45);
   const where = existsSync(before) ? `the old code is still in ${before}` : `the old code is in ${s.dir}`;

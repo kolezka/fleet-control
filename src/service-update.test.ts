@@ -296,3 +296,24 @@ test("review round 2: a stale lock replaced by another process in between is put
   expect(readFileSync(join(dir, "updates", "lock"), "utf8")).toBe("upd-20261123T000000Z-0ther000");
   expect(launched).toHaveLength(0);
 });
+
+test("review round 3: putting a replaced lock back never overwrites a lock a third request took meanwhile", async () => {
+  const jobs = join(dir, "updates");
+  mkdirSync(jobs, { recursive: true, mode: 0o700 });
+  const stale = "upd-20260101T000000Z-deadbee1";
+  writeFileSync(join(jobs, "lock"), stale);
+  writeFileSync(join(jobs, `${stale}.json`), JSON.stringify({ id: stale, state: "running", pid: 2 ** 22 + 12346, startedAt: "2026-01-01T00:00:00Z", steps: [] }));
+  const launched: unknown[] = [];
+  const updates = new HostUpdates({
+    dir: join(dir, "service"), manager, db: null, files: [], fleetConf: join(dir, "fleet.conf"), rollbackRoot: dir, jobDir: jobs,
+    health: "http://127.0.0.1:1", api: github.url.origin, env: {}, launch: () => { launched.push(1); },
+    // B replaced the stale lock just before our rename; C takes the empty spot right after it.
+    renameLock: (a, b) => { writeFileSync(a, "upd-20261123T000000Z-0b000000"); renameSync(a, b); writeFileSync(a, "upd-20261123T000000Z-0c000000"); },
+  });
+  let message = "";
+  try { await updates.start("restart", null, "op"); } catch (e) { message = (e as Error).message; }
+  expect(message).toBe("another restart or update just started; wait for it to end");
+  expect(readFileSync(join(jobs, "lock"), "utf8")).toBe("upd-20261123T000000Z-0c000000");
+  expect(readdirSync(jobs).filter((f) => f.startsWith("lock.stale-"))).toEqual([]);
+  expect(launched).toHaveLength(0);
+});
