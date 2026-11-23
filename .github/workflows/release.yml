@@ -1,0 +1,28 @@
+# A tag like v2026.11.23 builds the release package a host installs from the page: the code at that commit,
+# the pinned agent-fleet files and production node_modules, with its SHA-256 beside it.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - run: sudo apt-get install -y tmux
+      - run: bun install --frozen-lockfile
+      - run: bun check
+      - run: bun test
+      - run: bun scripts/package-release.ts . dist "$GITHUB_REF_NAME"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/fleet-control-*.tar.gz dist/fleet-control-*.tar.gz.sha256 --title "$GITHUB_REF_NAME" --notes "Package built from ${GITHUB_SHA}."

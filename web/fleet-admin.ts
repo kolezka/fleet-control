@@ -41,6 +41,11 @@ export type AdminView = {
   settingsError: string;
   // An unsaved edit whose file changed on the host since; Reload takes the new file.
   settingsChangedOnHost: boolean;
+  // Restart and update of the host service: null until read; hosts without it hide the part.
+  service: ServiceRead | null;
+  serviceAction: "restart" | "update";
+  serviceTag: string;
+  serviceConfirm: string;
 };
 
 export type SessionRow = { session: string; inConf: boolean; running: boolean; saved: { command: string; cwd: string; savedBy: string; savedAt: string } | null; pane: { command: string | null; cwd: string } | null };
@@ -50,6 +55,16 @@ export type SettingsRead = { path: string; revision: string; running: SettingsVa
 // One text field per list (one entry per line), as typed.
 export type SettingsDraft = { agentRoots: string; agentModels: string; agentDshModels: string; agentMcpUrl: string; input: boolean };
 
+export type ServiceJob = { id: string; action: "restart" | "update"; tag: string | null; commit: string | null; by: string; state: string; steps: string[]; startedAt: string; endedAt: string | null };
+export type ServiceRead = {
+  current: { commit: string | null; tag: string | null };
+  unavailable: string | null;
+  releases: { tag: string; commit: string; publishedAt: string }[];
+  releaseError: string | null;
+  jobs: ServiceJob[];
+  running: ServiceJob | null;
+};
+
 export type TokenEntry = { name: string; role: string; self: boolean; managed: boolean };
 
 export const emptyAdmin = (): AdminView => ({
@@ -57,6 +72,7 @@ export const emptyAdmin = (): AdminView => ({
   restartSession: "", restartConfirm: "", sessions: null, startFor: "", startCommand: "", startCwd: "", startConfirm: "", busy: false, notice: "",
   tokens: null, tokenName: "", tokenAction: "rotate", tokenConfirm: "", newToken: "", hostConfirm: "", hostRevoke: true,
   settings: null, settingsDraft: { agentRoots: "", agentModels: "", agentDshModels: "", agentMcpUrl: "", input: false }, settingsConfirm: "", settingsError: "", settingsChangedOnHost: false,
+  service: null, serviceAction: "restart", serviceTag: "", serviceConfirm: "",
 });
 
 const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === "string");
@@ -200,4 +216,47 @@ export function restartGate(v: AdminView): { ok: boolean; reason: string } {
   if (row && !row.saved && !row.inConf) return { ok: false, reason: `Save a start command for ${row.session} first` };
   if (v.restartConfirm !== v.restartSession) return { ok: false, reason: `Type ${v.restartSession} to confirm` };
   return { ok: true, reason: row?.saved && !row.inConf ? `Ends ${v.restartSession} and starts it again with its saved command` : `Ends ${v.restartSession} and starts it again from fleet.conf` };
+}
+
+const job = (x: unknown): ServiceJob | null => {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.id !== "string" || (o.action !== "restart" && o.action !== "update") || typeof o.state !== "string" || !strings(o.steps) || typeof o.startedAt !== "string") return null;
+  const s = (v: unknown) => (typeof v === "string" ? v : null);
+  return { id: o.id, action: o.action, tag: s(o.tag), commit: s(o.commit), by: String(o.by ?? ""), state: o.state, steps: o.steps, startedAt: o.startedAt, endedAt: s(o.endedAt) };
+};
+
+export function parseService(body: unknown): ServiceRead | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
+  const c = o.current as Record<string, unknown> | undefined;
+  if (!c || typeof c !== "object" || !Array.isArray(o.releases) || !Array.isArray(o.jobs)) return null;
+  const releases = (o.releases as Array<Record<string, unknown>>)
+    .filter((r) => r && typeof r.tag === "string" && typeof r.commit === "string")
+    .map((r) => ({ tag: r.tag as string, commit: r.commit as string, publishedAt: String(r.publishedAt ?? "") }));
+  const jobs = (o.jobs as unknown[]).map(job).filter((j): j is ServiceJob => j !== null);
+  return {
+    current: { commit: typeof c.commit === "string" ? c.commit : null, tag: typeof c.tag === "string" ? c.tag : null },
+    unavailable: typeof o.unavailable === "string" ? o.unavailable : null,
+    releases, releaseError: typeof o.releaseError === "string" ? o.releaseError : null, jobs, running: job(o.running),
+  };
+}
+
+// What the confirm field must hold: the word restart, or the release tag.
+export const serviceWord = (v: AdminView) => (v.serviceAction === "restart" ? "restart" : v.serviceTag);
+
+export function serviceGate(v: AdminView): { ok: boolean; reason: string } {
+  const s = v.service;
+  if (v.busy) return { ok: false, reason: "Working…" };
+  if (!s) return { ok: false, reason: "Read the service first" };
+  if (s.unavailable) return { ok: false, reason: s.unavailable };
+  if (s.running) return { ok: false, reason: `${s.running.action === "update" ? `Updating to ${s.running.tag}` : "Restarting"}: wait for it to end` };
+  if (v.serviceAction === "update") {
+    const r = s.releases.find((x) => x.tag === v.serviceTag);
+    if (!r) return { ok: false, reason: s.releases.length ? "Choose a release" : "No release with a package yet" };
+    if (r.commit === s.current.commit) return { ok: false, reason: `This service already runs ${r.tag}` };
+  }
+  const word = serviceWord(v);
+  if (v.serviceConfirm !== word) return { ok: false, reason: `Type ${word} to confirm` };
+  return { ok: true, reason: v.serviceAction === "restart" ? "Restarts the service; the page reconnects when it is back" : `Backs up, installs ${v.serviceTag}, and rolls back if it does not start` };
 }

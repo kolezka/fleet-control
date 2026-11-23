@@ -93,6 +93,14 @@
                 <label for="settingsConfirm">Type settings to confirm</label><input id="settingsConfirm" autocomplete="off" spellcheck="false">
                 <div class="composerfooter"><span id="settingsGate"></span><button type="button" id="settingsReload">Reload</button><button type="button" id="settingsSave" disabled>Save settings</button></div></div>
               </div>
+              <div class="adminpart" id="servicePart" hidden><div class="sectionheading"><h4>Service</h4></div>
+                <p class="fineprint" id="serviceCurrent"></p>
+                <label for="serviceAction">Action</label><select id="serviceAction"><option value="restart">Restart the service</option><option value="update">Update to a release</option></select>
+                <label for="serviceTag" id="serviceTagLabel">Release</label><select id="serviceTag"></select>
+                <label for="serviceConfirm" id="serviceConfirmLabel">Type restart to confirm</label><input id="serviceConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="serviceGate"></span><button type="button" id="serviceGo" class="destructive" disabled>Restart</button></div>
+                <ol class="servicesteps" id="serviceSteps"></ol>
+              </div>
               <p id="adminStatus" role="status"></p>
             </details>
             <details class="exchange" open><summary>Commands &amp; responses</summary><ol id="exchangeRows"></ol><p id="eventText" class="fineprint"></p></details>
