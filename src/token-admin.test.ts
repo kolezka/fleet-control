@@ -176,15 +176,13 @@ test("a host that cannot answer is removed only without revoke, and the answer s
 });
 
 test("a change is checked against the file as it is under the lock, not the list read before", async () => {
-  // A stand-in file whose rows change between the list and the change.
-  let rows = [{ name: "a", role: "operator" as const }, { name: "b", role: "operator" as const }];
+  // rows() (what the page read) still shows two operators; the file under the lock has only b.
   const file: TokenFile = {
-    rows: async () => rows,
-    change: async (_name, decide) => { decide(rows); return null; },
+    rows: async () => [{ name: "a", role: "operator" }, { name: "b", role: "operator" }],
+    change: async (_name, decide) => { decide([{ name: "b", role: "operator" }]); return null; },
   };
   const t = tokenUseCases({ file }, { name: "a", role: "operator" });
   expect((await t.list()).tokens.map((r) => r.name)).toEqual(["a", "b"]);
-  rows = [{ name: "b", role: "operator" }];
   await expect(t.revoke("b", { confirm: "b" })).rejects.toThrow("b is the last operator; add another before revoking it");
   await expect(tokenUseCases({ file }, { name: "v", role: "viewer" }).list()).rejects.toThrow("role viewer may not start or stop agents");
 });
@@ -213,4 +211,172 @@ test("a host whose token file is not the gateway's own is not rotated from the p
   const gone = await page("/api/manage/h/remove", { confirm: "h", revoke: false });
   expect((await gone.json()).tokenFileRemoved).toBe(false);
   expect(readdirSync(join(dir, "gw")).sort()).toEqual(["client.json", "shared-token", "token-h"]);
+});
+
+// A stand-in host for the gateway's rotate: it can take the hash and then answer badly.
+function fakeHost(behave: (hash: string) => Response | "drop", stagedDir?: () => string) {
+  const known = new Set([gw]);
+  let current = gw;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const token = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "");
+      if (!known.has(token)) return Response.json({ error: { message: "no" } }, { status: 401 });
+      const path = new URL(req.url).pathname;
+      if (path === "/api/whoami") return Response.json({ principal: "macbook-gateway", role: "operator", auth: true });
+      if (path === "/api/token/replace") {
+        const { hash } = await req.json() as { hash: string };
+        // Take it: the old token stops, the one with this hash starts.
+        known.delete(current);
+        // The gateway staged the new token beside its config before asking; a real host learns it from the hash.
+        if (stagedDir) {
+          const d = stagedDir();
+          for (const f of readdirSync(d).filter((x) => x.startsWith("token-h.new-"))) {
+            const t = readFileSync(join(d, f), "utf8").trim();
+            if (require("node:crypto").createHash("sha256").update(t).digest("hex") === hash) { known.add(t); current = t; }
+          }
+        }
+        const r = behave(hash);
+        if (r === "drop") { server.stop(true); return new Response(null); }
+        return r;
+      }
+      return Response.json({ error: { message: "not found" } }, { status: 404 });
+    },
+  });
+  return { server, accept: (token: string) => { known.add(token); current = token; } };
+}
+
+async function gatewayFor(url: string) {
+  const d = join(dir, "gw2");
+  require("node:fs").mkdirSync(d, { mode: 0o700 });
+  writeFileSync(join(d, "token-h"), `${gw}\n`, { mode: 0o600 });
+  const path = join(d, "client.json");
+  writeFileSync(path, JSON.stringify({ hosts: [{ id: "h", name: "H", url, tokenFile: "token-h" }] }), { mode: 0o600 });
+  const cfg = await loadGatewayConfig(path);
+  const g = startGateway(cfg, { port: 0, manage: gatewayHostManager(path, cfg) });
+  return { d, g, cfg };
+}
+
+test("a host that took the hash and then answered 503 keeps the gateway on the new token", async () => {
+  const fake = fakeHost(() => Response.json({ error: { message: "reload failed" } }, { status: 503 }), () => join(dir, "gw2"));
+  const { d, g, cfg } = await gatewayFor(fake.server.url.origin);
+  try {
+    const res = await fetch(`${g.url.origin}/api/manage/h/rotate`, { method: "POST", headers: { origin: g.url.origin, "content-type": "application/json" }, body: JSON.stringify({ confirm: "h" }) });
+    expect(res.status).toBe(200);
+    const now = readFileSync(join(d, "token-h"), "utf8").trim();
+    expect(now).not.toBe(gw);
+    expect(cfg.credentials.bearer("h")).toBe(now);
+    expect(readdirSync(d).sort()).toEqual(["client.json", "token-h"]);
+  } finally {
+    g.stop(true); fake.server.stop(true);
+  }
+});
+
+test("a host that dropped the answer and does not know the new token leaves the old one in place", async () => {
+  const fake = fakeHost(() => "drop");
+  const { d, g, cfg } = await gatewayFor(fake.server.url.origin);
+  try {
+    const res = await fetch(`${g.url.origin}/api/manage/h/rotate`, { method: "POST", headers: { origin: g.url.origin, "content-type": "application/json" }, body: JSON.stringify({ confirm: "h" }) });
+    expect(res.status).toBe(422);
+    // The fake took the hash then vanished: neither token answers, so the staged file is kept and named.
+    const msg = (await res.json()).error.message as string;
+    expect(msg).toContain("takes neither token now");
+    const staged = readdirSync(d).find((f) => f.startsWith("token-h.new-"))!;
+    expect(msg).toContain(staged);
+    expect(readFileSync(join(d, "token-h"), "utf8").trim()).toBe(gw);
+    expect(cfg.credentials.bearer("h")).toBe(gw);
+  } finally {
+    g.stop(true); fake.server.stop(true);
+  }
+});
+
+test("token changes by callers who may not operate, from another origin or not as JSON are refused, and the gateway never forwards the own-line routes", async () => {
+  const post = (token: string | null, path: string, body: object, headers: Record<string, string> = {}) => fetch(`${host.url.origin}${path}`, {
+    method: "POST", headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json", ...headers }, body: JSON.stringify(body),
+  });
+  const before = fileText();
+  for (const t of [viewer, agent, managed]) {
+    expect((await post(t, "/api/tokens/watcher/revoke", { confirm: "watcher" })).status).toBe(403);
+    expect((await post(t, "/api/tokens/watcher/rotate", { confirm: "watcher" })).status).toBe(403);
+    expect((await post(t, "/api/token/replace", { hash: "a".repeat(64) })).status).toBe(403);
+    expect((await post(t, "/api/token/revoke", { confirm: "x" })).status).toBe(403);
+  }
+  expect((await post(gw, "/api/tokens/watcher/revoke", { confirm: "watcher" }, { origin: "https://evil.example" })).status).toBe(403);
+  const plain = await fetch(`${host.url.origin}/api/tokens/watcher/revoke`, { method: "POST", headers: { authorization: `Bearer ${gw}`, "content-type": "text/plain" }, body: JSON.stringify({ confirm: "watcher" }) });
+  expect(plain.status).toBe(415);
+  // A hash another line already has is refused and nothing changes.
+  const dup = await post(gw, "/api/token/replace", { hash: require("node:crypto").createHash("sha256").update(other).digest("hex") });
+  expect(dup.status).toBe(400);
+  expect(fileText()).toBe(before);
+
+  // Gateway: /api/manage only from the page's own origin and as JSON; own-line routes are not reachable.
+  expect((await fetch(`${gateway.url.origin}/api/manage/h/rotate`, { method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" }, body: JSON.stringify({ confirm: "h" }) })).status).toBe(403);
+  expect((await fetch(`${gateway.url.origin}/api/manage/h/rotate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: "h" }) })).status).toBe(403);
+  expect((await fetch(`${gateway.url.origin}/api/manage/h/rotate`, { method: "POST", headers: { origin: gateway.url.origin, "content-type": "text/plain" }, body: JSON.stringify({ confirm: "h" }) })).status).toBe(415);
+  expect((await page("/api/hosts/h/token/replace", { hash: "a".repeat(64) })).status).toBe(404);
+  expect((await page("/api/hosts/h/token/revoke", { confirm: "macbook-gateway" })).status).toBe(404);
+  expect(fileText()).toBe(before);
+  expect(await whoami(viewer)).toBe(200);
+});
+
+test("two changes at once leave the running service matching the file", async () => {
+  // Fire rotate and revoke together; afterwards every line in the file works and nothing else does.
+  const [r1, r2] = await Promise.all([
+    page("/api/hosts/h/tokens/orchestrator/rotate", { confirm: "orchestrator" }),
+    page("/api/hosts/h/tokens/watcher/revoke", { confirm: "watcher" }),
+  ]);
+  expect([r1.status, r2.status]).toEqual([200, 200]);
+  const { token } = await r1.json();
+  expect(await whoami(viewer)).toBe(401);
+  expect(await whoami(agent)).toBe(401);
+  expect(await whoami(token)).toBe(200);
+  expect(auth.names().sort()).toEqual([...require("./auth.ts").parseTokens(fileText()).keys()].sort());
+});
+
+test("adding and removing hosts at the same time never loses one of the two config changes", async () => {
+  const { gatewayHostAdder } = await import("./gateway-enroll.ts");
+  writeFileSync(join(dir, "gw", "token-n"), `${newToken()}\n`, { mode: 0o600 });
+  const add = gatewayHostAdder(configPath, config);
+  const [, removed] = await Promise.all([
+    add({ id: "n", name: "N", url: "https://n.example:4871", tokenFile: "token-n" }, newToken()),
+    page("/api/manage/h/remove", { confirm: "h", revoke: false }),
+  ]);
+  expect(removed.status).toBe(200);
+  expect(JSON.parse(readFileSync(configPath, "utf8")).hosts.map((h: { id: string }) => h.id)).toEqual(["n"]);
+});
+
+test("removing a host closes its open terminal relays", async () => {
+  // A host with a terminal socket that stays open.
+  const term = Bun.serve({
+    port: 0,
+    fetch(req, srv) {
+      const t = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "");
+      if (new URL(req.url).pathname === "/api/whoami") return Response.json({ principal: "macbook-gateway", role: "operator", auth: true });
+      return t === gw && srv.upgrade(req) ? undefined : new Response("no", { status: 401 });
+    },
+    websocket: { message() {} },
+  });
+  const { g } = await gatewayFor(term.url.origin);
+  try {
+    const ws = new WebSocket(`${g.url.origin.replace("http", "ws")}/api/hosts/h/sessions/s/terminal?cols=80&rows=24`, { headers: { origin: g.url.origin } } as never);
+    await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+    const closed = new Promise<number>((r) => { ws.onclose = (e) => r(e.code); });
+    const res = await fetch(`${g.url.origin}/api/manage/h/remove`, { method: "POST", headers: { origin: g.url.origin, "content-type": "application/json" }, body: JSON.stringify({ confirm: "h", revoke: false }) });
+    expect(res.status).toBe(200);
+    expect(await Promise.race([closed, Bun.sleep(2000).then(() => -1)])).toBe(1001);
+  } finally {
+    g.stop(true); term.stop(true);
+  }
+});
+
+test("the running service takes each change while the tokens file lock is still held, so a slower reload cannot undo a later revoke", async () => {
+  const { existsSync } = require("node:fs");
+  const { FileAgentTokens } = await import("./agent-tokens.ts");
+  const held: boolean[] = [];
+  auth.onReplace(() => held.push(existsSync(`${tokensPath}.lock`)));
+  expect((await page("/api/hosts/h/tokens/watcher/revoke", { confirm: "watcher" })).status).toBe(200);
+  const agents = new FileAgentTokens(tokensPath, auth);
+  await agents.issue("fc-new");
+  await agents.revoke("fc-new");
+  expect(held).toEqual([true, true, true]);
 });

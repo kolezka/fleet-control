@@ -40,13 +40,15 @@ export class HostTokenFile implements TokenFile {
           parseTokens(out);
         }
         writeAtomic(this.file, out);
+        // Loaded while the lock is still held, from the text just written: a later change cannot be
+        // overtaken by a slower reload of this one.
+        this.auth.replace(new Auth(parseTokens(out)));
       });
     } catch (e) {
       // Lock held, a duplicate hash, an empty file: the file is unchanged, the reason goes to the operator.
       if (e instanceof AuthConfigError) throw new AdminError("invalid", e.message);
       throw e;
     }
-    this.auth.replace(await Auth.fromFile(this.file));
     return token;
   }
 }

@@ -67,19 +67,26 @@ export function gatewayHostUseCases(deps: GatewayHostsDeps) {
       const hash = createHash("sha256").update(token).digest("hex");
       let answer: HostAnswer | null = null;
       try { answer = await deps.call(h.url, h.token, "/api/token/replace", { hash }); } catch { answer = null; }
-      if (answer && answer.status !== 200) {
+      // Only a 4xx is a refusal the host made before touching its file. A 5xx (the host, or a proxy in front
+      // of it) may come after the file changed, so it is treated like no answer.
+      if (answer && answer.status >= 400 && answer.status < 500) {
         await deps.discard(staged);
         throw new GatewayHostError("failed", `${h.url} refused the new token: ${reason(answer)}`);
       }
-      // No answer: the host may or may not have taken it. Ask with each token which one it knows.
-      if (!answer && (await whoami(h.url, token)) !== me) {
+      // A 200 counts only with the host's own confirmation; anything else is checked with whoami.
+      const took = answer?.status === 200 && (answer.body as { replaced?: unknown } | null)?.replaced === true;
+      if (!took && (await whoami(h.url, token)) !== me) {
         if ((await whoami(h.url, h.token)) === me) {
           await deps.discard(staged);
-          throw new GatewayHostError("failed", `${h.url} did not answer; it still takes the old token, so nothing changed`);
+          throw new GatewayHostError("failed", `${h.url} did not take the new token (${answer ? reason(answer) : "no answer"}); it still takes the old one, so nothing changed`);
         }
-        throw new GatewayHostError("failed", `${h.url} did not answer and takes neither token now; the new one is kept in ${staged}`);
+        throw new GatewayHostError("failed", `${h.url} takes neither token now. The new one is kept in ${staged}; if the host has its hash, rename that file to the host's token file and restart the gateway, else re-add the host`);
       }
-      await deps.commit(id, staged, token);
+      try {
+        await deps.commit(id, staged, token);
+      } catch (e) {
+        throw new GatewayHostError("failed", `${h.url} took the new token but the gateway could not switch to it (${e instanceof Error ? e.message : String(e)}); the old token no longer works there. The new one is in ${staged}: rename it to the host's token file and restart the gateway`);
+      }
       return { id, principal: me, rotated: true };
     }),
 

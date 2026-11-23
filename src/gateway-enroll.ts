@@ -10,6 +10,7 @@ import { newToken } from "./auth.ts";
 import { enrollUseCases, type EnrollDeps, type EnrollUseCases } from "./application/enrollment.ts";
 import { EnrollError, HOST_ID } from "./domain/enrollment.ts";
 import { GatewayConfigError, parseGatewayConfig, type EnrollHandler, type GatewayConfig } from "./client-gateway.ts";
+import { withConfigLock } from "./gateway-config-lock.ts";
 
 // A token file from an earlier attempt. Only this error names a file in the answer.
 class TokenFileExists extends Error {
@@ -18,7 +19,7 @@ class TokenFileExists extends Error {
 
 // Adds one host to a running gateway: the in-memory list and credentials, then the config file.
 export function gatewayHostAdder(configPath: string, config: GatewayConfig, renameFile: (from: string, to: string) => Promise<void> = rename) {
-  return async (host: { id: string; name: string; url: string; tokenFile: string }, token: string) => {
+  return (host: { id: string; name: string; url: string; tokenFile: string }, token: string) => withConfigLock(configPath, async () => {
     const json = JSON.parse(await readFile(configPath, "utf8")) as { hosts: unknown[] };
     const entry = { id: host.id, name: host.name, url: host.url, tokenFile: host.tokenFile };
     const next = { ...json, hosts: [...json.hosts, entry] };
@@ -43,7 +44,7 @@ export function gatewayHostAdder(configPath: string, config: GatewayConfig, rena
       throw e;
     }
     config.hosts.push({ id: added.id, name: added.name, origin: added.origin });
-  };
+  });
 }
 
 export function enrollDeps(configPath: string, config: GatewayConfig, opts: { timeoutMs?: number; ssh?: boolean } = {}): EnrollDeps {

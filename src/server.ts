@@ -186,6 +186,7 @@ export function serve(deps: Parameters<typeof createApp>[0] & { terminal?: Termi
     const t = tokensFor(who);
     if (!t) return noTokens();
     if (!originAllowed(req)) return forbidden();
+    if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return Response.json({ error: { kind: "invalid", message: "content-type must be application/json" } }, { status: 415 });
     try {
       const body = await jsonBody(req);
       if (!body) return Response.json({ error: { kind: "invalid", message: "body must be an object" } }, { status: 400 });

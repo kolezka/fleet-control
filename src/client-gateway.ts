@@ -61,6 +61,12 @@ export class Credentials {
   // Undoes add when the config file could not be written, and forgets a removed host.
   remove(id: string) {
     this.#tokens.delete(id);
+    for (const fn of this.#removed) fn(id);
+  }
+  // Told when a host's credential goes, so open terminal relays to it can close.
+  readonly #removed = new Set<(id: string) => void>();
+  onRemove(fn: (id: string) => void) {
+    this.#removed.add(fn);
   }
   toJSON() {
     return {};
@@ -314,6 +320,9 @@ const closeReason = (r: string) => (/^[\x20-\x7e]{1,120}$/.test(r) ? r : "upstre
 
 export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   const timeoutMs = opts.timeoutMs ?? 10_000;
+  // Open terminal relays, so a host removed from the page loses them at once.
+  const relays = new Set<Relay>();
+  config.credentials.onRemove((id) => { for (const r of [...relays]) if (r.host === id) teardown(r, 1001, "host removed from the gateway"); });
   const maxReq = opts.maxRequestBytes ?? 64 * 1024;
   const maxRes = opts.maxResponseBytes ?? 8 * 1024 * 1024;
   const maxPre = opts.maxPreOpenBytes ?? 1024 * 1024;
@@ -548,6 +557,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       };
       ws.onopen = () => {
         opened = true;
+        relays.add(relay);
         clearTimeout(timer);
         done(relay);
       };
@@ -557,6 +567,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
         // The host revoked the gateway's own token, not the browser's, so signing in again would not help.
         const reason = e.code === 1008 && e.reason === "token revoked" ? "gateway token revoked" : closeReason(e.reason);
         relay.upClosed = { code: e.code, reason };
+        relays.delete(relay);
         if (!opened) return done(null);
         relay.client?.close(closeCode(e.code), relay.upClosed.reason);
       };
@@ -570,6 +581,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
   }
 
   function teardown(relay: Relay, code: number, reason: string) {
+    relays.delete(relay);
     if (relay.done) return;
     relay.done = true;
     try { relay.up.close(1000); } catch { /* already closed */ }

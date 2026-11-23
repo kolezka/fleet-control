@@ -720,3 +720,32 @@ test("a host without the tokens route hides the tokens part, and a gateway witho
   expect(b.element("tokenPart").hidden).toBe(true);
   expect(b.element("hostPart").hidden).toBe(true);
 });
+
+test("a token refusal the gateway relays as upstream_forbidden reads as not changed, and a shown token is gone after picking another host", async () => {
+  const conf = { path: "/f/fleet.conf", text: "FLEET=t\n", revision: "a".repeat(64), sessions: [], loadError: null };
+  const tokens = { tokens: [{ name: "watcher", role: "viewer", self: false, managed: false }] };
+  let refuse = true;
+  const b = await browser({ hosts: [{ id: "a", name: "A", apiBase: "/api/hosts/a" }, { id: "c", name: "C", apiBase: "/api/hosts/c" }] } as never, (path) => {
+    if (path.endsWith("/fleet/conf")) return conf;
+    if (path.endsWith("/tokens/watcher/rotate")) return refuse ? { __status: 502, error: { kind: "upstream_forbidden", message: "host refused the request" } } : { name: "watcher", token: "T".repeat(43) };
+    if (path.endsWith("/tokens")) return tokens;
+    return path.endsWith("/sessions") ? { sessions: [] } : path.includes("/requests") ? { requests: [], runs: [] } : path.endsWith("/agents") ? { __status: 503 } : { commands: [] };
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const type = async (id: string, value: string, kind = "input") => { b.element(id).value = value; await b.listeners.get(id + ":" + kind)!({}); };
+  const rotate = async () => {
+    await type("tokenAction", "rotate", "change");
+    await type("tokenConfirm", "watcher");
+    await b.listeners.get("tokenGo:click")!({});
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  await rotate();
+  expect(b.element("adminStatus").textContent).toBe("A: watcher not changed: the host refused this gateway (host refused the request).");
+  refuse = false;
+  await rotate();
+  expect(b.element("newTokenText").textContent).toBe("T".repeat(43));
+  await b.click({ host: "c" });
+  await b.click({ host: "a" });
+  expect(b.element("newTokenBox").hidden).toBe(true);
+  expect(b.element("newTokenText").textContent).toBe("");
+});

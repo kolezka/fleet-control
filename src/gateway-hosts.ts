@@ -8,6 +8,7 @@ import { newToken } from "./auth.ts";
 import { gatewayHostUseCases, GatewayHostError, type GatewayHostsDeps, type GatewayHostUseCases } from "./application/gateway-hosts.ts";
 import { GatewayConfigError, parseGatewayConfig, type EnrollHandler, type GatewayConfig } from "./client-gateway.ts";
 import { HOST_ID } from "./domain/enrollment.ts";
+import { withConfigLock } from "./gateway-config-lock.ts";
 
 type HostEntry = { id: string; tokenFile: string; [k: string]: unknown };
 
@@ -58,7 +59,7 @@ export function gatewayHostsDeps(configPath: string, config: GatewayConfig, opts
       config.credentials.replace(id, token);
     },
     discard: (staged) => rm(staged, { force: true }),
-    forget: async (id) => {
+    forget: (id) => withConfigLock(configPath, async () => {
       const json = await readConfig();
       const entry = json.hosts.find((h) => h.id === id);
       const next = { ...json, hosts: json.hosts.filter((h) => h.id !== id) };
@@ -79,7 +80,7 @@ export function gatewayHostsDeps(configPath: string, config: GatewayConfig, opts
       const own = entry && resolve(dir, entry.tokenFile) === join(dir, `token-${id}`);
       if (own) await rm(join(dir, `token-${id}`), { force: true });
       return { tokenFileRemoved: Boolean(own) };
-    },
+    }),
   };
 }
 

@@ -21,9 +21,10 @@ export class FileAgentTokens implements AgentTokens {
       const text = readFileSync(this.file, "utf8");
       const out = next(text, this.roleOf(text, name));
       if (out !== null) writeAtomic(this.file, out);
+      // Loaded under the lock from the text on disk, so a slower reload of an earlier change can never
+      // bring back a line a later change removed.
+      this.auth.replace(new Auth(parseTokens(out ?? text)));
     });
-    // The file is the source of truth; a reload that fails leaves the old tokens and says why.
-    this.auth.replace(await Auth.fromFile(this.file));
   }
 
   // A line left for this name (a crash between issue and revoke) is replaced, so its old token dies.

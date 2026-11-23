@@ -44,12 +44,13 @@ const SHOWN_COMMANDS = 6;
 
 // One call to one host. A 401 from a single host service means this page has no sign-in: go to /login.
 // Through a gateway a 401 is that upstream host's answer, so it only makes that host unknown.
-async function hostCall(host: HostInfo, path: string, init: RequestInit = {}, timeoutMs = READ_TIMEOUT_MS): Promise<{ status: number | null; outcome: Outcome<unknown> }> {
+async function hostCall(host: HostInfo, path: string, init: RequestInit = {}, timeoutMs = READ_TIMEOUT_MS): Promise<{ status: number | null; outcome: Outcome<unknown>; kind?: string }> {
   try {
     const res = await fetch(`${host.apiBase}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
     if (res.status === 401 && host.direct) location.assign("./login");
     const body = await res.json().catch(() => null);
-    return { status: res.status, outcome: interpretResponse(res.status, body) };
+    const kind = (body as { error?: { kind?: unknown } } | null)?.error?.kind;
+    return { status: res.status, outcome: interpretResponse(res.status, body), ...(typeof kind === "string" ? { kind } : {}) };
   } catch (e) {
     return { status: null, outcome: { ok: false, kind: "network", message: e instanceof Error && e.name === "TimeoutError" ? "No answer in time" : "Unreachable" } };
   }
@@ -711,7 +712,7 @@ async function changeToken(hostId: string) {
   const name = v.tokenName, action = v.tokenAction;
   v.busy = true; v.newToken = ""; v.notice = `${action === "rotate" ? "Rotating" : "Revoking"} ${name} on ${host.name}`;
   renderAdmin(selectedHostState(fleet));
-  const { status, outcome } = await hostCall(host, `/tokens/${encodeURIComponent(name)}/${action}`, {
+  const { status, outcome, kind } = await hostCall(host, `/tokens/${encodeURIComponent(name)}/${action}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: v.tokenConfirm }),
   }, WRITE_TIMEOUT_MS);
   v.busy = false; v.tokenConfirm = "";
@@ -720,6 +721,8 @@ async function changeToken(hostId: string) {
     v.newToken = token;
     v.notice = `${host.name}: ${name} rotated. Give the new token to whoever uses ${name}.`;
   } else v.notice = outcome.ok ? `${host.name}: ${name} ${action === "rotate" ? "rotated, but no token came back" : "revoked"}.`
+    // The gateway turns the host's 401/403 into 502 with a kind; those are definite refusals, not unknowns.
+    : kind === "upstream_forbidden" || kind === "upstream_unauthorized" ? `${host.name}: ${name} not changed: the host refused this gateway (${outcome.message}).`
     : status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether ${name} was ${action === "rotate" ? "rotated" : "revoked"}.`
     : `${host.name}: ${name} not changed: ${outcome.message}`;
   renderAdmin(selectedHostState(fleet));
@@ -927,6 +930,8 @@ document.addEventListener("click", (e) => {
     apply(selectSession(fleet, b.dataset.host, b.dataset.session));
     render();
   } else if (b.dataset.host) {
+    // A token shown after a rotate is for that moment only; picking a host clears every shown token.
+    for (const v of adminViews.values()) v.newToken = "";
     apply(selectHost(fleet, b.dataset.host));
     render();
     // The host may have been off screen for a while; read it again now.
