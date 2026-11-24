@@ -1,7 +1,7 @@
 // Move fleet from the page: a new FLEET name, FLEET_DIR and tmux socket. These use cases check who asks, that
 // nothing still runs on the old setup, and hand the move to the updater, which restarts the service on it.
 import { AdminError } from "../domain/fleet-admin.ts";
-import { checkMoveRequest, moveBlockers, movedConf, type MoveFacts, type MoveTarget, shellWord } from "../domain/move.ts";
+import { checkMoveRequest, moveBlockers, movedConf, type MoveFacts, type MoveTarget, quoteForBash } from "../domain/move.ts";
 import { requirePermission, type Caller } from "../domain/roles.ts";
 import { createHash } from "node:crypto";
 import type { UpdateJob } from "../domain/updates.ts";
@@ -64,7 +64,7 @@ export function moveUseCases(deps: MoveDeps, caller?: Caller) {
       // The new folder does not exist yet, so lines that read files in FLEET_DIR (the managed agents line) would fail
       // there. The rewrite is checked with the old folder; the updater loads the copy itself once it exists.
       try {
-        const after = await deps.host.facts(movedConf(original, { ...to, dir: f.dir }, shellWord(f.dir)));
+        const after = await deps.host.facts(movedConf(original, { ...to, dir: f.dir }, quoteForBash(f.dir)));
         if (after.fleet !== to.fleet || after.dir !== f.dir || after.socket !== to.socket) throw new Error("it does not set the new name and socket");
       } catch (e) { throw new AdminError("failed", `the moved fleet.conf would not load (${e instanceof Error ? e.message : e}); nothing moved`); }
       // The updater moves only the fleet.conf checked here; an edit in between stops it.

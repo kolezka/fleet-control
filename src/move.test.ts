@@ -215,5 +215,6 @@ test("review: the rewrite check quotes an old folder with a space or a quote in 
     const to = { fleet: "new", dir: join(d, "new"), socket: "fleet-new" };
     await moveUseCases(deps, { name: "op", role: "operator" }).move({ ...to, confirm: "move" });
     expect(started.length).toBe(1);
+    expect(started[0]).toMatchObject({ from: { dir: old }, to: { dir: to.dir } });
   } finally { await rm(d, { recursive: true, force: true }); }
 });

@@ -28,7 +28,7 @@ export function checkMoveRequest(input: unknown): MoveTarget {
 // fleet.conf with the three values replaced. FLEET= and FLEET_DIR= must each be one plain line of their own
 // (agent-fleet's template writes them so); anything cleverer is left for a move by hand.
 // Single-quoted for bash, for a folder the operator wrote (it may hold spaces).
-export function shellWord(s: string): string { return `'${s.replace(/'/g, "'\\''")}'`; }
+export function quoteForBash(s: string): string { return `'${s.replace(/'/g, "'\\''")}'`; }
 export function movedConf(text: string, to: MoveTarget, dirWord = to.dir): string {
   const lines = text.split("\n");
   const at = (name: string) => lines.flatMap((l, i) => (new RegExp(`^\\s*(export\\s+)?${name}=`).test(l) ? [i] : []));
