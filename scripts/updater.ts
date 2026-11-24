@@ -421,9 +421,14 @@ export async function moveFleet(job: Job) {
     job.step(`${why}; ${said}`);
     try { stopService(s.manager); } catch {}
     if (!(await waitDown(health, 15))) job.step("the service still answers; if the stop did not take, it still runs the old setup");
+    const restartAt = Date.now();
     try { await startService(s.manager, s.dir); } catch (e) { job.end("failed", `the old setup did not start either (${e instanceof Error ? e.message : e}); backup in ${b}`); return; }
     const up = await waitHealthy(health, waits.start);
-    job.end(up ? "rolled_back" : "failed", up ? `the service answers again on ${health} with the old fleet; ${m.to.dir} is left for a look` : `the old setup does not answer on ${health} either; backup in ${b}`);
+    if (!up) { job.end("failed", `the old setup does not answer on ${health} either; backup in ${b}`); return; }
+    // An answer is not enough: a settings file still naming the new folder starts the service there again.
+    const ran = runningConf(`${m.settingsFile}.running`, restartAt);
+    if (ran !== oldConf) { job.end("failed", `the service answers on ${health} but runs ${ran ?? "an unknown fleet.conf"}, not the old ${oldConf}; backup in ${b}`); return; }
+    job.end("rolled_back", `the service answers again on ${health} with the old fleet; ${m.to.dir} is left for a look`);
   };
   try {
     stopService(s.manager);
@@ -441,8 +446,9 @@ export async function moveFleet(job: Job) {
   const took = runningConf(`${m.settingsFile}.running`, stoppedAt);
   if (took !== newConf) { await putBack(`the service started on ${took ?? "an unknown fleet.conf"}, not ${newConf}`); return; }
   // Absolute symlinks inside the folder still point into the old one; name them so they can be fixed.
-  const links = (readdirSync(m.to.dir, { recursive: true }) as string[]).filter((f) => lstatSync(join(m.to.dir, f)).isSymbolicLink());
-  if (links.length) job.step(`symlinks copied as they were (they may point into the old folder): ${links.join(", ")}`);
+  const found = symlinksIn(m.to.dir);
+  if (found.links.length) job.step(`symlinks copied as they were (they may point into the old folder): ${found.links.join(", ")}`);
+  if (found.problems.length) job.step(`some of the copy could not be listed for symlinks: ${found.problems.join("; ")}`);
   job.end("done", `the service answers on ${health} with fleet ${m.to.fleet} in ${m.to.dir}; the old folder ${m.from.dir} is unchanged (a FLEET_CONTROL_FILE_ROOTS in the plist or unit that names it is not changed)`);
 }
 
@@ -454,8 +460,32 @@ export function fleetSessions(socket: string, path: string): string[] {
   const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000 });
   if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];
   const err = `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`.trim();
-  if (/no server running|error connecting to/.test(err)) return [];
+  if (NO_SERVER.test(err)) return [];
   throw new StepFailed(`the fleet's tmux sessions could not be checked (${err || `exit ${r.status}`}); nothing moved`);
+}
+
+// Only a missing server means "no sessions"; a socket that cannot be read (Permission denied) is a failure.
+export const NO_SERVER = /no server running on |error connecting to .* \((No such file or directory|Connection refused)\)/;
+
+// Symlinks under dir, relative. Never follows a link, so a loop or a link to / cannot hang or throw; errors are named.
+export function symlinksIn(dir: string, cap = 10_000): { links: string[]; problems: string[] } {
+  const links: string[] = [], problems: string[] = [];
+  const todo = [""];
+  let seen = 0;
+  while (todo.length) {
+    const rel = todo.pop()!;
+    let names: string[];
+    try { names = readdirSync(join(dir, rel)); } catch (e) { problems.push(`${rel || "."}: ${e instanceof Error ? e.message : e}`); continue; }
+    for (const n of names) {
+      if (++seen > cap) { problems.push(`stopped after ${cap} entries`); return { links, problems }; }
+      const r = rel ? `${rel}/${n}` : n;
+      try {
+        const st = lstatSync(join(dir, r));
+        if (st.isSymbolicLink()) links.push(r); else if (st.isDirectory()) todo.push(r);
+      } catch (e) { problems.push(`${r}: ${e instanceof Error ? e.message : e}`); }
+    }
+  }
+  return { links: links.sort(), problems };
 }
 
 // The fleet.conf a service started after `since` says it runs; null when there is no such record.

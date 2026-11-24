@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { Job, runJob, scratchEnv, startService, stopService, restartService, waitDown, type JobFile } from "./updater.ts";
+import { Job, runJob, scratchEnv, startService, stopService, restartService, waitDown, fleetSessions, NO_SERVER, symlinksIn, type JobFile } from "./updater.ts";
 
 const root = mkdtempSync(join(tmpdir(), "updater-"));
 const managers: JobFile["service"]["manager"][] = [];
@@ -425,16 +425,19 @@ test("move review 2: a tmux that cannot be run refuses the move instead of readi
   expect(existsSync(s.to.dir)).toBe(false);
 }, 60_000);
 
-test("move review 2: a settings lock that never frees still lets the old setup start, and the step says the file still names the new folder", async () => {
-  const s = await moveSetup("move-lock", "conf = process.env.FLEET_CONF!;");
+test("move review 2: a settings lock that never frees still restarts the service, and a service back on the new folder is a failed move, not a rollback", async () => {
+  // First start on the new folder reports the old one (so the move puts back); later starts read settings.json like the real service.
+  const mark = join(root, "move-lock-first");
+  const s = await moveSetup("move-lock", `if (conf.includes("/prod/") && !require("node:fs").existsSync(${JSON.stringify(mark)})) { require("node:fs").writeFileSync(${JSON.stringify(mark)}, "1"); conf = process.env.FLEET_CONF!; }`);
   const job = Job.read(s.job.file);
   const realStep = job.step.bind(job);
   // A crashed writer leaves the lock behind right after the move wrote the settings file.
   job.step = (t: string) => { realStep(t); if (t.startsWith("settings file ") && t.includes(" names ")) writeFileSync(`${s.settings}.lock`, "1\n"); };
   try { await runJob(job); } finally { rmSync(`${s.settings}.lock`, { force: true }); }
   const after = Job.read(s.job.file).data;
-  expect(after.state).toBe("rolled_back");
+  expect(after.state).toBe("failed");
   expect(after.steps.join("\n")).toContain(`the settings file could not be put back: locked (another change holds ${s.settings}.lock`);
+  expect(after.steps.at(-1)).toContain(`runs ${join(s.to.dir, "fleet.conf")}, not the old`);
   expect(await fetch(`${s.health}/api/whoami`).then((r) => r.status)).toBe(401);
 }, 60_000);
 
@@ -448,3 +451,26 @@ test("move review 2: symlinks in subfolders are named too", async () => {
   expect(after.state).toBe("done");
   expect(after.steps.join("\n")).toContain("symlinks copied as they were (they may point into the old folder): prompts/abs-link");
 }, 60_000);
+
+test("move review 3: an unreadable tmux socket refuses the move; a missing server does not", async () => {
+  const fake = join(root, "fake-tmux");
+  writeFileSync(fake, "#!/bin/sh\necho \"error connecting to /tmp/s/x (Permission denied)\" >&2\nexit 1\n", { mode: 0o755 });
+  process.env.FLEET_CONTROL_TMUX = fake;
+  try { expect(() => fleetSessions("x", "/usr/bin")).toThrow("could not be checked (error connecting to /tmp/s/x (Permission denied))"); }
+  finally { delete process.env.FLEET_CONTROL_TMUX; }
+  for (const line of ["no server running on /tmp/s/x", "error connecting to /tmp/s/x (No such file or directory)", "error connecting to /tmp/s/x (Connection refused)"]) expect(NO_SERVER.test(line)).toBe(true);
+  expect(NO_SERVER.test("error connecting to /tmp/s/x (Permission denied)")).toBe(false);
+});
+
+test("move review 3: a symlink loop or a link to a folder outside is named, never followed", () => {
+  const d = join(root, "links");
+  mkdirSync(join(d, "sub"), { recursive: true });
+  mkdirSync(join(root, "outside", "deep"), { recursive: true });
+  writeFileSync(join(root, "outside", "deep", "x"), "x");
+  symlinkSync(join(d, "sub"), join(d, "sub", "loop"));
+  symlinkSync(join(root, "outside"), join(d, "ext"));
+  const r = symlinksIn(d);
+  expect(r.links).toEqual(["ext", "sub/loop"]);
+  expect(r.problems).toEqual([]);
+  expect(symlinksIn(join(root, "no-such")).problems[0]).toContain("ENOENT");
+});

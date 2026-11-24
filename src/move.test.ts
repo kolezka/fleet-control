@@ -74,9 +74,9 @@ test("review round 1: export stays on the rewritten lines, and declare or defaul
   // Reading the value is fine.
   expect(movedConf("FLEET=a\nFLEET_DIR=/a\nLOG=$FLEET_DIR/log\n", to)).toBe("FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\nLOG=$FLEET_DIR/log\n");
   // Review round 2: reads next to export or read are fine; appends, printf -v and unset are not.
-  for (const ok of ["export LOG=$FLEET_DIR/log", 'export PATH="${FLEET_DIR}/bin:$PATH"', "X=${FLEET_TMUX_SOCKET:-none}"])
+  for (const ok of ["export LOG=$FLEET_DIR/log", 'export PATH="${FLEET_DIR}/bin:$PATH"', "X=${FLEET_TMUX_SOCKET:-none}", "Y=${FLEET_DIR:+set}", "Z=${FLEET:?unset}", "A=1 # FLEET_DIR=/z"])
     expect(movedConf(`FLEET=a\nFLEET_DIR=/a\n${ok}\n`, to)).toBe(`FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\n${ok}\n`);
-  for (const bad of ["FLEET_DIR+=/x", "printf -v FLEET_DIR %s /x", "unset FLEET_TMUX_SOCKET", ": ${FLEET_DIR=/b}"])
+  for (const bad of ["FLEET_DIR+=/x", "printf -v FLEET_DIR %s /x", "unset FLEET_TMUX_SOCKET", ": ${FLEET_DIR=/b}", "X=a#b; FLEET_DIR=/z"])
     expect(fail(() => movedConf(`FLEET=a\nFLEET_DIR=/a\n${bad}\n`, to)).message).toBe(`fleet.conf sets the fleet's name, folder or socket in another way too (${bad}); move it by hand`);
 });
 
@@ -140,7 +140,7 @@ test("the real service takes FLEET_CONF from the settings file, says which fleet
   const port = await freePort();
   const proc = Bun.spawn(["bun", "index.ts"], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, PORT: String(port), FLEET_CONF: join(oldDir, "fleet.conf"), FLEET_CONTROL_DB: join(d, "state.db"), FLEET_CONTROL_TOKENS: join(d, "tokens"), FLEET_CONTROL_ADMIN: "1", FLEET_CONTROL_AGENT_ROOTS: "", FLEET_CONTROL_INPUT: "", FLEET_CONTROL_SETTINGS: "" },
+    env: { ...process.env, PORT: String(port), FLEET_CONF: join(oldDir, "fleet.conf"), FLEET_CONTROL_DB: join(d, "state.db"), FLEET_CONTROL_TOKENS: join(d, "tokens"), FLEET_CONTROL_ADMIN: "1", FLEET_CONTROL_AGENT_ROOTS: "", FLEET_CONTROL_INPUT: "", FLEET_CONTROL_SETTINGS: "", XPC_SERVICE_NAME: "", INVOCATION_ID: "" },
     stdout: "pipe", stderr: "pipe",
   });
   procs.push(proc);
