@@ -20,10 +20,10 @@ const free = () => { const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch
 const sha = (b: Buffer) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
 // A stand-in service: answers 401 on /api/whoami and says which release it is. `rule` may make it refuse to start.
-function serviceCode(dir: string, commit: string, rule = "", sync = "") {
+function serviceCode(dir: string, commit: string, rule = "", sync = "", after = "") {
   mkdirSync(join(dir, "vendor/agent-fleet/scripts"), { recursive: true });
   mkdirSync(join(dir, "node_modules"), { recursive: true });
-  writeFileSync(join(dir, "index.ts"), `${rule}\nBun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch: (r) => new URL(r.url).pathname === "/api/whoami" ? new Response("${commit}", { status: 401 }) : new Response("x") });\n`);
+  writeFileSync(join(dir, "index.ts"), `${rule}\nBun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch: (r) => new URL(r.url).pathname === "/api/whoami" ? new Response("${commit}", { status: 401 }) : new Response("x") });\n${after}`);
   writeFileSync(join(dir, "vendor/agent-fleet/scripts/fleet"), `#!/bin/sh\necho "${commit.slice(0, 1)} synced PATH=$PATH" >> "$FLEET_CONF.sync"\n${sync}\n`);
   chmodSync(join(dir, "vendor/agent-fleet/scripts/fleet"), 0o755);
   writeFileSync(join(dir, "MANIFEST.json"), JSON.stringify({ name: "fleet-control", commit }));
@@ -286,8 +286,10 @@ async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolea
   const dir = join(base, "service");
   mkdirSync(base, { recursive: true });
   const settings = join(base, "settings.json");
-  const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\nw(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ pid: process.pid, fleetConf: conf, startedAt: new Date().toISOString() }));`;
-  serviceCode(dir, "a".repeat(40), take);
+  const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\n`;
+  // Like index.ts: the record is written after the listener is bound.
+  const after = `w(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ pid: process.pid, fleetConf: conf, startedAt: new Date().toISOString() }));\n`;
+  serviceCode(dir, "a".repeat(40), take, "", after);
   let old = join(base, "fleets", "old");
   mkdirSync(old, { recursive: true });
   // FLEET_DIR may be a symlink to the real folder.
@@ -489,9 +491,9 @@ test("move review 4: with a service that never went down, only a record whose pr
   expect(runningConf(f, 0)).toBe("/a/fleet.conf");
 });
 
-test("move review 4: tmux is asked in the C locale, so its no-server text reads the same everywhere", () => {
+test("move review 4: tmux is asked for C messages with the character locale kept, so its no-server text reads the same everywhere", () => {
   const fake = join(root, "locale-tmux");
-  writeFileSync(fake, "#!/bin/sh\nif [ \"$LC_ALL\" = C ]; then echo \"no server running on /tmp/s/x\" >&2; else echo \"brak serwera\" >&2; fi\nexit 1\n", { mode: 0o755 });
+  writeFileSync(fake, "#!/bin/sh\nif [ \"$LC_MESSAGES\" = C ] && [ -z \"$LC_ALL\" ] && [ \"$LC_CTYPE\" = pl_PL.UTF-8 ]; then echo \"no server running on /tmp/s/x\" >&2; else echo \"brak serwera\" >&2; fi\nexit 1\n", { mode: 0o755 });
   const was = process.env.FLEET_CONTROL_TMUX, lc = process.env.LC_ALL;
   process.env.FLEET_CONTROL_TMUX = fake; process.env.LC_ALL = "pl_PL.UTF-8";
   try { expect(fleetSessions("x", "/usr/bin")).toEqual([]); }
@@ -500,3 +502,16 @@ test("move review 4: tmux is asked in the C locale, so its no-server text reads 
     if (lc === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = lc;
   }
 });
+
+test("move review 5: an old service that ignores the stop is still running the old fleet; the put-back says rolled back from its live record", async () => {
+  // The service running before the move ignores SIGTERM; the second start dies on the taken port without writing a record.
+  const s = await moveSetup("move-stuck", `if (!conf.includes("/prod/")) process.on("SIGTERM", () => {});`);
+  const stuck = JSON.parse(readFileSync(`${s.settings}.running`, "utf8")).pid as number;
+  try {
+    await runJob(s.job);
+    const after = Job.read(s.job.file).data;
+    expect(after.steps.join("\n")).toContain("the service still answers after the stop");
+    expect(after.state).toBe("rolled_back");
+    expect(after.steps.at(-1)).toContain("with the old fleet");
+  } finally { try { process.kill(stuck, "SIGKILL"); } catch {} }
+}, 90_000);

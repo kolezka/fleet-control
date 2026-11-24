@@ -459,8 +459,11 @@ export async function moveFleet(job: Job) {
 export function fleetSessions(socket: string, path: string): string[] {
   const tmux = process.env.FLEET_CONTROL_TMUX ?? Bun.which("tmux", { PATH: [path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].join(":") });
   if (!tmux) throw new StepFailed("tmux was not found, so the fleet's sessions could not be checked; nothing moved");
-  // LC_ALL=C: NO_SERVER matches tmux's English strerror text.
-  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000, env: { ...process.env, LC_ALL: "C" } });
+  // English messages for NO_SERVER, without touching LC_CTYPE: tmux needs a UTF-8 character locale to run.
+  const env: Record<string, string | undefined> = { ...process.env, LC_MESSAGES: "C" };
+  if (env.LC_ALL) { env.LC_CTYPE ??= env.LC_ALL; delete env.LC_ALL; }
+  delete env.LANGUAGE;
+  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000, env });
   if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];
   const err = `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`.trim();
   if (NO_SERVER.test(err)) return [];
@@ -496,7 +499,11 @@ export function runningConf(file: string, since: number, live = false): string |
   try {
     const r = JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown; fleetConf?: unknown; startedAt?: unknown };
     if (typeof r.fleetConf !== "string" || typeof r.startedAt !== "string" || Date.parse(r.startedAt) < since) return null;
-    if (live) { if (typeof r.pid !== "number") return null; try { process.kill(r.pid, 0); } catch { return null; } }
+    if (live) {
+      if (!Number.isInteger(r.pid) || (r.pid as number) <= 0) return null;
+      // EPERM: alive, another user's. A reused pid would also read as alive (not ruled out; the record has no process identity).
+      try { process.kill(r.pid as number, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EPERM") return null; }
+    }
     return r.fleetConf;
   } catch { return null; }
 }

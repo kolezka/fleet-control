@@ -76,12 +76,6 @@ if (!confPath) {
   console.error("FLEET_CONF is required (path to an agent-fleet fleet.conf)");
   process.exit(1);
 }
-// What this start runs, beside the settings file: Move fleet reads it to know the restart took the new fleet.conf.
-if (settingsFile) {
-  try { writeFileSync(`${settingsFile}.running`, `${JSON.stringify({ pid: process.pid, fleetConf: resolve(confPath), startedAt: new Date().toISOString() })}\n`, { mode: 0o600 }); } catch (e) {
-    console.error(`could not write ${settingsFile}.running: ${e instanceof Error ? e.message : e}`);
-  }
-}
 const fleetBin = resolveFleetBin();
 const observed = await observerForConf(confPath);
 if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
@@ -267,6 +261,13 @@ if (tailnet) {
     server.stop(true);
     console.error(`tailnet listener failed: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
+  }
+}
+// What this start runs, beside the settings file: Move fleet reads it to know the restart took the new fleet.conf.
+// Written once the listeners are bound, so a second start that dies on a taken port does not overwrite the record.
+if (settingsFile) {
+  try { writeFileSync(`${settingsFile}.running`, `${JSON.stringify({ pid: process.pid, fleetConf: resolve(confPath), startedAt: new Date().toISOString() })}\n`, { mode: 0o600 }); } catch (e) {
+    console.error(`could not write ${settingsFile}.running: ${e instanceof Error ? e.message : e}`);
   }
 }
 if (deps.infra) {
