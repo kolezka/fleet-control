@@ -461,7 +461,7 @@ export function fleetSessions(socket: string, path: string): string[] {
   if (!tmux) throw new StepFailed("tmux was not found, so the fleet's sessions could not be checked; nothing moved");
   // English messages for NO_SERVER, without touching LC_CTYPE: tmux needs a UTF-8 character locale to run.
   const env: Record<string, string | undefined> = { ...process.env, LC_MESSAGES: "C" };
-  if (env.LC_ALL) { env.LC_CTYPE ??= env.LC_ALL; delete env.LC_ALL; }
+  if (env.LC_ALL) { env.LC_CTYPE = env.LC_ALL; delete env.LC_ALL; }
   delete env.LANGUAGE;
   const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000, env });
   if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];

@@ -485,6 +485,9 @@ test("move review 4: with a service that never went down, only a record whose pr
   writeFileSync(f, JSON.stringify({ pid: process.pid, fleetConf: "/a/fleet.conf", startedAt: at }));
   expect(runningConf(f, 0, true)).toBe("/a/fleet.conf");
   expect(runningConf(f, Date.parse(at) + 1)).toBeNull();
+  // pid 1 belongs to root: kill(1, 0) answers EPERM, which means alive.
+  writeFileSync(f, JSON.stringify({ pid: 1, fleetConf: "/a/fleet.conf", startedAt: at }));
+  expect(runningConf(f, 0, true)).toBe("/a/fleet.conf");
   const dead = Bun.spawnSync(["sh", "-c", "echo $$"]).stdout.toString().trim();
   writeFileSync(f, JSON.stringify({ pid: Number(dead), fleetConf: "/a/fleet.conf", startedAt: at }));
   expect(runningConf(f, 0, true)).toBeNull();
