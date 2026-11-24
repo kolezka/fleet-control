@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { Job, runJob, scratchEnv, startService, stopService, restartService, waitDown, fleetSessions, NO_SERVER, symlinksIn, type JobFile } from "./updater.ts";
+import { Job, runJob, scratchEnv, startService, stopService, restartService, waitDown, fleetSessions, NO_SERVER, symlinksIn, runningConf, type JobFile } from "./updater.ts";
 
 const root = mkdtempSync(join(tmpdir(), "updater-"));
 const managers: JobFile["service"]["manager"][] = [];
@@ -286,7 +286,7 @@ async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolea
   const dir = join(base, "service");
   mkdirSync(base, { recursive: true });
   const settings = join(base, "settings.json");
-  const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\nw(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ fleetConf: conf, startedAt: new Date().toISOString() }));`;
+  const take = `import { readFileSync as r, writeFileSync as w } from "node:fs";\nlet conf = process.env.FLEET_CONF!;\ntry { const f = JSON.parse(r(${JSON.stringify(settings)}, "utf8")).fleetConf; if (f) conf = f; } catch {}\n${rule}\nw(${JSON.stringify(`${settings}.running`)}, JSON.stringify({ pid: process.pid, fleetConf: conf, startedAt: new Date().toISOString() }));`;
   serviceCode(dir, "a".repeat(40), take);
   let old = join(base, "fleets", "old");
   mkdirSync(old, { recursive: true });
@@ -455,9 +455,10 @@ test("move review 2: symlinks in subfolders are named too", async () => {
 test("move review 3: an unreadable tmux socket refuses the move; a missing server does not", async () => {
   const fake = join(root, "fake-tmux");
   writeFileSync(fake, "#!/bin/sh\necho \"error connecting to /tmp/s/x (Permission denied)\" >&2\nexit 1\n", { mode: 0o755 });
+  const was = process.env.FLEET_CONTROL_TMUX;
   process.env.FLEET_CONTROL_TMUX = fake;
   try { expect(() => fleetSessions("x", "/usr/bin")).toThrow("could not be checked (error connecting to /tmp/s/x (Permission denied))"); }
-  finally { delete process.env.FLEET_CONTROL_TMUX; }
+  finally { if (was === undefined) delete process.env.FLEET_CONTROL_TMUX; else process.env.FLEET_CONTROL_TMUX = was; }
   for (const line of ["no server running on /tmp/s/x", "error connecting to /tmp/s/x (No such file or directory)", "error connecting to /tmp/s/x (Connection refused)"]) expect(NO_SERVER.test(line)).toBe(true);
   expect(NO_SERVER.test("error connecting to /tmp/s/x (Permission denied)")).toBe(false);
 });
@@ -473,4 +474,29 @@ test("move review 3: a symlink loop or a link to a folder outside is named, neve
   expect(r.links).toEqual(["ext", "sub/loop"]);
   expect(r.problems).toEqual([]);
   expect(symlinksIn(join(root, "no-such")).problems[0]).toContain("ENOENT");
+  expect(symlinksIn(d, 2).problems).toEqual(["stopped after 2 entries"]);
+});
+
+test("move review 4: with a service that never went down, only a record whose process still lives says what runs", () => {
+  const f = join(root, "running-live.json");
+  const at = new Date().toISOString();
+  writeFileSync(f, JSON.stringify({ pid: process.pid, fleetConf: "/a/fleet.conf", startedAt: at }));
+  expect(runningConf(f, 0, true)).toBe("/a/fleet.conf");
+  expect(runningConf(f, Date.parse(at) + 1)).toBeNull();
+  const dead = Bun.spawnSync(["sh", "-c", "echo $$"]).stdout.toString().trim();
+  writeFileSync(f, JSON.stringify({ pid: Number(dead), fleetConf: "/a/fleet.conf", startedAt: at }));
+  expect(runningConf(f, 0, true)).toBeNull();
+  expect(runningConf(f, 0)).toBe("/a/fleet.conf");
+});
+
+test("move review 4: tmux is asked in the C locale, so its no-server text reads the same everywhere", () => {
+  const fake = join(root, "locale-tmux");
+  writeFileSync(fake, "#!/bin/sh\nif [ \"$LC_ALL\" = C ]; then echo \"no server running on /tmp/s/x\" >&2; else echo \"brak serwera\" >&2; fi\nexit 1\n", { mode: 0o755 });
+  const was = process.env.FLEET_CONTROL_TMUX, lc = process.env.LC_ALL;
+  process.env.FLEET_CONTROL_TMUX = fake; process.env.LC_ALL = "pl_PL.UTF-8";
+  try { expect(fleetSessions("x", "/usr/bin")).toEqual([]); }
+  finally {
+    if (was === undefined) delete process.env.FLEET_CONTROL_TMUX; else process.env.FLEET_CONTROL_TMUX = was;
+    if (lc === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = lc;
+  }
 });

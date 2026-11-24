@@ -420,13 +420,15 @@ export async function moveFleet(job: Job) {
     }[back] ?? `the settings file could not be put back: ${back}; it still names ${newConf}, fix it by hand`;
     job.step(`${why}; ${said}`);
     try { stopService(s.manager); } catch {}
-    if (!(await waitDown(health, 15))) job.step("the service still answers; if the stop did not take, it still runs the old setup");
+    const wentDown = await waitDown(health, 15);
+    if (!wentDown) job.step("the service still answers; if the stop did not take, it still runs the old setup");
     const restartAt = Date.now();
     try { await startService(s.manager, s.dir); } catch (e) { job.end("failed", `the old setup did not start either (${e instanceof Error ? e.message : e}); backup in ${b}`); return; }
     const up = await waitHealthy(health, waits.start);
     if (!up) { job.end("failed", `the old setup does not answer on ${health} either; backup in ${b}`); return; }
     // An answer is not enough: a settings file still naming the new folder starts the service there again.
-    const ran = runningConf(`${m.settingsFile}.running`, restartAt);
+    // A service that never went down wrote its record before the move; take the newest one whose process still lives.
+    const ran = wentDown ? runningConf(`${m.settingsFile}.running`, restartAt) : runningConf(`${m.settingsFile}.running`, 0, true);
     if (ran !== oldConf) { job.end("failed", `the service answers on ${health} but runs ${ran ?? "an unknown fleet.conf"}, not the old ${oldConf}; backup in ${b}`); return; }
     job.end("rolled_back", `the service answers again on ${health} with the old fleet; ${m.to.dir} is left for a look`);
   };
@@ -457,7 +459,8 @@ export async function moveFleet(job: Job) {
 export function fleetSessions(socket: string, path: string): string[] {
   const tmux = process.env.FLEET_CONTROL_TMUX ?? Bun.which("tmux", { PATH: [path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].join(":") });
   if (!tmux) throw new StepFailed("tmux was not found, so the fleet's sessions could not be checked; nothing moved");
-  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000 });
+  // LC_ALL=C: NO_SERVER matches tmux's English strerror text.
+  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000, env: { ...process.env, LC_ALL: "C" } });
   if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];
   const err = `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`.trim();
   if (NO_SERVER.test(err)) return [];
@@ -489,10 +492,12 @@ export function symlinksIn(dir: string, cap = 10_000): { links: string[]; proble
 }
 
 // The fleet.conf a service started after `since` says it runs; null when there is no such record.
-export function runningConf(file: string, since: number): string | null {
+export function runningConf(file: string, since: number, live = false): string | null {
   try {
-    const r = JSON.parse(readFileSync(file, "utf8")) as { fleetConf?: unknown; startedAt?: unknown };
-    return typeof r.fleetConf === "string" && typeof r.startedAt === "string" && Date.parse(r.startedAt) >= since ? r.fleetConf : null;
+    const r = JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown; fleetConf?: unknown; startedAt?: unknown };
+    if (typeof r.fleetConf !== "string" || typeof r.startedAt !== "string" || Date.parse(r.startedAt) < since) return null;
+    if (live) { if (typeof r.pid !== "number") return null; try { process.kill(r.pid, 0); } catch { return null; } }
+    return r.fleetConf;
   } catch { return null; }
 }
 
