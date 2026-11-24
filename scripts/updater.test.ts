@@ -281,7 +281,7 @@ test("review round 4: a rollback stop that reports an error leaves the database 
 }, 150_000);
 
 // A stand-in service that, like index.ts, takes FLEET_CONF from the settings file and says which one it runs.
-async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolean } = {}) {
+async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolean; extraConf?: (to: string) => string } = {}) {
   const base = join(root, name);
   const dir = join(base, "service");
   mkdirSync(base, { recursive: true });
@@ -295,7 +295,7 @@ async function moveSetup(name: string, rule: string, opts: { linkedFrom?: boolea
   // FLEET_DIR may be a symlink to the real folder.
   if (opts.linkedFrom) { const real = join(base, "real-old"); renameSync(old, real); symlinkSync(real, old); }
   const conf = join(old, "fleet.conf");
-  writeFileSync(conf, `FLEET=old\nFLEET_DIR=${old}\nFLEET_TMUX_SOCKET=fleet-old\nAGENTS=()\n`, { mode: 0o640 });
+  writeFileSync(conf, `FLEET=old\nFLEET_DIR=${old}\nFLEET_TMUX_SOCKET=fleet-old\nAGENTS=()\n${opts.extraConf?.(join(base, "fleets", "prod")) ?? ""}`, { mode: 0o640 });
   writeFileSync(join(old, "fleet.conf.bak-20261101T000000Z-aaaaaaaa"), "old backup\n");
   writeFileSync(join(old, "probe.txt"), "probe\n");
   writeFileSync(settings, `${JSON.stringify({ input: true })}\n`, { mode: 0o600 });
@@ -517,4 +517,20 @@ test("move review 5: an old service that ignores the stop is still running the o
     expect(after.state).toBe("rolled_back");
     expect(after.steps.at(-1)).toContain("with the old fleet");
   } finally { try { process.kill(stuck, "SIGKILL"); } catch {} }
+}, 90_000);
+
+test("live finding: the copy's fleet.conf is loaded in the new folder before anything stops; one that does not load leaves no copy", async () => {
+  const ok = await moveSetup("move-include", "", { extraConf: () => `[ -f "$FLEET_DIR/fleet-control-agents.conf" ] && . "$FLEET_DIR/fleet-control-agents.conf"\n` });
+  writeFileSync(join(ok.old, "fleet-control-agents.conf"), "\n");
+  await runJob(ok.job);
+  expect(Job.read(ok.job.file).data.state).toBe("done");
+  const bad = await moveSetup("move-badcopy", "", { extraConf: (to) => `[ "$FLEET_DIR" != ${to} ]\n` });
+  const before = readFileSync(`${bad.settings}`, "utf8");
+  await runJob(bad.job);
+  const after = Job.read(bad.job.file).data;
+  expect(after.state).toBe("failed");
+  expect(after.steps.join("\n")).toContain(`the copied fleet.conf does not load in ${bad.to.dir}`);
+  expect(after.steps.join("\n")).not.toContain("service stopped");
+  expect(existsSync(bad.to.dir)).toBe(false);
+  expect(readFileSync(bad.settings, "utf8")).toBe(before);
 }, 90_000);

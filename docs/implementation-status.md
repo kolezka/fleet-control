@@ -2,7 +2,13 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
-## Move fleet from the page (2026-11-23, branch `feat/move-fleet`, not released)
+## Fix: Move fleet refused every fleet.conf with the managed agents line (2026-11-24, branch `fix/move-include-check`, not released)
+
+- Found live on .4 with v0.3.0: the page refused the move with "the moved fleet.conf would not load". The rewritten fleet.conf was loaded before the new folder existed, and its managed agents line (`[ -f "$FLEET_DIR/fleet-control-agents.conf" ] && . ...`) fails under `set -e` when the file is missing. Every fleet set up by Fleet Control has that line.
+- Now the page loads the rewrite with the old folder (which exists) and checks the new name and socket. The updater loads the copy's fleet.conf in the new folder right after the copy, before the service stops; one that does not load removes the copy and ends the job failed, with the settings file unchanged.
+- Tests: a real fleet.conf with the managed agents line through the use cases, and the updater with that line and with a line that fails only in the new folder. Both fail on v0.3.0's code.
+
+## Move fleet from the page (2026-11-23, released in v0.3.0)
 
 - The Fleet section gets a "Move fleet" part: a new fleet name (`FLEET`), folder (`FLEET_DIR`) and tmux socket, with the typed word `move`. Operator only, and only with `FLEET_CONTROL_ADMIN=1` on a host whose service runs under launchd or systemd (the move ends in a service restart, so it needs the updater from the Service part).
 - The host refuses, and the page names why, while anything still runs on the old setup: running managed agents, an input lease, the watchdog (as a service or in tmux, or when tmux cannot tell), sessions on the old tmux server when the socket changes, or sessions already on the new socket. It also refuses a target folder that is not empty, a folder inside the old one or the other way round, a fleet on tmux's default server (a move would take every session on it along), a `REMOTE_SSH` fleet, and a host without a settings file.

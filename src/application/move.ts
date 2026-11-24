@@ -57,14 +57,15 @@ export function moveUseCases(deps: MoveDeps, caller?: Caller) {
       if (why) throw new AdminError("failed", why);
       const f = await current();
       if (f.socket === "") throw new AdminError("failed", "this fleet uses tmux's default server; a move would take every session on it along, so move it by hand");
-      // The copy's fleet.conf must still load with the new values, the same way agent-fleet loads it.
       const original = await deps.host.read();
-      const text = movedConf(original, to);
+      movedConf(original, to);
       const blockers = moveBlockers(await factsFor(f, to), to);
       if (blockers.length) throw new AdminError("failed", `not moved: ${blockers.join("; ")}`);
+      // The new folder does not exist yet, so lines that read files in FLEET_DIR (the managed agents line) would fail
+      // there. The rewrite is checked with the old folder; the updater loads the copy itself once it exists.
       try {
-        const after = await deps.host.facts(text);
-        if (after.fleet !== to.fleet || after.dir !== to.dir || after.socket !== to.socket) throw new Error("it does not set the new name, folder and socket");
+        const after = await deps.host.facts(movedConf(original, { ...to, dir: f.dir }));
+        if (after.fleet !== to.fleet || after.dir !== f.dir || after.socket !== to.socket) throw new Error("it does not set the new name and socket");
       } catch (e) { throw new AdminError("failed", `the moved fleet.conf would not load (${e instanceof Error ? e.message : e}); nothing moved`); }
       // The updater moves only the fleet.conf checked here; an edit in between stops it.
       const confSha256 = createHash("sha256").update(original).digest("hex");
