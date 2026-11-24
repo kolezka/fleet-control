@@ -92,7 +92,8 @@ test("the use cases: operator only, blockers named, a moved fleet.conf that woul
       read: async () => conf,
       facts: async (text) => {
         if (!loads && text !== conf) throw new Error("set -e failed");
-        const v = (k: string) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1] ?? "";
+        // Stands in for bash: a single-quoted value reads without its quotes.
+        const v = (k: string) => (text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1] ?? "").replace(/^'(.*)'$/, "$1");
         return { fleet: v("FLEET"), dir: v("FLEET_DIR"), socket: v("FLEET_TMUX_SOCKET"), remote: "", sessions: [] };
       },
       panes: async () => [],
@@ -181,6 +182,27 @@ test("live finding: a fleet.conf with the managed agents line can be moved; its 
     const old = join(d, "old");
     await mkdir(old);
     const conf = `FLEET=old\nFLEET_DIR=${old}\nAGENTS=("probe|Probe|probe.txt")\n# fleet-control managed agents\n[ -f "$FLEET_DIR/fleet-control-agents.conf" ] && . "$FLEET_DIR/fleet-control-agents.conf"\n`;
+    await writeFile(join(old, "fleet.conf"), conf);
+    await writeFile(join(old, "fleet-control-agents.conf"), "\n");
+    const host = new FleetAdminHost({ confPath: join(old, "fleet.conf"), fleetBin: "" });
+    const started: unknown[] = [];
+    const deps: MoveDeps = {
+      host: { path: host.path, read: () => host.read(), facts: (t) => host.facts(t), panes: async () => [] },
+      watchdog: null, agents: () => [], leases: () => [], targetUsed: async () => false, settingsFile: "/c/settings.json", unavailable: () => null,
+      start: async (m, by) => { started.push(m); return { id: "upd-20261124T000000Z-0000abcd", action: "move", tag: null, commit: null, by, state: "starting", steps: [], startedAt: "x", endedAt: null }; },
+    };
+    const to = { fleet: "new", dir: join(d, "new"), socket: "fleet-new" };
+    await moveUseCases(deps, { name: "op", role: "operator" }).move({ ...to, confirm: "move" });
+    expect(started.length).toBe(1);
+  } finally { await rm(d, { recursive: true, force: true }); }
+});
+
+test("review: the rewrite check quotes an old folder with a space or a quote in it", async () => {
+  const d = await mkdtemp(join(tmpdir(), "fc-move-quote-"));
+  try {
+    const old = join(d, "my old's");
+    await mkdir(old);
+    const conf = `FLEET=old\nFLEET_DIR=\"${old}\"\nAGENTS=("probe|Probe|probe.txt")\n# fleet-control managed agents\n[ -f "$FLEET_DIR/fleet-control-agents.conf" ] && . "$FLEET_DIR/fleet-control-agents.conf"\n`;
     await writeFile(join(old, "fleet.conf"), conf);
     await writeFile(join(old, "fleet-control-agents.conf"), "\n");
     const host = new FleetAdminHost({ confPath: join(old, "fleet.conf"), fleetBin: "" });
