@@ -361,10 +361,11 @@ export async function moveFleet(job: Job) {
   const s = job.data.service;
   const oldConf = s.fleetConf;
   const newConf = join(m.to.dir, "fleet.conf");
-  // Checked again here: the page's checks are some seconds old by now.
-  if (createHash("sha256").update(readFileSync(oldConf)).digest("hex") !== m.confSha256) throw new StepFailed(`${oldConf} changed since the move was asked for; nothing moved`);
-  const live = run(process.env.FLEET_CONTROL_TMUX ?? "tmux", ["-L", m.from.socket, "list-sessions", "-F", "#{session_name}"]);
-  if (live.ok && live.out) throw new StepFailed(`the fleet's tmux server still runs ${live.out.split("\n").join(", ")}; nothing moved`);
+  // Checked again here: the page's checks are some seconds old by now. The text read here is the one rewritten below.
+  const confText = readFileSync(oldConf, "utf8");
+  if (createHash("sha256").update(confText).digest("hex") !== m.confSha256) throw new StepFailed(`${oldConf} changed since the move was asked for; nothing moved`);
+  const sessions = fleetSessions(m.from.socket, s.env.PATH ?? process.env.PATH ?? "");
+  if (sessions.length) throw new StepFailed(`the fleet's tmux server still runs ${sessions.join(", ")}; nothing moved`);
   if (existsSync(m.to.dir)) {
     if (!lstatSync(m.to.dir).isDirectory() || readdirSync(m.to.dir).length) throw new StepFailed(`${m.to.dir} exists and is not empty; nothing moved`);
     rmdirSync(m.to.dir);
@@ -381,7 +382,7 @@ export async function moveFleet(job: Job) {
   // Backups and logs of the old folder stay with it.
   for (const f of readdirSync(m.to.dir)) if (/^fleet\.conf\.bak-|^\.fleet\.conf\./.test(f)) rmSync(join(m.to.dir, f), { force: true });
   // The copy keeps fleet.conf's mode (cp -p), and writing over it keeps the mode too.
-  writeFileSync(newConf, movedConf(readFileSync(oldConf, "utf8"), m.to));
+  writeFileSync(newConf, movedConf(confText, m.to));
   job.step(`fleet folder copied to ${m.to.dir}; its fleet.conf names fleet ${m.to.fleet}, socket ${m.to.socket}`);
   // The same lock as the page's settings saves, so neither overwrites the other.
   const settingsBefore = withLock(m.settingsFile, () => {
@@ -395,22 +396,29 @@ export async function moveFleet(job: Job) {
   const health = s.health, waits = s.waits ?? { scratch: 30, start: 45 };
   let stoppedAt = Date.now();
   const putBack = async (why: string) => {
-    const back = withLock(m.settingsFile, () => {
+    // "put back", "kept" (a page save changed fleetConf meanwhile), "gone" or "locked"; the service is started either way.
+    let back: string;
+    try { back = withLock(m.settingsFile, () => {
       // A save from the page during the move is kept; only the move's own change is undone.
       const now = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
       if (now !== written) {
-        if (now === null) return false;
+        if (now === null) return "gone";
         const cur = JSON.parse(now) as Record<string, unknown>;
-        if (cur.fleetConf !== newConf) return true;
+        if (cur.fleetConf !== newConf) return "kept";
         const { fleetConf: _drop, ...rest } = cur;
         const prev = settingsBefore ? (JSON.parse(settingsBefore) as Record<string, unknown>).fleetConf : undefined;
         writeAtomic(m.settingsFile, `${JSON.stringify(prev === undefined ? rest : { ...rest, fleetConf: prev }, null, 2)}\n`);
-        return true;
+        return "put back";
       }
       if (settingsBefore === null) rmSync(m.settingsFile, { force: true }); else writeAtomic(m.settingsFile, settingsBefore);
-      return true;
-    });
-    job.step(`${why}; ${back ? "settings file put back" : "the settings file is gone, so nothing names the new folder"}, so the service runs ${oldConf} again`);
+      return "put back";
+    }); } catch (e) { back = `locked (${e instanceof Error ? e.message : e})`; }
+    const said = {
+      "put back": `settings file put back, so the service runs ${oldConf} again`,
+      kept: "settings file left as the page saved it meanwhile",
+      gone: "the settings file is gone, so nothing names the new folder",
+    }[back] ?? `the settings file could not be put back: ${back}; it still names ${newConf}, fix it by hand`;
+    job.step(`${why}; ${said}`);
     try { stopService(s.manager); } catch {}
     if (!(await waitDown(health, 15))) job.step("the service still answers; if the stop did not take, it still runs the old setup");
     try { await startService(s.manager, s.dir); } catch (e) { job.end("failed", `the old setup did not start either (${e instanceof Error ? e.message : e}); backup in ${b}`); return; }
@@ -433,9 +441,21 @@ export async function moveFleet(job: Job) {
   const took = runningConf(`${m.settingsFile}.running`, stoppedAt);
   if (took !== newConf) { await putBack(`the service started on ${took ?? "an unknown fleet.conf"}, not ${newConf}`); return; }
   // Absolute symlinks inside the folder still point into the old one; name them so they can be fixed.
-  const links = readdirSync(m.to.dir).filter((f) => lstatSync(join(m.to.dir, f)).isSymbolicLink());
+  const links = (readdirSync(m.to.dir, { recursive: true }) as string[]).filter((f) => lstatSync(join(m.to.dir, f)).isSymbolicLink());
   if (links.length) job.step(`symlinks copied as they were (they may point into the old folder): ${links.join(", ")}`);
   job.end("done", `the service answers on ${health} with fleet ${m.to.fleet} in ${m.to.dir}; the old folder ${m.from.dir} is unchanged (a FLEET_CONTROL_FILE_ROOTS in the plist or unit that names it is not changed)`);
+}
+
+// Sessions on the fleet's tmux server. "No server" means none; any other failure (tmux missing, an error) is a refusal,
+// so a check that could not run never lets a move through. tmux is looked up the way the lease code does.
+export function fleetSessions(socket: string, path: string): string[] {
+  const tmux = process.env.FLEET_CONTROL_TMUX ?? Bun.which("tmux", { PATH: [path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].join(":") });
+  if (!tmux) throw new StepFailed("tmux was not found, so the fleet's sessions could not be checked; nothing moved");
+  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000 });
+  if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];
+  const err = `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`.trim();
+  if (/no server running|error connecting to/.test(err)) return [];
+  throw new StepFailed(`the fleet's tmux sessions could not be checked (${err || `exit ${r.status}`}); nothing moved`);
 }
 
 // The fleet.conf a service started after `since` says it runs; null when there is no such record.

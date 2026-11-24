@@ -73,6 +73,11 @@ test("review round 1: export stays on the rewritten lines, and declare or defaul
   expect(fail(() => movedConf("FLEET=a\nFLEET_DIR=/a\ndeclare FLEET_TMUX_SOCKET\n", to)).message).toBe("fleet.conf sets the fleet's name, folder or socket in another way too (declare FLEET_TMUX_SOCKET); move it by hand");
   // Reading the value is fine.
   expect(movedConf("FLEET=a\nFLEET_DIR=/a\nLOG=$FLEET_DIR/log\n", to)).toBe("FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\nLOG=$FLEET_DIR/log\n");
+  // Review round 2: reads next to export or read are fine; appends, printf -v and unset are not.
+  for (const ok of ["export LOG=$FLEET_DIR/log", 'export PATH="${FLEET_DIR}/bin:$PATH"', "X=${FLEET_TMUX_SOCKET:-none}"])
+    expect(movedConf(`FLEET=a\nFLEET_DIR=/a\n${ok}\n`, to)).toBe(`FLEET=prod\nFLEET_DIR=/srv/fleets/prod\nFLEET_TMUX_SOCKET=fleet-prod\n${ok}\n`);
+  for (const bad of ["FLEET_DIR+=/x", "printf -v FLEET_DIR %s /x", "unset FLEET_TMUX_SOCKET", ": ${FLEET_DIR=/b}"])
+    expect(fail(() => movedConf(`FLEET=a\nFLEET_DIR=/a\n${bad}\n`, to)).message).toBe(`fleet.conf sets the fleet's name, folder or socket in another way too (${bad}); move it by hand`);
 });
 
 test("the use cases: operator only, blockers named, a moved fleet.conf that would not load refused, the updater gets the job", async () => {

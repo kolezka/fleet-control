@@ -411,3 +411,40 @@ test("move review: a settings save during a failed move is kept; only the move's
   expect(Job.read(s.job.file).data.state).toBe("rolled_back");
   expect(JSON.parse(readFileSync(s.settings, "utf8"))).toEqual({ input: true, agentModels: ["haiku"] });
 }, 60_000);
+
+test("move review 2: a tmux that cannot be run refuses the move instead of reading as no sessions", async () => {
+  const s = await moveSetup("move-notmux", "");
+  const pid = readFileSync(join(s.base, "pid"), "utf8");
+  const was = process.env.FLEET_CONTROL_TMUX;
+  process.env.FLEET_CONTROL_TMUX = join(s.base, "no-such-tmux");
+  try { await runJob(s.job); } finally { if (was === undefined) delete process.env.FLEET_CONTROL_TMUX; else process.env.FLEET_CONTROL_TMUX = was; }
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("failed");
+  expect(after.steps.at(-1)).toMatch(/the fleet's tmux sessions could not be checked \(.*ENOENT.*\); nothing moved$/);
+  expect(readFileSync(join(s.base, "pid"), "utf8")).toBe(pid);
+  expect(existsSync(s.to.dir)).toBe(false);
+}, 60_000);
+
+test("move review 2: a settings lock that never frees still lets the old setup start, and the step says the file still names the new folder", async () => {
+  const s = await moveSetup("move-lock", "conf = process.env.FLEET_CONF!;");
+  const job = Job.read(s.job.file);
+  const realStep = job.step.bind(job);
+  // A crashed writer leaves the lock behind right after the move wrote the settings file.
+  job.step = (t: string) => { realStep(t); if (t.startsWith("settings file ") && t.includes(" names ")) writeFileSync(`${s.settings}.lock`, "1\n"); };
+  try { await runJob(job); } finally { rmSync(`${s.settings}.lock`, { force: true }); }
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("rolled_back");
+  expect(after.steps.join("\n")).toContain(`the settings file could not be put back: locked (another change holds ${s.settings}.lock`);
+  expect(await fetch(`${s.health}/api/whoami`).then((r) => r.status)).toBe(401);
+}, 60_000);
+
+test("move review 2: symlinks in subfolders are named too", async () => {
+  const s = await moveSetup("move-sublink", "");
+  mkdirSync(join(s.old, "prompts"));
+  symlinkSync("/etc/hosts", join(s.old, "prompts", "abs-link"));
+  // The page hashed the conf before; the conf did not change, so the job still fits.
+  await runJob(s.job);
+  const after = Job.read(s.job.file).data;
+  expect(after.state).toBe("done");
+  expect(after.steps.join("\n")).toContain("symlinks copied as they were (they may point into the old folder): prompts/abs-link");
+}, 60_000);

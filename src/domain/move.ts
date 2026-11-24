@@ -34,11 +34,13 @@ export function movedConf(text: string, to: MoveTarget): string {
   if (fleet.length !== 1) throw new AdminError("invalid", `fleet.conf sets FLEET on ${fleet.length} lines; a move needs exactly one FLEET= line`);
   if (dir.length !== 1) throw new AdminError("invalid", `fleet.conf sets FLEET_DIR on ${dir.length} lines; a move needs exactly one FLEET_DIR= line`);
   if (socket.length > 1) throw new AdminError("invalid", `fleet.conf sets FLEET_TMUX_SOCKET on ${socket.length} lines; a move needs at most one`);
-  const sets = /\b(FLEET|FLEET_DIR|FLEET_TMUX_SOCKET)(=|:=|:-|\b)/;
+  // Reads ($NAME, ${NAME}, ${NAME:-x}) are fine; any other use of the three names may set one, so it is refused.
+  const NAMES = "(?:FLEET_TMUX_SOCKET|FLEET_DIR|FLEET)";
+  const reads = new RegExp(`\\$(?:${NAMES}\\b|\\{${NAMES}(?:\\}|:?-))`, "g");
+  const bare = new RegExp(`(?<![A-Za-z0-9_])${NAMES}(?![A-Za-z0-9_])`);
   const mentions = lines.filter((l, i) => {
     if (fleet.includes(i) || dir.includes(i) || socket.includes(i)) return false;
-    const code = l.replace(/#.*$/, "");
-    return /\b(FLEET|FLEET_DIR|FLEET_TMUX_SOCKET)(=|:=)/.test(code) || (/\b(declare|typeset|readonly|local|read|export)\b/.test(code) && sets.test(code));
+    return bare.test(l.replace(/#.*$/, "").replace(reads, ""));
   });
   if (mentions.length) throw new AdminError("invalid", `fleet.conf sets the fleet's name, folder or socket in another way too (${mentions[0]!.trim()}); move it by hand`);
   // An `export ` in front stays, so child processes see the same names as before.
