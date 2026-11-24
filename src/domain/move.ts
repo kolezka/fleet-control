@@ -27,7 +27,9 @@ export function checkMoveRequest(input: unknown): MoveTarget {
 
 // fleet.conf with the three values replaced. FLEET= and FLEET_DIR= must each be one plain line of their own
 // (agent-fleet's template writes them so); anything cleverer is left for a move by hand.
-export function movedConf(text: string, to: MoveTarget): string {
+// Single-quoted for bash, for a folder the operator wrote (it may hold spaces).
+export function quoteForBash(s: string): string { return `'${s.replace(/'/g, "'\\''")}'`; }
+export function movedConf(text: string, to: MoveTarget, dirWord = to.dir): string {
   const lines = text.split("\n");
   const at = (name: string) => lines.flatMap((l, i) => (new RegExp(`^\\s*(export\\s+)?${name}=`).test(l) ? [i] : []));
   const fleet = at("FLEET"), dir = at("FLEET_DIR"), socket = at("FLEET_TMUX_SOCKET");
@@ -46,7 +48,7 @@ export function movedConf(text: string, to: MoveTarget): string {
   // An `export ` in front stays, so child processes see the same names as before.
   const keep = (i: number) => (/^\s*export\s+/.exec(lines[i]!)?.[0] ?? "");
   lines[fleet[0]!] = `${keep(fleet[0]!)}FLEET=${to.fleet}`;
-  lines[dir[0]!] = `${keep(dir[0]!)}FLEET_DIR=${to.dir}`;
+  lines[dir[0]!] = `${keep(dir[0]!)}FLEET_DIR=${dirWord}`;
   if (socket.length) lines[socket[0]!] = `${keep(socket[0]!)}FLEET_TMUX_SOCKET=${to.socket}`;
   else lines.splice(dir[0]! + 1, 0, `FLEET_TMUX_SOCKET=${to.socket}`);
   return lines.join("\n");

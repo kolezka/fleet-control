@@ -16,6 +16,7 @@ import { lstatSync, rmdirSync } from "node:fs";
 import { withLock } from "./tokens.ts";
 import { backup } from "./host-backup.ts";
 import { movedConf } from "../src/domain/move.ts";
+import { FleetAdminHost } from "../src/fleet/admin.ts";
 import type { JobFile, Manager } from "../src/domain/updates.ts";
 
 export type { JobFile, Manager } from "../src/domain/updates.ts";
@@ -383,6 +384,14 @@ export async function moveFleet(job: Job) {
   for (const f of readdirSync(m.to.dir)) if (/^fleet\.conf\.bak-|^\.fleet\.conf\./.test(f)) rmSync(join(m.to.dir, f), { force: true });
   // The copy keeps fleet.conf's mode (cp -p), and writing over it keeps the mode too.
   writeFileSync(newConf, movedConf(confText, m.to));
+  // Loaded in the copy the way agent-fleet loads it, before anything stops: the folder exists now.
+  try {
+    const got = await new FleetAdminHost({ confPath: newConf, fleetBin: "" }).facts(readFileSync(newConf, "utf8"));
+    if (got.fleet !== m.to.fleet || got.dir !== m.to.dir || got.socket !== m.to.socket) throw new Error("it does not set the new name, folder and socket");
+  } catch (e) {
+    rmSync(m.to.dir, { recursive: true, force: true });
+    throw new StepFailed(`the copied fleet.conf does not load in ${m.to.dir} (${e instanceof Error ? e.message : e}); nothing moved`);
+  }
   job.step(`fleet folder copied to ${m.to.dir}; its fleet.conf names fleet ${m.to.fleet}, socket ${m.to.socket}`);
   // The same lock as the page's settings saves, so neither overwrites the other.
   const settingsBefore = withLock(m.settingsFile, () => {
