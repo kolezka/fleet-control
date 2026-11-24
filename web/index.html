@@ -101,6 +101,14 @@
                 <div class="composerfooter"><span id="serviceGate"></span><button type="button" id="serviceGo" class="destructive" disabled>Restart</button></div>
                 <ol class="servicesteps" id="serviceSteps"></ol>
               </div>
+              <div class="adminpart" id="movePart" hidden><div class="sectionheading"><h4>Move fleet</h4></div>
+                <p class="fineprint" id="moveFrom"></p>
+                <label for="moveFleet">New fleet name (FLEET)</label><input id="moveFleet" autocomplete="off" spellcheck="false">
+                <label for="moveDir">New folder (FLEET_DIR)</label><input id="moveDir" autocomplete="off" spellcheck="false" placeholder="/Users/me/.local/share/fleet-control/new-fleet">
+                <label for="moveSocket">New tmux socket</label><input id="moveSocket" autocomplete="off" spellcheck="false">
+                <label for="moveConfirm">Type move to confirm</label><input id="moveConfirm" autocomplete="off" spellcheck="false">
+                <div class="composerfooter"><span id="moveGate"></span><button type="button" id="moveGo" class="destructive" disabled>Move fleet</button></div>
+              </div>
               <div class="adminpart" id="watchdogPart" hidden><div class="sectionheading"><h4>Watchdog</h4></div>
                 <p class="fineprint" id="watchdogState"></p>
                 <label for="watchdogConfirm">Type watchdog to confirm</label><input id="watchdogConfirm" autocomplete="off" spellcheck="false">

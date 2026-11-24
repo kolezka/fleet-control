@@ -11,7 +11,7 @@ import {
   answerKey, beginAnswer, beginRead, beginSend, classifySend, composerTarget, currentRun, describeSessions, emptyFleet, finishAnswer, finishRead, finishSend,
   interpretResponse, paneKey, parseCoord, terminalClosedText, parseHostList, parseSessions, selectHost, selectSession, selectedHostState, sendGate, setDraft, setHosts,
 } from "./host-state.ts";
-import { type AdminView, changeable, draftOf, emptyAdmin, fileDirty, fileGate, fileName, fillStart, hostGate, infraGate, parentIn, parseConf, parseFileOpen, parseFileRoots, parseInfra, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
+import { type AdminView, changeable, moveGate, parseMove, draftOf, emptyAdmin, fileDirty, fileGate, fileName, fillStart, hostGate, infraGate, parentIn, parseConf, parseFileOpen, parseFileRoots, parseInfra, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -740,7 +740,19 @@ function renderAdmin(h: HostState | undefined) {
     go.disabled = !g.ok;
     go.textContent = v.serviceAction === "restart" ? "Restart" : "Update";
     const j = s.running ?? s.jobs[0];
-    $("serviceSteps").innerHTML = j ? `<li><strong>${esc(j.action === "update" ? `Update to ${j.tag}` : "Restart")} · ${esc(j.state)}</strong> · ${esc(j.by)} · ${esc(j.startedAt)}</li>${j.steps.map((x) => `<li>${esc(x)}</li>`).join("")}` : "";
+    $("serviceSteps").innerHTML = j ? `<li><strong>${esc(j.action === "update" ? `Update to ${j.tag}` : j.action === "move" ? "Move fleet" : "Restart")} · ${esc(j.state)}</strong> · ${esc(j.by)} · ${esc(j.startedAt)}</li>${j.steps.map((x) => `<li>${esc(x)}</li>`).join("")}` : "";
+  }
+  $("movePart").hidden = v.move === null;
+  if (v.move) {
+    const m = v.move;
+    $("moveFrom").textContent = `Now: fleet ${m.from.fleet} in ${m.from.dir}, tmux socket ${m.from.socket || "(tmux default)"}.${m.blockers.length ? ` Blocked: ${m.blockers.join("; ")}.` : ""}`;
+    for (const [id, val] of [["moveFleet", v.moveFleet], ["moveDir", v.moveDir], ["moveSocket", v.moveSocket], ["moveConfirm", v.moveConfirm]] as const) {
+      const e = $(id) as HTMLInputElement;
+      if (e.value !== val) e.value = val;
+    }
+    const mg = moveGate(v);
+    $("moveGate").textContent = mg.reason;
+    ($("moveGo") as HTMLButtonElement).disabled = !mg.ok;
   }
   $("watchdogPart").hidden = v.watchdog === null;
   if (v.watchdog) {
@@ -945,6 +957,9 @@ async function refreshAdmin(hostId: string, keep: { conf?: boolean; settings?: b
     const inf = await hostCall(host, "/infra");
     v.infra = inf.outcome.ok ? parseInfra(inf.outcome.data) : null;
     // File editor: hidden where the host does not offer it. The open folder or file is not reread here.
+    // Move fleet: hidden where the host does not offer it.
+    const mv = await hostCall(host, "/fleet/move");
+    v.move = mv.outcome.ok ? parseMove(mv.outcome.data) : null;
     const fr = await hostCall(host, "/files");
     v.fileRoots = fr.outcome.ok ? parseFileRoots(fr.outcome.data) : null;
     if (selectedHostState(fleet)?.info.id === hostId) renderAdmin(selectedHostState(fleet));
@@ -998,6 +1013,12 @@ async function runService(hostId: string) {
   }
   v.notice = `${host.name}: ${action} started (${id}).`;
   renderAdmin(selectedHostState(fleet));
+  await followJob(hostId, host, id, action);
+}
+
+// Poll an updater job until it ends, through the service going away and coming back.
+async function followJob(hostId: string, host: HostInfo, id: string, action: string) {
+  const v = adminView(hostId);
   // Bounded by time as well as count: a host that accepts and then hangs makes each poll wait its full timeout.
   const deadline = Date.now() + SERVICE_POLLS * SERVICE_POLL_MS;
   for (let i = 0; i < SERVICE_POLLS && Date.now() < deadline; i++) {
@@ -1017,6 +1038,27 @@ async function runService(hostId: string) {
   }
   v.notice = `${host.name}: ${action} ${id} has not ended after ${Math.round(SERVICE_POLLS * SERVICE_POLL_MS / 60000)} min; its steps show where it is.`;
   renderAdmin(selectedHostState(fleet));
+}
+
+// Move the fleet: the host checks again and gives the updater a move job; the page follows it like an update.
+async function runMove(hostId: string) {
+  const host = fleet.hosts[hostId]?.info;
+  const v = adminView(hostId);
+  if (!host || !moveGate(v).ok) return;
+  const body = { fleet: v.moveFleet.trim(), dir: v.moveDir.trim(), socket: v.moveSocket.trim(), confirm: v.moveConfirm };
+  v.busy = true; v.notice = `Moving the fleet on ${host.name} to ${body.dir}`;
+  renderAdmin(selectedHostState(fleet));
+  const { status, outcome } = await hostCall(host, "/fleet/move", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, SERVICE_TIMEOUT_MS);
+  v.busy = false; v.moveConfirm = "";
+  const id = outcome.ok ? ((outcome.data as { job?: { id?: unknown } }).job?.id) : undefined;
+  if (typeof id !== "string") {
+    v.notice = status === null || status >= 500 ? `${host.name} did not answer clearly. Unknown whether the move started.` : `${host.name}: not moved: ${outcome.ok ? "malformed answer" : outcome.message}`;
+    renderAdmin(selectedHostState(fleet));
+    return;
+  }
+  v.notice = `${host.name}: move started (${id}).`;
+  renderAdmin(selectedHostState(fleet));
+  await followJob(hostId, host, id, "move");
 }
 
 async function setWatchdog(hostId: string) {
@@ -1357,7 +1399,7 @@ $("newTokenDone").addEventListener("click", () => { const h = selectedHostState(
 $("newTokenCopy").addEventListener("click", () => { void navigator.clipboard?.writeText($("newTokenText").textContent ?? ""); });
 $("hostRotate").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "rotate"); });
 $("hostRemove").addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void manageHost(h.info.id, "remove"); });
-for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog], ["infraGo", runInfra]] as const) {
+for (const [id, run] of [["confSave", saveConf], ["restartGo", restartSession], ["logRead", readLog], ["tokenGo", changeToken], ["settingsSave", saveSettings], ["serviceGo", runService], ["watchdogGo", setWatchdog], ["infraGo", runInfra], ["moveGo", runMove]] as const) {
   $(id).addEventListener("click", () => { const h = selectedHostState(fleet); if (h) void run(h.info.id); });
 }
 adminField("filePath", (v, x) => { v.filePath = x; });
@@ -1405,6 +1447,14 @@ $("serviceTag").addEventListener("change", () => {
   adminView(h.info.id).serviceTag = ($("serviceTag") as HTMLSelectElement).value;
   renderAdmin(h);
 });
+for (const [id, key] of [["moveFleet", "moveFleet"], ["moveDir", "moveDir"], ["moveSocket", "moveSocket"], ["moveConfirm", "moveConfirm"]] as const) {
+  for (const ev of ["input", "change"]) $(id).addEventListener(ev, () => {
+    const h = selectedHostState(fleet);
+    if (!h) return;
+    adminView(h.info.id)[key] = ($(id) as HTMLInputElement).value;
+    renderAdmin(h);
+  });
+}
 for (const ev of ["input", "change"]) $("serviceConfirm").addEventListener(ev, () => {
   const h = selectedHostState(fleet);
   if (!h) return;

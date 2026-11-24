@@ -1,6 +1,7 @@
 // Restarting and updating the host service from the page. A separate updater process does the work, because
 // the service cannot replace or restart itself and still report what happened.
 import { AdminError } from "./fleet-admin.ts";
+import type { MoveTarget } from "./move.ts";
 
 export const RESTART_CONFIRM = "restart";
 // Release packages are named after the full commit they were built from.
@@ -9,7 +10,7 @@ export const TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export type Release = { tag: string; commit: string; publishedAt: string; url: string; sha256Url: string };
 
-export type JobAction = "restart" | "update";
+export type JobAction = "restart" | "update" | "move";
 export type JobState = "starting" | "running" | "done" | "rolled_back" | "failed";
 export type UpdateJob = {
   id: string;
@@ -23,6 +24,8 @@ export type UpdateJob = {
   steps: string[];
   startedAt: string;
   endedAt: string | null;
+  // For a move: where the fleet was and where it goes.
+  move?: { from: MoveTarget; to: MoveTarget };
 };
 export const JOB_ID = /^upd-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
 export const JOB_FINAL: readonly JobState[] = ["done", "rolled_back", "failed"];
@@ -65,6 +68,9 @@ export type JobFile = {
     // Seconds to wait for an answer: scratch start, then the real start. Defaults 30 and 45.
     waits?: { scratch: number; start: number };
   };
+  // A move: the fleet folder is copied to to.dir, the copy's fleet.conf gets the new values, and the
+  // settings file names the new fleet.conf, so the service starts on it.
+  move?: { from: MoveTarget; to: MoveTarget; settingsFile: string; confSha256: string };
 };
 
 // A job that is not final but whose updater is gone: its pid no longer runs, or it never wrote one within a

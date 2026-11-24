@@ -136,13 +136,13 @@ export class HostUpdates implements UpdateHost {
         // Its end time is the job file's last write, so it stays the same from poll to poll.
         const gone = jobGone(j, Date.now(), alive);
         const steps = gone ? [...j.steps, "the updater is gone (it crashed, was killed, or the host restarted); check the service, it may be stopped"] : j.steps;
-        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? statSync(join(this.o.jobDir, f)).mtime.toISOString() : j.endedAt });
+        out.push({ id: j.id, action: j.action, tag: j.tag, commit: j.commit, by: j.by, state: gone ? "failed" : j.state, steps, startedAt: j.startedAt, endedAt: gone ? statSync(join(this.o.jobDir, f)).mtime.toISOString() : j.endedAt, ...(j.move ? { move: { from: j.move.from, to: j.move.to } } : {}) });
       } catch {}
     }
     return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 10);
   }
 
-  async start(action: JobAction, release: Release | null, by: string): Promise<UpdateJob> {
+  async start(action: JobAction, release: Release | null, by: string, move?: JobFile["move"]): Promise<UpdateJob> {
     const manager = this.o.manager;
     if (!manager) throw new AdminError("failed", this.unavailable()!);
     mkdirSync(this.o.jobDir, { recursive: true, mode: 0o700 });
@@ -156,6 +156,7 @@ export class HostUpdates implements UpdateHost {
       packageUrl: release?.url ?? null, sha256Url: release?.sha256Url ?? null,
       by, state: "starting", steps: [], startedAt: now.toISOString(), endedAt: null, pid: null,
       service: { dir: this.o.dir, manager, db: this.o.db, files: this.o.files, fleetConf: this.o.fleetConf, rollbackRoot: this.o.rollbackRoot, health: this.o.health, env },
+      ...(move ? { move } : {}),
     };
     const file = join(this.o.jobDir, `${id}.json`);
     try {
@@ -167,7 +168,7 @@ export class HostUpdates implements UpdateHost {
       rmSync(file, { force: true });
       throw new AdminError("failed", `the updater did not start: ${e instanceof Error ? e.message : e}`);
     }
-    return { id, action, tag: job.tag, commit: job.commit, by, state: "starting", steps: [], startedAt: job.startedAt, endedAt: null };
+    return { id, action, tag: job.tag, commit: job.commit, by, state: "starting", steps: [], startedAt: job.startedAt, endedAt: null, ...(move ? { move: { from: move.from, to: move.to } } : {}) };
   }
 
   // One job at a time. A lock left by a job that ended, or whose updater is gone, does not block.

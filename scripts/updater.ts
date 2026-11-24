@@ -11,7 +11,11 @@ import { spawnSync } from "node:child_process";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync, fsyncSync } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { lstatSync, rmdirSync } from "node:fs";
+import { withLock } from "./tokens.ts";
 import { backup } from "./host-backup.ts";
+import { movedConf } from "../src/domain/move.ts";
 import type { JobFile, Manager } from "../src/domain/updates.ts";
 
 export type { JobFile, Manager } from "../src/domain/updates.ts";
@@ -347,11 +351,175 @@ async function rollBack(job: Job, before: string, backupDir: string, restoreFrom
   else job.end("failed", `the old release does not answer either (${problems.join("; ") || "see the service log"}); ${where}; backup in ${backupDir}`);
 }
 
+// ---- move fleet ------------------------------------------------------------------------------------------
+
+// Copy the fleet folder to the new place, write the new values into the copy's fleet.conf, name it in the
+// settings file and restart the service on it. If the service does not come back, the settings file goes back
+// as it was and the service starts on the old fleet.conf. The old folder is never changed.
+export async function moveFleet(job: Job) {
+  const m = job.data.move!;
+  const s = job.data.service;
+  const oldConf = s.fleetConf;
+  const newConf = join(m.to.dir, "fleet.conf");
+  // Checked again here: the page's checks are some seconds old by now. The text read here is the one rewritten below.
+  const confText = readFileSync(oldConf, "utf8");
+  if (createHash("sha256").update(confText).digest("hex") !== m.confSha256) throw new StepFailed(`${oldConf} changed since the move was asked for; nothing moved`);
+  const sessions = fleetSessions(m.from.socket, s.env.PATH ?? process.env.PATH ?? "");
+  if (sessions.length) throw new StepFailed(`the fleet's tmux server still runs ${sessions.join(", ")}; nothing moved`);
+  if (existsSync(m.to.dir)) {
+    if (!lstatSync(m.to.dir).isDirectory() || readdirSync(m.to.dir).length) throw new StepFailed(`${m.to.dir} exists and is not empty; nothing moved`);
+    rmdirSync(m.to.dir);
+  }
+  // Copying "<dir>/." takes the files of the folder a symlinked FLEET_DIR names, so the copy is never a link back to it.
+  const from = m.from.dir;
+  const b = backupState(job, "move");
+  mkdirSync(m.to.dir, { recursive: true });
+  const r = run("cp", ["-pR", `${from}/.`, m.to.dir]);
+  if (!r.ok || !lstatSync(m.to.dir).isDirectory() || !existsSync(newConf) || lstatSync(newConf).isSymbolicLink()) {
+    rmSync(m.to.dir, { recursive: true, force: true });
+    throw new StepFailed(`copying ${from} to ${m.to.dir} failed${r.ok ? ": the copy has no fleet.conf of its own" : `: ${r.out}`}; nothing moved`);
+  }
+  // Backups and logs of the old folder stay with it.
+  for (const f of readdirSync(m.to.dir)) if (/^fleet\.conf\.bak-|^\.fleet\.conf\./.test(f)) rmSync(join(m.to.dir, f), { force: true });
+  // The copy keeps fleet.conf's mode (cp -p), and writing over it keeps the mode too.
+  writeFileSync(newConf, movedConf(confText, m.to));
+  job.step(`fleet folder copied to ${m.to.dir}; its fleet.conf names fleet ${m.to.fleet}, socket ${m.to.socket}`);
+  // The same lock as the page's settings saves, so neither overwrites the other.
+  const settingsBefore = withLock(m.settingsFile, () => {
+    const before = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
+    const saved = before ? JSON.parse(before) as Record<string, unknown> : {};
+    writeAtomic(m.settingsFile, `${JSON.stringify({ ...saved, fleetConf: newConf }, null, 2)}\n`);
+    return before;
+  });
+  const written = readFileSync(m.settingsFile, "utf8");
+  job.step(`settings file ${m.settingsFile} names ${newConf}`);
+  const health = s.health, waits = s.waits ?? { scratch: 30, start: 45 };
+  let stoppedAt = Date.now();
+  const putBack = async (why: string) => {
+    // "put back", "kept" (a page save changed fleetConf meanwhile), "gone" or "locked"; the service is started either way.
+    let back: string;
+    try { back = withLock(m.settingsFile, () => {
+      // A save from the page during the move is kept; only the move's own change is undone.
+      const now = existsSync(m.settingsFile) ? readFileSync(m.settingsFile, "utf8") : null;
+      if (now !== written) {
+        if (now === null) return "gone";
+        const cur = JSON.parse(now) as Record<string, unknown>;
+        if (cur.fleetConf !== newConf) return "kept";
+        const { fleetConf: _drop, ...rest } = cur;
+        const prev = settingsBefore ? (JSON.parse(settingsBefore) as Record<string, unknown>).fleetConf : undefined;
+        writeAtomic(m.settingsFile, `${JSON.stringify(prev === undefined ? rest : { ...rest, fleetConf: prev }, null, 2)}\n`);
+        return "put back";
+      }
+      if (settingsBefore === null) rmSync(m.settingsFile, { force: true }); else writeAtomic(m.settingsFile, settingsBefore);
+      return "put back";
+    }); } catch (e) { back = `locked (${e instanceof Error ? e.message : e})`; }
+    const said = {
+      "put back": `settings file put back, so the service runs ${oldConf} again`,
+      kept: "settings file left as the page saved it meanwhile",
+      gone: "the settings file is gone, so nothing names the new folder",
+    }[back] ?? `the settings file could not be put back: ${back}; it still names ${newConf}, fix it by hand`;
+    job.step(`${why}; ${said}`);
+    try { stopService(s.manager); } catch {}
+    const wentDown = await waitDown(health, 15);
+    if (!wentDown) job.step("the service still answers; if the stop did not take, it still runs the old setup");
+    const restartAt = Date.now();
+    try { await startService(s.manager, s.dir); } catch (e) { job.end("failed", `the old setup did not start either (${e instanceof Error ? e.message : e}); backup in ${b}`); return; }
+    const up = await waitHealthy(health, waits.start);
+    if (!up) { job.end("failed", `the old setup does not answer on ${health} either; backup in ${b}`); return; }
+    // An answer is not enough: a settings file still naming the new folder starts the service there again.
+    // A service that never went down wrote its record before the move; take the newest one whose process still lives.
+    const ran = wentDown ? runningConf(`${m.settingsFile}.running`, restartAt) : runningConf(`${m.settingsFile}.running`, 0, true);
+    if (ran !== oldConf) { job.end("failed", `the service answers on ${health} but runs ${ran ?? "an unknown fleet.conf"}, not the old ${oldConf}; backup in ${b}`); return; }
+    job.end("rolled_back", `the service answers again on ${health} with the old fleet; ${m.to.dir} is left for a look`);
+  };
+  try {
+    stopService(s.manager);
+    job.step("service stopped");
+    stoppedAt = Date.now();
+    if (!(await waitDown(health, 15))) { await putBack("the service still answers after the stop"); return; }
+    const sync = run(join(s.dir, "vendor/agent-fleet/scripts/fleet"), ["sync"], { env: { ...s.env, FLEET_CONF: newConf } });
+    job.step(sync.ok ? "fleet sync done for the new folder" : `fleet sync for the new folder failed (${sync.out})`);
+    await startService(s.manager, s.dir);
+    job.step("service started");
+  } catch (e) { await putBack(`the move stopped: ${e instanceof Error ? e.message : e}`); return; }
+  const up = await waitHealthy(health, waits.start);
+  if (!up) { await putBack(`the service does not answer on ${health} with the moved fleet`); return; }
+  // An answer alone does not say which fleet.conf it took: a settings file it skipped leaves it on the old one.
+  const took = runningConf(`${m.settingsFile}.running`, stoppedAt);
+  if (took !== newConf) { await putBack(`the service started on ${took ?? "an unknown fleet.conf"}, not ${newConf}`); return; }
+  // Absolute symlinks inside the folder still point into the old one; name them so they can be fixed.
+  const found = symlinksIn(m.to.dir);
+  if (found.links.length) job.step(`symlinks copied as they were (they may point into the old folder): ${found.links.join(", ")}`);
+  if (found.problems.length) job.step(`some of the copy could not be listed for symlinks: ${found.problems.join("; ")}`);
+  job.end("done", `the service answers on ${health} with fleet ${m.to.fleet} in ${m.to.dir}; the old folder ${m.from.dir} is unchanged (a FLEET_CONTROL_FILE_ROOTS in the plist or unit that names it is not changed)`);
+}
+
+// Sessions on the fleet's tmux server. "No server" means none; any other failure (tmux missing, an error) is a refusal,
+// so a check that could not run never lets a move through. tmux is looked up the way the lease code does.
+export function fleetSessions(socket: string, path: string): string[] {
+  const tmux = process.env.FLEET_CONTROL_TMUX ?? Bun.which("tmux", { PATH: [path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].join(":") });
+  if (!tmux) throw new StepFailed("tmux was not found, so the fleet's sessions could not be checked; nothing moved");
+  // English messages for NO_SERVER, without touching LC_CTYPE: tmux needs a UTF-8 character locale to run.
+  const env: Record<string, string | undefined> = { ...process.env, LC_MESSAGES: "C" };
+  if (env.LC_ALL) { env.LC_CTYPE = env.LC_ALL; delete env.LC_ALL; }
+  delete env.LANGUAGE;
+  const r = spawnSync(tmux, ["-L", socket, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8", timeout: 10_000, env });
+  if (r.status === 0) return r.stdout.trim() ? r.stdout.trim().split("\n") : [];
+  const err = `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`.trim();
+  if (NO_SERVER.test(err)) return [];
+  throw new StepFailed(`the fleet's tmux sessions could not be checked (${err || `exit ${r.status}`}); nothing moved`);
+}
+
+// Only a missing server means "no sessions"; a socket that cannot be read (Permission denied) is a failure.
+export const NO_SERVER = /no server running on |error connecting to .* \((No such file or directory|Connection refused)\)/;
+
+// Symlinks under dir, relative. Never follows a link, so a loop or a link to / cannot hang or throw; errors are named.
+export function symlinksIn(dir: string, cap = 10_000): { links: string[]; problems: string[] } {
+  const links: string[] = [], problems: string[] = [];
+  const todo = [""];
+  let seen = 0;
+  while (todo.length) {
+    const rel = todo.pop()!;
+    let names: string[];
+    try { names = readdirSync(join(dir, rel)); } catch (e) { problems.push(`${rel || "."}: ${e instanceof Error ? e.message : e}`); continue; }
+    for (const n of names) {
+      if (++seen > cap) { problems.push(`stopped after ${cap} entries`); return { links, problems }; }
+      const r = rel ? `${rel}/${n}` : n;
+      try {
+        const st = lstatSync(join(dir, r));
+        if (st.isSymbolicLink()) links.push(r); else if (st.isDirectory()) todo.push(r);
+      } catch (e) { problems.push(`${r}: ${e instanceof Error ? e.message : e}`); }
+    }
+  }
+  return { links: links.sort(), problems };
+}
+
+// The fleet.conf a service started after `since` says it runs; null when there is no such record.
+export function runningConf(file: string, since: number, live = false): string | null {
+  try {
+    const r = JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown; fleetConf?: unknown; startedAt?: unknown };
+    if (typeof r.fleetConf !== "string" || typeof r.startedAt !== "string" || Date.parse(r.startedAt) < since) return null;
+    if (live) {
+      if (!Number.isInteger(r.pid) || (r.pid as number) <= 0) return null;
+      // EPERM: alive, another user's. A reused pid would also read as alive (not ruled out; the record has no process identity).
+      try { process.kill(r.pid as number, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EPERM") return null; }
+    }
+    return r.fleetConf;
+  } catch { return null; }
+}
+
+const writeAtomic = (file: string, text: string) => {
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, text, { mode: 0o600 });
+  renameSync(tmp, file);
+};
+
 export async function runJob(job: Job) {
   job.data.state = "running";
   job.data.pid = process.pid;
   job.save();
   try {
+    if (job.data.action === "move") { await moveFleet(job); return; }
     if (job.data.action === "restart") {
       job.step("restarting the service");
       await restartService(job.data.service.manager, job.data.service.dir);

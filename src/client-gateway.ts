@@ -279,6 +279,7 @@ function matchRoute(seg: string[]): Target | null {
   if (seg.length === 1 && a === "service") return { ...http("/api/service", ["GET"]), timeoutMs: SERVICE_TIMEOUT_MS };
   if (seg.length === 2 && a === "service" && (b === "restart" || b === "update")) return { ...http(`/api/service/${b}`, ["POST"]), timeoutMs: SERVICE_TIMEOUT_MS };
   // A start runs launchctl or systemctl and waits for the watchdog to settle; a failed one also cleans up.
+  if (seg.length === 2 && a === "fleet" && b === "move") return { ...http("/api/fleet/move", ["GET", "POST"]), timeoutMs: 20_000 };
   if (seg.length === 1 && a === "watchdog") return { ...http("/api/watchdog", ["GET", "PUT"]), timeoutMs: WATCHDOG_TIMEOUT_MS };
   // A renewal asks tailscale for a certificate; a restart of another service may wait on docker compose.
   if (seg.length === 1 && a === "infra") return { ...http("/api/infra", ["GET"]), timeoutMs: 20_000 };

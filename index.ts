@@ -1,5 +1,6 @@
 // Host service. Requires FLEET_CONF. Loopback without auth by default; set FLEET_CONTROL_HOST
 // to another address only together with FLEET_CONTROL_TOKENS (see docs/installation.md).
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { agentSettingsFromEnv, fileRootsFromEnv, portFromEnv, reloadTokensOnHangup, serveOptionsFromEnv, tailnetOptionsFromEnv } from "./src/config.ts";
@@ -24,6 +25,8 @@ import { findBash, managerOf, WatchdogService } from "./src/fleet/watchdog-servi
 import { findTailscale, HostInfra, type CertFiles } from "./src/fleet/infra.ts";
 import { infraUseCases } from "./src/application/infra.ts";
 import { parseOtherServices } from "./src/domain/infra.ts";
+import { keepsFleetRow } from "./src/domain/agents.ts";
+import type { MoveTarget } from "./src/domain/move.ts";
 import { SessionStarts } from "./src/data/session-starts.ts";
 import { HostTokenFile } from "./src/token-file.ts";
 import { HostSettingsFile, settingsPath } from "./src/settings-file.ts";
@@ -32,19 +35,6 @@ import { parseSettingsFile, settingsRevision } from "./src/application/settings.
 import { settingsEnv, settingsOf } from "./src/domain/settings.ts";
 import { detectManager, HostUpdates, urlHost } from "./src/update-host.ts";
 
-const confPath = process.env.FLEET_CONF;
-if (!confPath) {
-  console.error("FLEET_CONF is required (path to an agent-fleet fleet.conf)");
-  process.exit(1);
-}
-const fleetBin = resolveFleetBin();
-const observed = await observerForConf(confPath);
-if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
-const observer = "disabled" in observed ? undefined : observed;
-const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
-const commands = new Commands(store.db);
-const unknown = commands.reconcileAfterRestart();
-if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 
 // Settings saved from the page (a JSON file beside the tokens file) override the plist's or unit's values.
 // Only with fleet administration on: that is where the page shows and edits them. A file that does not load,
@@ -58,7 +48,9 @@ const settingsFile = process.env.FLEET_CONTROL_ADMIN === "1"
 // Input is checked only when the file turns it on: the plist's own input is checked by the start below.
 const startCheck = async (next: Record<string, string | undefined>) => {
   agentSettingsFromEnv(next);
-  if (next.FLEET_CONTROL_INPUT === "1" && baseEnv.FLEET_CONTROL_INPUT !== "1") { await fleetSocket(confPath); findTmux(); }
+  // A fleet.conf named by Move fleet must still be there; the plist's own is checked by the start itself.
+  if (next.FLEET_CONF && next.FLEET_CONF !== baseEnv.FLEET_CONF && !existsSync(next.FLEET_CONF)) throw new Error(`${next.FLEET_CONF} does not exist`);
+  if (next.FLEET_CONTROL_INPUT === "1" && (baseEnv.FLEET_CONTROL_INPUT !== "1" || next.FLEET_CONF !== baseEnv.FLEET_CONF)) { await fleetSocket(next.FLEET_CONF!); findTmux(); }
 };
 let env = baseEnv;
 let settingsSkipped: { reason: string; revision: string } | null = null;
@@ -78,6 +70,20 @@ if (settingsFile) {
     console.error(`settings file ${settingsFile} skipped: ${settingsSkipped.reason}`);
   }
 }
+// After the settings file: Move fleet keeps the moved fleet.conf there.
+const confPath = env.FLEET_CONF;
+if (!confPath) {
+  console.error("FLEET_CONF is required (path to an agent-fleet fleet.conf)");
+  process.exit(1);
+}
+const fleetBin = resolveFleetBin();
+const observed = await observerForConf(confPath);
+if ("disabled" in observed) console.warn(`model observation off: ${observed.disabled}`);
+const observer = "disabled" in observed ? undefined : observed;
+const store = new Store(process.env.FLEET_CONTROL_DB ?? ":memory:");
+const commands = new Commands(store.db);
+const unknown = commands.reconcileAfterRestart();
+if (unknown.length) console.warn(`delivery outcome unknown after restart: ${unknown.join(", ")}`);
 const options = await serveOptionsFromEnv();
 const port = portFromEnv(process.env.PORT);
 // Checked before anything binds, so a bad tailnet setting does not leave a half-started service.
@@ -167,10 +173,28 @@ const updatesSetup = () => {
       dir: process.cwd(), manager, db, files, fleetConf: resolve(confPath),
       rollbackRoot: dirname(resolve(tokens)), jobDir: join(dirname(resolve(tokens)), "updates"),
       health: `${options.tls ? "https" : "http"}://${urlHost(options.hostname ?? "127.0.0.1")}:${port}`,
-      env: baseEnv,
+      // After a move the scratch start of later updates must run the fleet.conf this service runs.
+      env: { ...baseEnv, FLEET_CONF: resolve(confPath) },
     }),
   };
 };
+const updates = admin && options.auth ? updatesSetup() : null;
+const watchdogService = admin ? new WatchdogService({ manager: managerOf(process.platform, process.env), home: homedir(), uid: process.getuid?.() ?? 0, bash: await findBash(), path: process.env.PATH ?? "/usr/bin:/bin", tmuxBin: findTmux() }) : null;
+const agentStore = agentSettings ? new Agents(store.db) : null;
+const leaseStore = input ? new Leases(store.db) : null;
+// Move fleet: needs the updater (it restarts the service) and the settings file (it keeps the new fleet.conf).
+const move = admin && updates
+  ? {
+    host: admin.host,
+    watchdog: watchdogService,
+    agents: () => (agentStore?.list() ?? []).filter((a) => keepsFleetRow(a.state)).map((a) => a.name),
+    leases: () => (leaseStore?.openAll() ?? []).map((l) => l.session),
+    targetUsed: async (dir: string) => { try { return readdirSync(dir).length > 0; } catch (e) { return (e as NodeJS.ErrnoException).code !== "ENOENT"; } },
+    settingsFile,
+    unavailable: () => updates.host.unavailable(),
+    start: (m: { from: MoveTarget; to: MoveTarget; settingsFile: string; confSha256: string }, by: string) => updates.host.start("move", null, by, m),
+  }
+  : undefined;
 // One set of dependencies: both listeners share the store, the queue, the one delivery at a time and the tokens.
 const deps = {
   fleet: new FleetCli({ fleetBin, confPath }),
@@ -186,7 +210,7 @@ const deps = {
   watchdog: admin
     ? {
       host: admin.host,
-      watchdog: new WatchdogService({ manager: managerOf(process.platform, process.env), home: homedir(), uid: process.getuid?.() ?? 0, bash: await findBash(), path: process.env.PATH ?? "/usr/bin:/bin", tmuxBin: findTmux() }),
+      watchdog: watchdogService!,
     }
     : undefined,
   // With fleet administration on, an operator also edits text files in the allowed folders.
@@ -201,11 +225,12 @@ const deps = {
       check: startCheck,
     }
     : undefined,
-  updates: admin && options.auth ? updatesSetup() : undefined,
+  updates: updates ?? undefined,
   infra: admin && options.auth ? await infraSetup() : undefined,
+  move,
   agents: agentSettings
     ? {
-      agents: new Agents(store.db),
+      agents: agentStore!,
       launcher: new FleetAgentLauncher({ fleetBin, confPath, roots: agentSettings.roots, mcpUrl: agentSettings.mcpUrl }),
       models: agentSettings.models,
       // Orchestrators get their own agent-role line in the tokens file; offered only with an MCP URL.
@@ -236,6 +261,13 @@ if (tailnet) {
     server.stop(true);
     console.error(`tailnet listener failed: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
+  }
+}
+// What this start runs, beside the settings file: Move fleet reads it to know the restart took the new fleet.conf.
+// Written once the listeners are bound, so a second start that dies on a taken port does not overwrite the record.
+if (settingsFile) {
+  try { writeFileSync(`${settingsFile}.running`, `${JSON.stringify({ pid: process.pid, fleetConf: resolve(confPath), startedAt: new Date().toISOString() })}\n`, { mode: 0o600 }); } catch (e) {
+    console.error(`could not write ${settingsFile}.running: ${e instanceof Error ? e.message : e}`);
   }
 }
 if (deps.infra) {
