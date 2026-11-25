@@ -52,4 +52,6 @@ Architecture approval does not authorize live shell access, dependency installat
 
 `docs/` is the consolidated project documentation. `.design/` retains versioned mockups, visual tokens, rendering evidence and design working notes. Older drafts intentionally preserve superseded layouts, such as the bottom tray and local supervisor. Use the latest selected draft and these documents for current intent.
 
+`.design/briefs/operator-workspace-nov24` holds the operator workspace redesign from November 2026: Terminal Studio drafts v1 to v21, their screenshots and the scripts that built each draft from the one before. They are synthetic mockups with in-memory actions. Only part of v21 is in the product; [implementation status](implementation-status.md) says which part. Every Terminal Studio draft embeds the `ghostty-web` module and its licence text, which is why each is about 1.5 MB.
+
 The request to save these documents is local. No external publication or memory write is part of this save.

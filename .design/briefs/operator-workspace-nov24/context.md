@@ -1,0 +1,1 @@
+The reference is the selected Terminal Deck HTML, with runner-01, supervisor, worker-api and req-17. The proposed workspace uses these labels and a fictional second, disconnected host. All actions are in-memory simulations. Place the operator decision first (Apple HIG Layout, Docify p_5ed4474587fbc59a8fab). No product integration.
