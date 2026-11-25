@@ -30,7 +30,7 @@ try {
   // Off unless asked for. Installed services do not set this.
   if (process.env.FLEET_CONTROL_INSTALLER === "1") installer = await createInstaller(localContext());
   // Saved plans for new machines live in their own file next to the config.
-  const enroll = enrolling ? gatewayEnrollment(configPath, config, workstationPlanUseCases(workstationPlansFile(`${configPath}.workstation-plans.sqlite`))) : undefined;
+  const enroll = enrolling ? gatewayEnrollment(configPath, config, workstationPlanUseCases(workstationPlansFile(`${configPath}.workstation-plans.sqlite`), () => config.hosts.map((h) => h.id))) : undefined;
   // The same switch lets the page rotate this gateway's token for a host and remove a host.
   const manage = enrolling ? gatewayHostManager(configPath, config) : undefined;
   const server = startGateway(config, { port, log: (l) => console.warn(l), installer: installer?.handle, enroll, manage });

@@ -91,9 +91,17 @@ export function enrollDeps(configPath: string, config: GatewayConfig, opts: { ti
   };
 }
 
+// An error's message followed by the messages of its causes, for the log.
+export function errorChain(err: unknown): string {
+  const parts: string[] = [];
+  for (let e: unknown = err; e !== undefined && e !== null && parts.length < 4; e = e instanceof Error ? e.cause : undefined) parts.push(e instanceof Error ? e.message : String(e));
+  return parts.join(": ");
+}
+
 // /plans keeps saved plans for new machines apart from enrollment: it makes no token and adds no host.
-export function gatewayEnrollment(configPath: string, config: GatewayConfig, plans: WorkstationPlanUseCases, opts?: { timeoutMs?: number; ssh?: boolean }): EnrollHandler {
-  const enroll = enrollHandler(enrollUseCases(enrollDeps(configPath, config, opts)));
+export function gatewayEnrollment(configPath: string, config: GatewayConfig, plans: WorkstationPlanUseCases, opts: { timeoutMs?: number; ssh?: boolean; log?: (line: string) => void } = {}): EnrollHandler {
+  const log = opts.log ?? ((l: string) => console.error(l));
+  const enroll = enrollHandler(enrollUseCases(enrollDeps(configPath, config, opts)), log);
   return async (method, path, body) => {
     if (path !== "/plans") return enroll(method, path, body);
     if (method !== "POST" && method !== "GET") return { status: 405, body: { error: { kind: "method_not_allowed", message: "method not allowed" } } };
@@ -108,6 +116,8 @@ export function gatewayEnrollment(configPath: string, config: GatewayConfig, pla
       return { status: 201, body: { saved: true } };
     } catch (err) {
       if (err instanceof EnrollError) return { status: 400, body: { error: { kind: "invalid", message: err.message } } };
+      // The page gets no detail; the cause goes to the gateway log.
+      log(`${method === "GET" ? "reading" : "saving"} workstation plans failed: ${errorChain(err)}`);
       return { status: 500, body: { error: { kind: "failed", message: "Cannot access workstation plans." } } };
     }
   };

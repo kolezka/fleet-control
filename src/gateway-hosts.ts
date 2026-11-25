@@ -109,8 +109,9 @@ export function manageHandler(use: GatewayHostUseCases, log: (line: string) => v
   };
 }
 
-export function gatewayHostManager(configPath: string, config: GatewayConfig, opts?: { timeoutMs?: number }): EnrollHandler {
-  const manage = manageHandler(gatewayHostUseCases(gatewayHostsDeps(configPath, config, opts)));
+export function gatewayHostManager(configPath: string, config: GatewayConfig, opts: { timeoutMs?: number; log?: (line: string) => void } = {}): EnrollHandler {
+  const log = opts.log ?? ((l: string) => console.error(l));
+  const manage = manageHandler(gatewayHostUseCases(gatewayHostsDeps(configPath, config, opts)), log);
   return async (method, path, body) => {
     const match = /^\/([a-z0-9][a-z0-9_-]{0,31})\/profile$/.exec(path);
     if (!match) return manage(method, path, body);
@@ -141,6 +142,10 @@ export function gatewayHostManager(configPath: string, config: GatewayConfig, op
         live.name = input.name.trim(); live.profile = profile;
         return { status: 200, body: snapshot(live) };
       });
-    } catch { return error(500, "Cannot update workstation configuration."); }
+    } catch (e) {
+      // The page gets no detail; the cause goes to the gateway log.
+      log(`saving the profile of ${live.id} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return error(500, "Cannot update workstation configuration.");
+    }
   };
 }
