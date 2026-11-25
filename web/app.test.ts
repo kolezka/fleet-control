@@ -290,13 +290,90 @@ test("machine requests link to project review without offering approval on the m
   expect(b.element("projectReview").innerHTML).toContain('data-answer="approve"');
 });
 
+// One shared host with requests of two projects, two tasks, one closed request and one with no owner.
+async function decisions(failRequests = { now: false }, intervals: (() => void)[] = []) {
+  const base = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve", "decline"], status: "open", response: null };
+  const requests = [
+    { ...base, id: "a1", projectId: "Atlas", taskId: "A1", question: "Atlas question" },
+    { ...base, id: "a2", projectId: "Atlas", taskId: "A1", question: "Atlas closed", status: "resolved", response: "approve" },
+    { ...base, id: "a3", projectId: "Atlas", taskId: "A2", question: "Atlas other task" },
+    { ...base, id: "b1", projectId: "Beacon", taskId: "B1", question: "Beacon question" },
+    // Same task id as Atlas A1, so only the project tells them apart.
+    { ...base, id: "b2", projectId: "Beacon", taskId: "A1", question: "Beacon same task id" },
+    { ...base, id: "u1", question: "Unowned question" },
+  ];
+  const b = await browser([{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }], (path, init) => init?.method === "POST" ? { ok: true }
+    : path.includes("/requests") ? (failRequests.now ? { __status: 500 } : { runs: [], requests }) : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] }, intervals);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const posts = () => b.calls.filter(c => c.init?.method === "POST").map(c => ({ path: c.path, body: JSON.parse(String(c.init!.body)) }));
+  return { b, posts };
+}
+const atlas = { project: "Atlas", task: "A1", host: "a" };
+
+test("an answer in the project review is sent once, for the request and revision shown", async () => {
+  const { b, posts } = await decisions();
+  await b.click(atlas);
+  const review = b.element("projectReview").innerHTML;
+  expect(review).toContain('data-request="a1"');
+  for (const other of ["a3", "b1", "b2", "u1"]) expect(review).not.toContain(`data-request="${other}"`);
+  await b.click({ host: "a", request: "a1", revision: "3", answer: "approve" });
+  expect(posts()).toEqual([{ path: "/api/hosts/a/requests/a1/resolve", body: { response: "approve", expectedRevision: 3 } }]);
+});
+
+// Each click below differs from the valid one above in one way only, so each guards one condition.
+for (const [name, open, click] of [
+  ["no review is open", null, { host: "a", request: "a1", revision: "3", answer: "approve" }],
+  ["the button names another host", atlas, { host: "other", request: "a1", revision: "3", answer: "approve" }],
+  ["the request belongs to another project", atlas, { host: "a", request: "b2", revision: "3", answer: "approve" }],
+  ["the request belongs to another task", atlas, { host: "a", request: "a3", revision: "3", answer: "approve" }],
+  ["the request has no project", atlas, { host: "a", request: "u1", revision: "3", answer: "approve" }],
+  ["the revision is not the current one", atlas, { host: "a", request: "a1", revision: "2", answer: "approve" }],
+  ["the request is no longer open", atlas, { host: "a", request: "a2", revision: "3", answer: "approve" }],
+  ["the response is not one the request allows", atlas, { host: "a", request: "a1", revision: "3", answer: "merge" }],
+  ["the request is unknown", atlas, { host: "a", request: "zz", revision: "3", answer: "approve" }],
+] as const) test(`no answer is sent when ${name}`, async () => {
+  const { b, posts } = await decisions();
+  if (open) await b.click(open);
+  await b.click(click);
+  expect(posts()).toEqual([]);
+});
+
+test("no answer is sent when the request state could not be read again", async () => {
+  const fail = { now: false }, intervals: (() => void)[] = [];
+  const { b, posts } = await decisions(fail, intervals);
+  await b.click(atlas);
+  fail.now = true;
+  for (const tick of intervals) tick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("projectReview").innerHTML).toContain("Request state unknown.");
+  await b.click({ host: "a", request: "a1", revision: "3", answer: "approve" });
+  expect(posts()).toEqual([]);
+});
+
+// Managed orchestrators and run-file-sync register runs without a project; their requests still need an answer.
+test("a request with no project is answered in the unassigned review, not on the machine", async () => {
+  const { b, posts } = await decisions();
+  expect(b.element("requests").innerHTML).not.toContain("data-answer");
+  expect(b.element("requests").innerHTML).toContain('data-unassigned="yes"');
+  await b.click({ unassigned: "yes", host: "a" });
+  const review = b.element("projectReview").innerHTML;
+  expect(review).toContain("Unowned question");
+  expect(review).not.toContain("Atlas question");
+  expect(review).not.toContain("Beacon question");
+  expect(review).toContain('data-request="u1"');
+  await b.click({ host: "a", request: "a1", revision: "3", answer: "approve" });
+  expect(posts()).toEqual([]);
+  await b.click({ host: "a", request: "u1", revision: "3", answer: "decline" });
+  expect(posts()).toEqual([{ path: "/api/hosts/a/requests/u1/resolve", body: { response: "decline", expectedRevision: 3 } }]);
+});
+
 // Every value a host or gateway sends can be hostile. None may become markup or break out of an attribute.
 test("host-provided strings never become markup anywhere on the page", async () => {
   const evil = (tag: string) => `<x-evil-${tag}>"x-evil-${tag}="1'`;
   const hostile = { id: "a", name: evil("hostname"), apiBase: "/api/hosts/a" };
   const session = { name: evil("session"), host: evil("sessionhost"), role: evil("role"), registered: true, running: true, model: { state: "observed", model: evil("model"), source: evil("source"), observedAt: "2026-11-16T08:00:00Z" } };
   const run = { id: evil("run"), orchestrator: evil("orch"), phase: evil("phase"), revision: 1, phaseStatus: evil("phasestatus"), updatedAt: "t" };
-  const request = { id: evil("req"), projectId: "Atlas", taskId: "A-1", runId: run.id, phase: run.phase, revision: 1, kind: "approval", question: evil("question"), proposedAction: evil("action"), scope: evil("scope"),
+  const request = { id: evil("req"), projectId: "Atlas", taskId: "A-1", runId: run.id, phase: run.phase, revision: evil("revision"), kind: "approval", question: evil("question"), proposedAction: evil("action"), scope: evil("scope"),
     evidence: [evil("evidence")], allowedResponses: [evil("answer")], status: "open", response: evil("response"), resolvedBy: evil("resolver"), resolutionNote: evil("note") };
   const cmd = { id: evil("cmd"), target: evil("target"), actor: evil("actor"), text: evil("text"), status: evil("status"), response: evil("cmdresponse"), createdAt: "t", updatedAt: "t" };
   const agent = { name: evil("agent"), cwd: evil("cwd"), model: evil("agentmodel"), state: "failed", error: evil("agenterror"), createdBy: "x", updatedAt: "t", alive: false };
@@ -306,6 +383,12 @@ test("host-provided strings never become markup anywhere on the page", async () 
   const html = ["sidebar", "requests", "projectReview", "workflowSteps", "exchangeRows", "agentRows", "agentFolder", "agentModel"].map(id => b.element(id).innerHTML).join("\n");
   // The fixture must reach every panel, or the check below proves nothing.
   for (const tag of ["hostname", "session", "model", "question", "evidence", "answer", "text", "actor", "status", "phase", "agent", "cwd", "agenterror", "modelopt", "folder"]) expect(html).toContain("x-evil-" + tag);
+  // A host can send a string where a number belongs; the revision is drawn in both request panels.
+  for (const id of ["requests", "projectReview"]) {
+    expect(b.element(id).innerHTML).toContain("x-evil-revision");
+    expect(b.element(id).innerHTML).not.toMatch(/<x-evil/);
+    expect(b.element(id).innerHTML).not.toMatch(/"x-evil-[a-z]+=/);
+  }
   expect(html).not.toMatch(/<x-evil/);
   expect(html).not.toMatch(/"x-evil-[a-z]+=/);
 });
