@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth } from "./auth.ts";
 import { enrollUseCases } from "./application/enrollment.ts";
+import { workstationPlanUseCases } from "./application/workstation-plans.ts";
+import { workstationPlansFile } from "./data/workstation-plans.ts";
 import { loadGatewayConfig, startGateway, type GatewayConfig } from "./client-gateway.ts";
 import { reloadTokens } from "./config.ts";
 import { Store } from "./data/store.ts";
-import { enrollDeps, enrollHandler, gatewayHostAdder } from "./gateway-enroll.ts";
+import { enrollDeps, enrollHandler, gatewayEnrollment, gatewayHostAdder } from "./gateway-enroll.ts";
 import { serve } from "./server.ts";
 import { connect, parseArgs } from "../scripts/enroll.ts";
 
@@ -48,6 +50,18 @@ const post = (path: string, body: unknown, origin: string | null = gw.url.origin
   method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(body),
 });
 const request = { id: "new", name: "New host", url: URL_NEW, mode: "connect", principal: "macbook-gateway", dir: "/srv/fleet-control-service" };
+
+test("plans survive gateway reload without entering enrollment or registered inventory", async () => {
+  const plan = { ...request, id: "plan", mode: "fresh", ref: "main", port: 4871, label: "planned", fleet: "workers", tlsCert: "/tls/cert", tlsKey: "/tls/key" };
+  const before = readFileSync(configPath, "utf8");
+  // A new handler and a new store each time, as after a gateway restart.
+  const handler = () => gatewayEnrollment(configPath, config, workstationPlanUseCases(workstationPlansFile(`${configPath}.workstation-plans.sqlite`)), { ssh: false });
+  expect((await handler()("POST", "/plans", new TextEncoder().encode(JSON.stringify(plan)))).status).toBe(201);
+  expect(await handler()("GET", "/plans", null)).toEqual({ status: 200, body: { plans: [plan] } });
+  expect(await handler()("GET", "", null)).toEqual({ status: 200, body: { pending: [] } });
+  expect(readdirSync(dir)).not.toContain("token-plan");
+  expect(readFileSync(configPath, "utf8")).toBe(before);
+});
 
 test("the add-host page and API exist only when enrollment is on", async () => {
   const off = startGateway(config, { port: 0 });

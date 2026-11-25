@@ -47,10 +47,19 @@
             <div class="field"><label for="sshPort">SSH port (optional)</label><input id="sshPort" inputmode="numeric" autocomplete="off" placeholder="22"></div>
             <div class="formactions"><button type="submit" id="begin" class="primary" disabled>Make token and command</button><span id="formStatus" role="status"></span></div>
           </form>
+          <section id="planPanel" class="installform" aria-label="Installation plan preview" hidden>
+            <h2>Installation plan preview</h2>
+            <p>This preview has not created a token, contacted the workstation or installed anything.</p>
+            <pre id="planSummary" class="command"></pre>
+            <p>Starting enrollment creates a gateway token and prepares the command. Running the command and checking the host identity are separate steps.</p>
+            <button type="button" id="savePlan">Save plan only</button>
+            <button type="button" id="startEnrollment">Start enrollment: make token and command</button>
+          </section>
         </section>
         <aside class="inspector coordination" aria-label="Hosts being added">
           <header class="coordinationhead"><h2>Being added</h2><small id="pendingCount">None</small></header>
           <div class="coordinationbody">
+            <section aria-label="Saved installation plans"><h3>Saved installation plans</h3><p>Planning records only. These are not registered hosts.</p><pre id="savedPlans" class="command" aria-live="polite">Loading plans.</pre></section>
             <ol class="pendinglist" id="pending" aria-live="polite"></ol>
             <section class="applynote"><h3>What happens</h3><ul><li>The token stays on this machine, in a 0600 file next to the gateway config.</li><li>The command adds only the token's hash on the host. Pasting it twice changes nothing.</li><li>Check adds the host only after it answers with this name and the operator role.</li><li>Cancel removes the token here. If the command already ran, revoke the name on the host too.</li></ul></section>
           </div>
