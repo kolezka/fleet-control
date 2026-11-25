@@ -68,6 +68,21 @@ test("current view matches what the page shows from the full list as history gro
   expect(shown((await get("/api/requests")).body).run).toBe("run-a");
 });
 
+test("requests on one host retain distinct project owners even when only the latest run is shown", async () => {
+  const expected = new Map<string, string[]>();
+  for (const [projectId, taskId] of [["Atlas", "A-1"], ["Beacon", "B-2"]] as const) {
+    const runId = `shared-host-${projectId}`;
+    requests.registerRun({ runId, orchestrator: "orch", phase: "build", projectId, taskId });
+    const q = requests.create({ runId, origin: "orch", expectedRevision: 1, kind: "approval", question: "Continue?" });
+    expected.set(q.id, [projectId, taskId]);
+  }
+  const { body, status } = await get("/api/requests?view=current");
+  expect(status).toBe(200);
+  for (const [id, [projectId, taskId]] of expected) {
+    expect(body.requests.find((q: {id: string}) => q.id === id)).toMatchObject({ projectId, taskId, revision: 1 });
+  }
+});
+
 test("view refuses other values and mixing with paging", async () => {
   for (const q of ["view=all", "view=", "view=current&view=current", "view=current&limit=2", "view=current&cursor=abc", "view=current&x=1"]) {
     const r = await get("/api/requests?" + q);

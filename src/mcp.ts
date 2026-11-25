@@ -110,8 +110,8 @@ export function buildMcpServer(deps: ControlDeps, principal?: Caller) {
 function registerRequestTools(server: McpServer, requests: ReturnType<typeof requestUseCases>) {
   const actor = z.string().min(1).max(100);
   server.registerTool("run_register", {
-    description: "Orchestrator: register a run once. The orchestrator named here is the only writer of its phase record.",
-    inputSchema: { runId: z.string().min(1).max(200), orchestrator: actor, phase: z.string().min(1).max(200) },
+    description: "Register a run once. Provide projectId and taskId together to bind its requests to that project and task. This binding cannot be changed on replay.",
+    inputSchema: { runId: z.string().min(1).max(200), orchestrator: actor, phase: z.string().min(1).max(200), projectId: z.string().min(1).max(128).optional(), taskId: z.string().min(1).max(128).optional() },
   }, async (a) => attempt(() => ({ run: requests.registerRun(a) })));
 
   server.registerTool("phase_update", {
