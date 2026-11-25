@@ -367,6 +367,109 @@ test("a request with no project is answered in the unassigned review, not on the
   expect(posts()).toEqual([{ path: "/api/hosts/a/requests/u1/resolve", body: { response: "decline", expectedRevision: 3 } }]);
 });
 
+// A host can send half an owner. That is malformed, not "no owner": it must not become answerable as unassigned.
+test("a request with half an owner is in no review and cannot be answered", async () => {
+  const base = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve", "decline"], status: "open", response: null };
+  const requests = [
+    { ...base, id: "h1", projectId: "Atlas", taskId: null, question: "Only a project" },
+    { ...base, id: "h2", projectId: null, taskId: "A1", question: "Only a task" },
+    { ...base, id: "h3", projectId: "", taskId: "A1", question: "Empty project" },
+    { ...base, id: "h4", projectId: 7, taskId: "A1", question: "Project is a number" },
+    { ...base, id: "u1", question: "Unowned question" },
+  ];
+  const b = await browser([{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }], (path, init) => init?.method === "POST" ? { ok: true }
+    : path.includes("/requests") ? { runs: [], requests } : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const posts = () => b.calls.filter(c => c.init?.method === "POST").map(c => c.path);
+  const machine = b.element("requests").innerHTML;
+  expect(machine).not.toContain("data-answer");
+  expect(machine.split("Project and task could not be read. This request cannot be answered.").length - 1).toBe(4);
+  expect(machine.split('data-unassigned="yes"').length - 1).toBe(1);
+  await b.click({ unassigned: "yes", host: "a" });
+  const unassigned = b.element("projectReview").innerHTML;
+  expect(unassigned).toContain('data-request="u1"');
+  for (const id of ["h1", "h2", "h3", "h4"]) {
+    expect(unassigned).not.toContain(`data-request="${id}"`);
+    await b.click({ host: "a", request: id, revision: "3", answer: "approve" });
+  }
+  expect(posts()).toEqual([]);
+  // The half owner does not open a review of its own either.
+  await b.click({ project: "Atlas", task: "A1", host: "a" });
+  expect(b.element("projectReview").innerHTML).not.toContain("data-request=");
+  for (const id of ["h1", "h2", "h3", "h4"]) await b.click({ host: "a", request: id, revision: "3", answer: "approve" });
+  expect(posts()).toEqual([]);
+  // Positive control: the request with no owner at all is still answered in the unassigned review.
+  await b.click({ unassigned: "yes", host: "a" });
+  await b.click({ host: "a", request: "u1", revision: "3", answer: "decline" });
+  expect(posts()).toEqual(["/api/hosts/a/requests/u1/resolve"]);
+});
+
+test("picking another host closes the review, and the old review answers nothing there", async () => {
+  const request = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve"], status: "open", response: null, id: "a1", projectId: "Atlas", taskId: "A1", question: "Atlas question" };
+  // Both hosts hold a request with the same id, owner and revision, so only the host tells them apart.
+  const hosts = [{ id: "a", name: "A", apiBase: "/api/hosts/a" }, { id: "b", name: "B", apiBase: "/api/hosts/b" }];
+  const intervals: (() => void)[] = [];
+  const b = await browser(hosts, (path, init) => init?.method === "POST" ? { ok: true }
+    : path.includes("/requests") ? { runs: [], requests: [request] } : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] }, intervals);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  await settle();
+  const posts = () => b.calls.filter(c => c.init?.method === "POST").map(c => c.path);
+  await b.click(atlas);
+  expect(b.element("projectReview").hidden).toBe(false);
+  expect(b.element("projectReview").innerHTML).toContain('data-request="a1"');
+  await b.click({ host: "b" });
+  for (const tick of intervals) tick();
+  await settle(); await settle();
+  expect(b.app.getFleet().selectedHost).toBe("b");
+  await b.click({ host: "b", request: "a1", revision: "3", answer: "approve" });
+  await b.click({ host: "a", request: "a1", revision: "3", answer: "approve" });
+  expect(posts()).toEqual([]);
+  expect(b.element("projectReview").hidden).toBe(true);
+  expect(b.element("terminals").hidden).toBe(false);
+  // Positive control: host b's own review answers host b's request.
+  await b.click({ ...atlas, host: "b" });
+  expect(b.element("projectReview").innerHTML).toContain('data-request="a1"');
+  await b.click({ host: "b", request: "a1", revision: "3", answer: "approve" });
+  expect(posts()).toEqual(["/api/hosts/b/requests/a1/resolve"]);
+});
+
+test("a review button that names a host other than the selected one opens no review", async () => {
+  const request = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve"], status: "open", response: null, id: "a1", projectId: "Atlas", taskId: "A1", question: "Atlas question" };
+  const unowned = { ...request, id: "u1", projectId: null, taskId: null, question: "Unowned question" };
+  const hosts = [{ id: "a", name: "A", apiBase: "/api/hosts/a" }, { id: "b", name: "B", apiBase: "/api/hosts/b" }];
+  const forgedClicks: Record<string, string>[] = [{ ...atlas, host: "b" }, { unassigned: "yes", host: "b" }];
+  for (const forged of forgedClicks) {
+    const b = await browser(hosts, (path, init) => init?.method === "POST" ? { ok: true }
+      : path.includes("/requests") ? { runs: [], requests: [request, unowned] } : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(b.app.getFleet().selectedHost).toBe("a");
+    await b.click(forged);
+    expect(b.element("projectReview").hidden).toBe(true);
+    expect(b.element("terminals").hidden).toBe(false);
+    for (const host of ["a", "b"]) for (const id of ["a1", "u1"]) await b.click({ host, request: id, revision: "3", answer: "approve" });
+    expect(b.calls.filter(c => c.init?.method === "POST")).toEqual([]);
+  }
+});
+
+test("a host that becomes cooperative closes the review and takes no answer", async () => {
+  const request = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve"], status: "open", response: null, id: "a1", projectId: "Atlas", taskId: "A1", question: "Atlas question" };
+  const hosts: Record<string, unknown>[] = [{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }];
+  const b = await browser(hosts, (path, init) => init?.method === "POST" ? { ok: true }
+    : path.includes("/requests") ? { runs: [], requests: [request] } : path.endsWith("/sessions") ? { sessions: [] } : { commands: [], nextCursor: null });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await b.click(atlas);
+  expect(b.element("projectReview").hidden).toBe(false);
+  expect(b.element("projectReview").innerHTML).toContain('data-answer="approve"');
+  hosts[0] = { ...hosts[0], supervisor: { hostId: "central-a", session: "supervisor" } };
+  await b.app.loadHostList();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(b.element("projectReview").hidden).toBe(true);
+  expect(b.element("terminals").hidden).toBe(false);
+  expect(b.element("requests").innerHTML).toContain("Approvals unavailable in cooperative mode.");
+  await b.click({ host: "a", request: "a1", revision: "3", answer: "approve" });
+  expect(b.calls.filter(c => c.init?.method === "POST")).toEqual([]);
+});
+
 // Every value a host or gateway sends can be hostile. None may become markup or break out of an attribute.
 test("host-provided strings never become markup anywhere on the page", async () => {
   const evil = (tag: string) => `<x-evil-${tag}>"x-evil-${tag}="1'`;

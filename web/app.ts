@@ -353,12 +353,18 @@ const verb = (r: string) => (r === "approve" ? "Approve" : r === "decline" ? "De
 
 // The review open in the centre: one project task, or (owner null) the requests of runs registered without one.
 let reviewing: { host: string; owner: { project: string; task: string } | null } | null = null;
-const requestOwner = (q: Req) => typeof q.projectId === "string" && q.projectId && typeof q.taskId === "string" && q.taskId ? { project: q.projectId, task: q.taskId } : null;
+// "none": the run was registered without a project. "malformed": half an owner or a value that is not a name.
+// The host service stores both or neither, so a malformed owner is not treated as "none" and is in no review.
+function requestOwner(q: Req): { project: string; task: string } | "none" | "malformed" {
+  const { projectId: project, taskId: task } = q as { projectId?: unknown; taskId?: unknown };
+  if (project == null && task == null) return "none";
+  return typeof project === "string" && project && typeof task === "string" && task ? { project, task } : "malformed";
+}
 function inReview(h: HostState, q: Req): boolean {
   if (reviewing?.host !== h.info.id) return false;
-  const want = reviewing.owner;
-  if (!want) return !requestOwner(q);
-  return q.projectId === want.project && q.taskId === want.task;
+  const want = reviewing.owner, owner = requestOwner(q);
+  if (!want) return owner === "none";
+  return typeof owner === "object" && owner.project === want.project && owner.task === want.task;
 }
 function renderRequests(h: HostState | undefined) {
   if (reviewing && (!h || h.info.supervisor || h.info.id !== reviewing.host)) reviewing = null;
@@ -399,8 +405,9 @@ function renderRequests(h: HostState | undefined) {
   setHtml(box, shown.map((q: Req) => {
     const owner = requestOwner(q);
     // No answer control here: answers are given in the review in the centre, also for requests with no project.
-    const toReview = owner ? `<button type="button" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">Open ${esc(owner.project)} / ${esc(owner.task)}</button>`
-      : `<p>Project and task not assigned.</p><button type="button" data-host="${esc(h.info.id)}" data-unassigned="yes">Open unassigned decisions</button>`;
+    const toReview = owner === "malformed" ? `<p>Project and task could not be read. This request cannot be answered.</p>`
+      : owner === "none" ? `<p>Project and task not assigned.</p><button type="button" data-host="${esc(h.info.id)}" data-unassigned="yes">Open unassigned decisions</button>`
+      : `<button type="button" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">Open ${esc(owner.project)} / ${esc(owner.task)}</button>`;
     const result = q.response ? `Answered "${esc(q.response)}" by ${esc(q.resolvedBy ?? "?")}.${q.status === "resolved" ? " The supervisor has not acknowledged it yet." : ""}` : "";
     return `<div class="sectionheading"><h3>Request</h3><span class="requeststatus">${esc(requestLabel[q.status] ?? q.status)}</span></div>` +
       `<h2 class="requesttitle">${esc(q.question)}</h2>` +
