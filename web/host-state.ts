@@ -13,14 +13,14 @@ export type Model =
 export type Session = { name: string; host: string | null; role: string | null; registered: boolean; running: boolean; model: Model };
 export type Run = { id: string; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
 export type Req = {
-  id: string; runId: string; phase: string; revision: number; kind: string; question: string; proposedAction: string; scope: string;
+  id: string; runId: string; projectId?: string | null; taskId?: string | null; phase: string; revision: number; kind: string; question: string; proposedAction: string; scope: string;
   evidence: string[]; allowedResponses: string[]; status: string; response: string | null; resolvedBy: string | null; resolutionNote: string | null;
 };
 export type Command = { hostId?: string; id: string; target: string; actor: string; text: string; status: string; response: string | null; updatedAt: string; createdAt: string };
 export type Peer = { name: string; url: string };
 
 /** `direct`: this page talks to one host service itself, so a 401 there means "sign in here". */
-export type HostInfo = { id: string; name: string; apiBase: string; direct: boolean; supervisor?: { hostId: string; session: string } };
+export type HostInfo = { id: string; name: string; apiBase: string; direct: boolean; defaultHarness?: "deepseek-harness" | "claude-code"; supervisor?: { hostId: string; session: string } };
 
 // ---------------------------------------------------------------------------------------------
 // Host list and response parsing
@@ -48,7 +48,9 @@ export function parseHostList(body: unknown): HostList | null {
       const m = r.supervisor as Record<string, unknown> | null;
       if (r.supervisor !== undefined && (!m || typeof m !== "object" || ![m.hostId, m.session].every(v => typeof v === "string" && !!v && v.length <= 256 && v.trim() === v && !/[\x00-\x1f\x7f]/.test(v)))) return null;
       const supervisor = m ? { hostId: m.hostId as string, session: m.session as string } : undefined;
-      hosts.push({ ...(supervisor ? { supervisor } : {}), id: r.id, name: typeof r.name === "string" && r.name ? r.name : r.id, apiBase: r.apiBase, direct: false });
+      const defaultHarness = r.defaultHarness;
+      if (defaultHarness !== undefined && defaultHarness !== "deepseek-harness" && defaultHarness !== "claude-code") return null;
+      hosts.push({ ...(defaultHarness ? { defaultHarness } : {}), ...(supervisor ? { supervisor } : {}), id: r.id, name: typeof r.name === "string" && r.name ? r.name : r.id, apiBase: r.apiBase, direct: false });
     }
     return { mode: "gateway", hosts, peers: [] };
   }

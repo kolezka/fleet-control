@@ -23,6 +23,7 @@
     <main class="main" id="main">
       <div class="alert" id="alert" hidden></div>
       <div class="workarea">
+        <section class="projectreview" id="projectReview" aria-label="Project task decisions" hidden></section>
         <section class="terminals" id="terminals" aria-label="Session terminals"></section>
         <aside class="inspector coordination" id="phaseInspector" aria-label="Supervisor requests and workflow">
           <header class="coordinationhead"><h2>Supervisor</h2><small id="coordContext">No run registered</small></header>
@@ -74,7 +75,7 @@
                 <div class="composerfooter"><span id="tokenGate"></span><button type="button" id="tokenGo" class="destructive" disabled>Apply</button></div>
                 <div id="newTokenBox" class="newtoken" hidden><p class="fineprint">New token for <strong id="newTokenName"></strong>. Copy it now; it is not shown again and not kept on this host.</p><code id="newTokenText"></code><div class="composerfooter"><button type="button" id="newTokenCopy">Copy</button><button type="button" id="newTokenDone">Done</button></div></div>
               </div>
-              <div class="adminpart" id="hostPart" hidden><div class="sectionheading"><h4>This gateway's link</h4></div>
+              <div class="adminpart" id="hostPart" hidden><div class="sectionheading"><h4>This gateway's link</h4></div><a id="workstationEditor" class="footlink">Edit workstation configuration</a>
                 <p class="fineprint">Rotate gives this host a new token for this gateway. Remove drops the host from this gateway; with revoke the host forgets this gateway's token first.</p>
                 <label for="hostConfirm">Type the host id to confirm</label><input id="hostConfirm" autocomplete="off" spellcheck="false">
                 <label class="checkrow"><input type="checkbox" id="hostRevoke" checked> Revoke this gateway's token on the host before removing</label>
