@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type Manifest = { name: "fleet-control"; commit: string; tag: string | null; agentFleet: string; bun: string; builtAt: string };
-// Not needed to run a host service, and large (screenshots).
-export const LEFT_OUT = ["docs", ".design"];
+// Not needed to run a host service: documents, design history (large, screenshots) and development scratch files.
+export const LEFT_OUT = ["docs", ".design", ".agents"];
 
 const sh = (cmd: string, args: string[], cwd?: string, input?: Buffer) => {
   const r = spawnSync(cmd, args, { cwd, input, maxBuffer: 512 * 1024 * 1024 });
