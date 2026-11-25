@@ -375,20 +375,24 @@ test("a request with half an owner is in no review and cannot be answered", asyn
     { ...base, id: "h2", projectId: null, taskId: "A1", question: "Only a task" },
     { ...base, id: "h3", projectId: "", taskId: "A1", question: "Empty project" },
     { ...base, id: "h4", projectId: 7, taskId: "A1", question: "Project is a number" },
+    // Both fields present but neither is a name: still not "no owner".
+    { ...base, id: "h5", projectId: "", taskId: "", question: "Both empty" },
+    { ...base, id: "h6", projectId: 0, taskId: false, question: "Both the wrong type" },
     { ...base, id: "u1", question: "Unowned question" },
   ];
   const b = await browser([{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }], (path, init) => init?.method === "POST" ? { ok: true }
     : path.includes("/requests") ? { runs: [], requests } : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] });
   await new Promise(resolve => setTimeout(resolve, 0));
   const posts = () => b.calls.filter(c => c.init?.method === "POST").map(c => c.path);
+  const malformed = ["h1", "h2", "h3", "h4", "h5", "h6"];
   const machine = b.element("requests").innerHTML;
   expect(machine).not.toContain("data-answer");
-  expect(machine.split("Project and task could not be read. This request cannot be answered.").length - 1).toBe(4);
+  expect(machine.split("Project and task could not be read. This request cannot be answered.").length - 1).toBe(malformed.length);
   expect(machine.split('data-unassigned="yes"').length - 1).toBe(1);
   await b.click({ unassigned: "yes", host: "a" });
   const unassigned = b.element("projectReview").innerHTML;
   expect(unassigned).toContain('data-request="u1"');
-  for (const id of ["h1", "h2", "h3", "h4"]) {
+  for (const id of malformed) {
     expect(unassigned).not.toContain(`data-request="${id}"`);
     await b.click({ host: "a", request: id, revision: "3", answer: "approve" });
   }
@@ -396,7 +400,7 @@ test("a request with half an owner is in no review and cannot be answered", asyn
   // The half owner does not open a review of its own either.
   await b.click({ project: "Atlas", task: "A1", host: "a" });
   expect(b.element("projectReview").innerHTML).not.toContain("data-request=");
-  for (const id of ["h1", "h2", "h3", "h4"]) await b.click({ host: "a", request: id, revision: "3", answer: "approve" });
+  for (const id of malformed) await b.click({ host: "a", request: id, revision: "3", answer: "approve" });
   expect(posts()).toEqual([]);
   // Positive control: the request with no owner at all is still answered in the unassigned review.
   await b.click({ unassigned: "yes", host: "a" });
