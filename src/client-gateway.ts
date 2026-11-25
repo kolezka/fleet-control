@@ -6,6 +6,7 @@
 // against DNS rebinding with an exact Host check, and refuses browser requests from other origins.
 // Local processes, including other local users, can call it despite token file permissions.
 import { constants } from "node:fs";
+import { parseWorkstationProfile, type WorkstationProfile } from "./domain/workstation-profile.ts";
 import { open } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
@@ -15,13 +16,13 @@ let pageBuild: Promise<Map<string, Response>> | undefined;
 // Explicit asset responses let the approval page carry frame protection too.
 function buildPage() {
   return pageBuild ??= Bun.build({
-    entrypoints: ["index.html", "install.html", "add-host.html"].map((name) => resolve(import.meta.dir, "../web", name)), target: "browser", publicPath: "/",
+    entrypoints: ["index.html", "install.html", "add-host.html", "workstation.html"].map((name) => resolve(import.meta.dir, "../web", name)), target: "browser", publicPath: "/",
   }).then((result) => {
     if (!result.success) throw new Error("client page build failed");
     return new Map(result.outputs.map((output) => {
       const name = output.path.split("/").at(-1)!;
       const path = output.kind === "entry-point" && name.endsWith(".html")
-        ? (name === "install.html" ? "/install" : name === "add-host.html" ? "/add-host" : "/") : `/${name}`;
+        ? (name === "install.html" ? "/install" : name === "add-host.html" ? "/add-host" : name === "workstation.html" ? "/workstation" : "/") : `/${name}`;
       return [path, new Response(output, { headers: { ...frameHeaders, "content-type": output.type } })];
     }));
   });
@@ -30,12 +31,12 @@ function buildPage() {
 export class GatewayConfigError extends Error {}
 
 export type SupervisorMapping = { hostId: string; session: string };
-export type HostInfo = { id: string; name: string; origin: string; supervisor?: SupervisorMapping };
+export type HostInfo = { id: string; name: string; origin: string; profile?: WorkstationProfile; supervisor?: SupervisorMapping };
 
 const ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const TOKEN = /^[A-Za-z0-9._~+\/=-]{1,512}$/;
 const SEGMENT = /^[A-Za-z0-9._-]{1,128}$/; // session names, command ids, request ids
-const KEYS = new Set(["id", "name", "url", "tokenFile", "supervisor"]);
+const KEYS = new Set(["id", "name", "url", "tokenFile", "supervisor", "profile"]);
 
 // Holds the tokens so they cannot end up in JSON output or logs by accident.
 export class Credentials {
@@ -172,7 +173,9 @@ export function parseGatewayConfig(input: unknown, baseDir: string, rules: Gatew
     const tokenFile = isAbsolute(h.tokenFile) ? h.tokenFile : resolve(baseDir, h.tokenFile);
     const supervisor = h.supervisor === undefined ? undefined : parseSupervisor(h.supervisor);
     if (supervisor && !central) throw new GatewayConfigError(`${at}: supervisor requires central`);
-    return { id: h.id, name: h.name.trim(), origin, tokenFile, ...(supervisor ? { supervisor } : {}) };
+    const profile = parseWorkstationProfile(h.profile);
+    if (h.profile !== undefined && !profile) throw new GatewayConfigError(`${at}: invalid workstation profile`);
+    return { id: h.id, name: h.name.trim(), origin, tokenFile, ...(supervisor ? { supervisor } : {}), ...(profile ? { profile } : {}) };
   });
 }
 
@@ -640,7 +643,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       const url = new URL(req.url);
       if (!url.pathname.startsWith("/api/")) {
         if (req.method !== "GET" && req.method !== "HEAD") return fail(405, "method_not_allowed", "method not allowed");
-        const off = (url.pathname === "/install" && !opts.installer) || (url.pathname === "/add-host" && !opts.enroll);
+        const off = (url.pathname === "/install" && !opts.installer) || (url.pathname === "/add-host" && !opts.enroll) || (url.pathname === "/workstation" && !opts.manage);
         const asset = off ? undefined : (await buildPage()).get(url.pathname);
         if (!asset) return fail(404, "not_found", "not found");
         return req.method === "HEAD" ? new Response(null, { headers: asset.headers }) : asset.clone();
@@ -657,7 +660,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}), ...(opts.manage ? { manage: true } : {}) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.profile?.defaultHarness ? { defaultHarness: h.profile.defaultHarness } : {}), ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}), ...(opts.manage ? { manage: true } : {}) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
       }

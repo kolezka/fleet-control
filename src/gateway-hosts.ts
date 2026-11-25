@@ -1,6 +1,8 @@
 // The gateway's side of looking after its hosts: token files next to the config, the config file itself
 // and the calls to the host. The rules live in application/gateway-hosts.ts.
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { parseWorkstationProfile } from "./domain/workstation-profile.ts";
 import { constants } from "node:fs";
 import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -107,5 +109,43 @@ export function manageHandler(use: GatewayHostUseCases, log: (line: string) => v
   };
 }
 
-export const gatewayHostManager = (configPath: string, config: GatewayConfig, opts?: { timeoutMs?: number }) =>
-  manageHandler(gatewayHostUseCases(gatewayHostsDeps(configPath, config, opts)));
+export function gatewayHostManager(configPath: string, config: GatewayConfig, opts: { timeoutMs?: number; log?: (line: string) => void } = {}): EnrollHandler {
+  const log = opts.log ?? ((l: string) => console.error(l));
+  const manage = manageHandler(gatewayHostUseCases(gatewayHostsDeps(configPath, config, opts)), log);
+  return async (method, path, body) => {
+    const match = /^\/([a-z0-9][a-z0-9_-]{0,31})\/profile$/.exec(path);
+    if (!match) return manage(method, path, body);
+    const error = (status: number, message: string) => ({ status, body: { error: { message } } });
+    const live = config.hosts.find(h => h.id === match[1]);
+    if (!live) return error(404, "Unknown workstation.");
+    const snapshot = (host: typeof live) => ({ name: host.name, origin: host.origin, profile: host.profile ?? null });
+    if (method === "GET") return { status: 200, body: snapshot(live) };
+    if (method !== "POST") return error(405, "Method not allowed.");
+    let input;
+    try { input = JSON.parse(new TextDecoder().decode(body ?? new Uint8Array())); }
+    catch { return error(400, "Expected JSON."); }
+    if (!input || typeof input !== "object" || Object.keys(input).some(k => !["expected", "name", "profile"].includes(k))) return error(400, "Unexpected edit fields.");
+    const profile = parseWorkstationProfile(input.profile);
+    if (!profile || typeof input.name !== "string" || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name)) return error(400, "Invalid workstation name or profile.");
+    try {
+      return await withConfigLock(configPath, async () => {
+        const json = JSON.parse(await readFile(configPath, "utf8")) as { hosts: HostEntry[] };
+        const disk = parseGatewayConfig(json, dirname(configPath), { allowNoHosts: true }).find(h => h.id === match[1]);
+        if (!disk || !config.hosts.includes(live) || !isDeepStrictEqual(snapshot(disk), input.expected) || !isDeepStrictEqual(snapshot(live), input.expected)) return error(409, "Workstation changed. Reload before saving.");
+        const entry = json.hosts.find(h => h.id === live.id)!;
+        entry.name = input.name.trim(); entry.profile = profile;
+        const tmp = `${configPath}.tmp-${randomUUID()}`;
+        try {
+          await writeNew(tmp, JSON.stringify(json, null, 2) + "\n", (await stat(configPath)).mode & 0o777);
+          await rename(tmp, configPath);
+        } catch (err) { await rm(tmp, { force: true }); throw err; }
+        live.name = input.name.trim(); live.profile = profile;
+        return { status: 200, body: snapshot(live) };
+      });
+    } catch (e) {
+      // The page gets no detail; the cause goes to the gateway log.
+      log(`saving the profile of ${live.id} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return error(500, "Cannot update workstation configuration.");
+    }
+  };
+}

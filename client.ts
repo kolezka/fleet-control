@@ -2,6 +2,8 @@
 // host's own Fleet Control service. Config: FLEET_CONTROL_CLIENT_CONFIG or the first CLI argument.
 import { GatewayConfigError, loadGatewayConfig, startGateway } from "./src/client-gateway.ts";
 import { createInstaller, localContext } from "./src/install/web.ts";
+import { workstationPlanUseCases } from "./src/application/workstation-plans.ts";
+import { workstationPlansFile } from "./src/data/workstation-plans.ts";
 import { gatewayEnrollment } from "./src/gateway-enroll.ts";
 import { gatewayHostManager } from "./src/gateway-hosts.ts";
 import { portFromEnv } from "./src/config.ts";
@@ -27,7 +29,8 @@ try {
   const config = await loadGatewayConfig(configPath, { allowNoHosts: enrolling });
   // Off unless asked for. Installed services do not set this.
   if (process.env.FLEET_CONTROL_INSTALLER === "1") installer = await createInstaller(localContext());
-  const enroll = enrolling ? gatewayEnrollment(configPath, config) : undefined;
+  // Saved plans for new machines live in their own file next to the config.
+  const enroll = enrolling ? gatewayEnrollment(configPath, config, workstationPlanUseCases(workstationPlansFile(`${configPath}.workstation-plans.sqlite`), () => config.hosts.map((h) => h.id))) : undefined;
   // The same switch lets the page rotate this gateway's token for a host and remove a host.
   const manage = enrolling ? gatewayHostManager(configPath, config) : undefined;
   const server = startGateway(config, { port, log: (l) => console.warn(l), installer: installer?.handle, enroll, manage });

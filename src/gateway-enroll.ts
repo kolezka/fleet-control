@@ -8,6 +8,7 @@ import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { newToken } from "./auth.ts";
 import { enrollUseCases, type EnrollDeps, type EnrollUseCases } from "./application/enrollment.ts";
+import type { WorkstationPlanUseCases } from "./application/workstation-plans.ts";
 import { EnrollError, HOST_ID } from "./domain/enrollment.ts";
 import { GatewayConfigError, parseGatewayConfig, type EnrollHandler, type GatewayConfig } from "./client-gateway.ts";
 import { withConfigLock } from "./gateway-config-lock.ts";
@@ -90,7 +91,37 @@ export function enrollDeps(configPath: string, config: GatewayConfig, opts: { ti
   };
 }
 
-export const gatewayEnrollment = (configPath: string, config: GatewayConfig, opts?: { timeoutMs?: number; ssh?: boolean }) => enrollHandler(enrollUseCases(enrollDeps(configPath, config, opts)));
+// An error's message followed by the messages of its causes, for the log.
+export function errorChain(err: unknown): string {
+  const parts: string[] = [];
+  for (let e: unknown = err; e !== undefined && e !== null && parts.length < 4; e = e instanceof Error ? e.cause : undefined) parts.push(e instanceof Error ? e.message : String(e));
+  return parts.join(": ");
+}
+
+// /plans keeps saved plans for new machines apart from enrollment: it makes no token and adds no host.
+export function gatewayEnrollment(configPath: string, config: GatewayConfig, plans: WorkstationPlanUseCases, opts: { timeoutMs?: number; ssh?: boolean; log?: (line: string) => void } = {}): EnrollHandler {
+  const log = opts.log ?? ((l: string) => console.error(l));
+  const enroll = enrollHandler(enrollUseCases(enrollDeps(configPath, config, opts)), log);
+  return async (method, path, body) => {
+    if (path !== "/plans") return enroll(method, path, body);
+    if (method !== "POST" && method !== "GET") return { status: 405, body: { error: { kind: "method_not_allowed", message: "method not allowed" } } };
+    let input: unknown;
+    if (method === "POST") {
+      try { input = JSON.parse(new TextDecoder().decode(body ?? new Uint8Array())); }
+      catch { return { status: 400, body: { error: { kind: "invalid", message: "body is not JSON" } } }; }
+    }
+    try {
+      if (method === "GET") return { status: 200, body: { plans: plans.list() } };
+      plans.save(input);
+      return { status: 201, body: { saved: true } };
+    } catch (err) {
+      if (err instanceof EnrollError) return { status: 400, body: { error: { kind: "invalid", message: err.message } } };
+      // The page gets no detail; the cause goes to the gateway log.
+      log(`${method === "GET" ? "reading" : "saving"} workstation plans failed: ${errorChain(err)}`);
+      return { status: 500, body: { error: { kind: "failed", message: "Cannot access workstation plans." } } };
+    }
+  };
+}
 
 // /api/enroll: GET lists hosts being added; POST starts one; POST /<id>/ssh|check|cancel acts on it.
 // The answer never holds a token, only the command with the hash.

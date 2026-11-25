@@ -351,7 +351,41 @@ const requestLabel: Record<string, string> = {
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const verb = (r: string) => (r === "approve" ? "Approve" : r === "decline" ? "Decline" : r[0]!.toUpperCase() + r.slice(1));
 
+// The review open in the centre: one project task, or (owner null) the requests of runs registered without one.
+let reviewing: { host: string; owner: { project: string; task: string } | null } | null = null;
+// "none": the run was registered without a project. "malformed": half an owner or a value that is not a name.
+// The host service stores both or neither, so a malformed owner is not treated as "none" and is in no review.
+function requestOwner(q: Req): { project: string; task: string } | "none" | "malformed" {
+  const { projectId: project, taskId: task } = q as { projectId?: unknown; taskId?: unknown };
+  if (project == null && task == null) return "none";
+  return typeof project === "string" && project && typeof task === "string" && task ? { project, task } : "malformed";
+}
+function inReview(h: HostState, q: Req): boolean {
+  if (reviewing?.host !== h.info.id) return false;
+  const want = reviewing.owner, owner = requestOwner(q);
+  if (!want) return owner === "none";
+  return typeof owner === "object" && owner.project === want.project && owner.task === want.task;
+}
 function renderRequests(h: HostState | undefined) {
+  if (reviewing && (!h || h.info.supervisor || h.info.id !== reviewing.host)) reviewing = null;
+  const review = $("projectReview");
+  review.hidden = !reviewing;
+  $("terminals").hidden = !!reviewing;
+  if (reviewing && h) {
+    const ready = h.coordRead.status === "ready";
+    const title = reviewing.owner ? `<h2>${esc(reviewing.owner.project)} / ${esc(reviewing.owner.task)}</h2><p>Project decisions</p>`
+      : `<h2>No project assigned</h2><p>Requests from runs registered without a project and task on ${esc(h.info.name)}.</p>`;
+    // A host can send anything as a revision, so it is escaped like every other host value.
+    const rows = (ready ? h.coord.requests.filter((q) => inReview(h, q)) : []).map((q) => {
+      const revision = esc(String(q.revision));
+      const answers = q.status !== "open" ? "" : q.allowedResponses.map((a) =>
+        `<button type="button" data-host="${esc(h.info.id)}" data-request="${esc(q.id)}" data-revision="${revision}" data-answer="${esc(a)}"${h.answering.includes(answerKey(q.id, q.revision)) ? " disabled" : ""}>${esc(verb(a))}</button>`).join("");
+      return `<section><h3>${esc(q.question)}</h3><p>${esc(q.phase)} · revision ${revision} · ${esc(requestLabel[q.status] ?? q.status)}</p><p>${esc(q.proposedAction)} ${esc(q.scope)}</p>` +
+        q.evidence.map((e) => `<p>${esc(e)}</p>`).join("") + (q.response ? `<p>Recorded: ${esc(q.response)}</p>` : "") + answers + `</section>`;
+    }).join("");
+    setHtml(review, `<button type="button" data-close-review="yes">Back to terminals</button>${title}` +
+      (rows || `<p>${ready ? "No matching decisions in the current request view." : "Request state unknown."}</p>`));
+  }
   const box = $("requests");
   if (!h) { setHtml(box, `<div class="sectionheading"><h3>Requests</h3></div><p class="phase-note">No host selected.</p>`); return; }
   if (h.info.supervisor) { setHtml(box, '<div class="sectionheading"><h3>Requests</h3></div><p class="phase-note">Approvals unavailable in cooperative mode.</p>'); return; }
@@ -369,15 +403,18 @@ function renderRequests(h: HostState | undefined) {
     return;
   }
   setHtml(box, shown.map((q: Req) => {
-    const busy = h.answering.includes(answerKey(q.id, q.revision));
-    const actionable = q.status === "open";
+    const owner = requestOwner(q);
+    // No answer control here: answers are given in the review in the centre, also for requests with no project.
+    const toReview = owner === "malformed" ? `<p>Project and task could not be read. This request cannot be answered.</p>`
+      : owner === "none" ? `<p>Project and task not assigned.</p><button type="button" data-host="${esc(h.info.id)}" data-unassigned="yes">Open unassigned decisions</button>`
+      : `<button type="button" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">Open ${esc(owner.project)} / ${esc(owner.task)}</button>`;
     const result = q.response ? `Answered "${esc(q.response)}" by ${esc(q.resolvedBy ?? "?")}.${q.status === "resolved" ? " The supervisor has not acknowledged it yet." : ""}` : "";
     return `<div class="sectionheading"><h3>Request</h3><span class="requeststatus">${esc(requestLabel[q.status] ?? q.status)}</span></div>` +
       `<h2 class="requesttitle">${esc(q.question)}</h2>` +
       (q.proposedAction ? `<p class="requestcopy">${esc(q.proposedAction)}</p>` : "") +
-      `<p class="requestref">${esc(q.id.slice(0, 12))} · ${esc(q.phase)} · revision ${q.revision}</p>` +
+      `<p class="requestref">${esc(q.id.slice(0, 12))} · ${esc(q.phase)} · revision ${esc(String(q.revision))}</p>` +
       (q.evidence.length || q.scope ? `<details class="requestevidence"><summary>View evidence and scope</summary><dl>${q.evidence.map((e) => `<div><dt>Evidence</dt><dd>${esc(e)}</dd></div>`).join("")}</dl>${q.scope ? `<p class="fineprint">${esc(q.scope)}</p>` : ""}</details>` : "") +
-      (actionable ? `<div class="requestactions">${q.allowedResponses.map((a) => `<button type="button" data-fk="a:${esc(q.id)}:${esc(a)}" data-host="${esc(h.info.id)}" data-request="${esc(q.id)}" data-answer="${esc(a)}" data-revision="${q.revision}"${busy ? " disabled" : ""}>${esc(verb(a))}</button>`).join("")}</div>` : "") +
+      toReview +
       `<p class="requestresult" aria-live="polite">${result}</p>`;
   }).join(""));
 }
@@ -512,7 +549,7 @@ type AgentView = { list: AgentList | null; status: "loading" | "ready" | "unknow
 const agentViews = new Map<string, AgentView>();
 function agentView(hostId: string): AgentView {
   let v = agentViews.get(hostId);
-  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", kind: "claude", cwd: "", model: "", prompt: "", confirm: "", orchestrator: false } }; agentViews.set(hostId, v); }
+  if (!v) { v = { list: null, status: "loading", error: "", busy: false, notice: "", form: { name: "", kind: fleet.hosts[hostId]?.info.defaultHarness === "deepseek-harness" ? "dsh" : "claude", cwd: "", model: "", prompt: "", confirm: "", orchestrator: false } }; agentViews.set(hostId, v); }
   return v;
 }
 
@@ -693,6 +730,7 @@ function renderAdmin(h: HostState | undefined) {
   $("newTokenName").textContent = v.tokenName;
   $("newTokenText").textContent = v.newToken;
   $("hostPart").hidden = !manage || mode !== "gateway";
+  ($("workstationEditor") as HTMLAnchorElement).href = `./workstation?host=${encodeURIComponent(h.info.id)}`;
   const hc = $("hostConfirm") as HTMLInputElement;
   if (hc.value !== v.hostConfirm) hc.value = v.hostConfirm;
   ($("hostRevoke") as HTMLInputElement).checked = v.hostRevoke;
@@ -1314,7 +1352,19 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (b.dataset.stop) { void stopAgent(b.dataset.host!, b.dataset.stop); return; }
-  if (b.dataset.answer) { void answer(b.dataset.host!, b.dataset.request!, b.dataset.answer, Number(b.dataset.revision)); return; }
+  if (b.dataset.closeReview) { reviewing = null; render(); return; }
+  if (b.dataset.project && b.dataset.task && b.dataset.host === fleet.selectedHost) {
+    reviewing = { host: b.dataset.host, owner: { project: b.dataset.project, task: b.dataset.task } }; render(); return;
+  }
+  if (b.dataset.unassigned && b.dataset.host === fleet.selectedHost) { reviewing = { host: b.dataset.host, owner: null }; render(); return; }
+  if (b.dataset.answer) {
+    // Sent only for a request the open review shows, as it was last read: same host, owner, revision, still open.
+    const h = selectedHostState(fleet);
+    const q = h?.coord.requests.find((q) => q.id === b.dataset.request);
+    if (h && q && h.coordRead.status === "ready" && b.dataset.host === h.info.id && inReview(h, q)
+      && q.revision === Number(b.dataset.revision) && q.status === "open" && q.allowedResponses.includes(b.dataset.answer)) void answer(h.info.id, q.id, b.dataset.answer, q.revision);
+    return;
+  }
   if (b.id === "inspectorToggle") { setInspector(!inspectorOpen); return; }
   if (b.dataset.host && b.dataset.session) {
     if (b.dataset.host !== fleet.selectedHost) for (const v of adminViews.values()) v.newToken = "";

@@ -36,6 +36,15 @@ test("host list: gateway shape, direct shape, and refusal of unsafe apiBase", ()
   expect(parseHostList({})).toBeNull();
 });
 
+test("host list: a harness preference is one of the two known harnesses or the list is refused", () => {
+  const host = { id: "a", name: "A", apiBase: "/api/hosts/a" };
+  for (const defaultHarness of ["deepseek-harness", "claude-code"] as const) expect(parseHostList({ hosts: [{ ...host, defaultHarness }] })?.hosts[0]?.defaultHarness).toBe(defaultHarness);
+  const plain = parseHostList({ hosts: [host] })?.hosts[0];
+  expect(plain?.id).toBe("a");
+  expect(plain && "defaultHarness" in plain).toBe(false);
+  for (const defaultHarness of ["codex", "", null, 1, { name: "claude-code" }]) expect(parseHostList({ hosts: [{ ...host, defaultHarness }] })).toBeNull();
+});
+
 test("equal session names on two hosts stay separate", () => {
   let f = ready(["a", "b"], { a: [sess("main"), sess("w1")], b: [sess("main", false)] });
   f = selectSession(f, "b", "main");

@@ -90,6 +90,20 @@ test("a worker cannot write the phase record over MCP", async () => {
   await client.close();
 });
 
+test("MCP registration carries explicit project and task through REST discovery", async () => {
+  const client = await connect();
+  try {
+    const run = { runId: "run-project", orchestrator: "supervisor", phase: "build", projectId: "Atlas", taskId: "A-17" };
+    const registered = body(await client.callTool({ name: "run_register", arguments: run }));
+    expect(registered.run).toMatchObject({ projectId: "Atlas", taskId: "A-17" });
+    const listed = await (await fetch(`${server.url}api/requests`)).json() as {runs: { id: string }[]};
+    expect(listed.runs.find(r => r.id === run.runId)).toMatchObject({ projectId: "Atlas", taskId: "A-17" });
+    const moved = await client.callTool({ name: "run_register", arguments: { ...run, projectId: "Beacon" } });
+    expect(moved.isError).toBe(true);
+    expect(errorText(moved)).toContain("ownership");
+  } finally { await client.close(); }
+});
+
 test("request tools are listed next to command tools", async () => {
   const client = await connect();
   const names = (await client.listTools()).tools.map((t) => t.name);

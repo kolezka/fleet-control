@@ -69,19 +69,29 @@ export class Requests {
       detail TEXT NOT NULL,
       at TEXT NOT NULL
     )`);
+    db.run(`CREATE TABLE IF NOT EXISTS run_project_ownership (
+      run_id TEXT PRIMARY KEY NOT NULL REFERENCES runs(id), project_id TEXT NOT NULL, task_id TEXT NOT NULL
+    )`);
     // The page polls the current requests (open ones and the newest); without these each poll scans every row.
     db.run("CREATE INDEX IF NOT EXISTS requests_created ON requests (created_at, id)");
     db.run("CREATE INDEX IF NOT EXISTS requests_status_created ON requests (status, created_at, id)");
   }
 
   // Registers a run once. The orchestrator named here is the only actor allowed to change its phase record.
-  registerRun(input: { runId: string; orchestrator: string; phase: string }): Run {
+  registerRun(input: { runId: string; orchestrator: string; phase: string; projectId?: string; taskId?: string }): Run {
     const runId = nonEmpty(input.runId, "runId");
     const orchestrator = nonEmpty(input.orchestrator, "orchestrator");
+    const { projectId, taskId } = input;
+    if (projectId !== undefined || taskId !== undefined) {
+      if (![projectId, taskId].every(v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v))) {
+        throw new RequestError('invalid', 'projectId and taskId must be supplied together as identifiers');
+      }
+    }
     return this.db.transaction(() => {
       const existing = this.findRun(runId);
       if (existing) {
         if (existing.orchestrator !== orchestrator) throw new RequestError("forbidden", `run ${runId} belongs to orchestrator ${existing.orchestrator}`);
+        if (projectId !== undefined && (existing.projectId !== projectId || existing.taskId !== taskId)) throw new RequestError('conflict', 'run project ownership does not match');
         return existing;
       }
       if (!orchestrator.isWellFormed()) throw new RequestError("invalid", "invalid orchestrator encoding");
@@ -90,6 +100,7 @@ export class Requests {
       const at = this.now().toISOString();
       this.db.query("INSERT INTO runs (id, orchestrator, phase, revision, phase_status, updated_at) VALUES (?, ?, ?, 1, 'planned', ?)")
         .run(runId, orchestrator, nonEmpty(phase, "phase"), at);
+      if (projectId !== undefined && taskId !== undefined) this.db.query('INSERT INTO run_project_ownership (run_id,project_id,task_id) VALUES (?,?,?)').run(runId,projectId,taskId);
       this.event(null, runId, "run_registered", orchestrator, `phase ${phase} revision 1`, at);
       return this.run(runId);
     })();
@@ -326,7 +337,7 @@ export class Requests {
 
 const invalid = (message: string) => new RequestError("invalid", message);
 
-const runSelect = "SELECT id, orchestrator, phase, revision, phase_status AS phaseStatus, updated_at AS updatedAt FROM runs";
-const reqSelect = `SELECT id, run_id AS runId, phase, revision, kind, question, proposed_action AS proposedAction, scope, evidence,
+const runSelect = "SELECT id, orchestrator, phase, revision, phase_status AS phaseStatus, updated_at AS updatedAt, project_id AS projectId, task_id AS taskId FROM runs LEFT JOIN run_project_ownership ON run_id = runs.id";
+const reqSelect = `SELECT id, run_id AS runId, project_id AS projectId, task_id AS taskId, phase, revision, kind, question, proposed_action AS proposedAction, scope, evidence,
   allowed_responses AS allowedResponses, blocking, origin, status, response, resolved_by AS resolvedBy,
-  resolution_note AS resolutionNote, resolved_at AS resolvedAt, created_at AS createdAt FROM requests`;
+  resolution_note AS resolutionNote, resolved_at AS resolvedAt, created_at AS createdAt FROM requests LEFT JOIN run_project_ownership USING (run_id)`;

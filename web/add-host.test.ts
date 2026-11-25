@@ -105,6 +105,55 @@ test("fresh mode shows its fields and a lost SSH answer is reported as unknown",
   expect(p.element("pending").innerHTML).toContain("No answer. Unknown whether the command ran; press Check.");
 });
 
+test("preparing a fresh workstation previews locally and enrolls only the reviewed inputs", async () => {
+  const p = await page(() => ({ status: 200, body: { pending: [] } }));
+  await p.fire("mode-fresh:click");
+  for (const [id, value] of Object.entries({ hostId: "build", hostName: "Builder", hostUrl: "https://build.example.test:4872", principal: "gateway", dir: "/srv/fleet", ref: "main", port: "4872", label: "builder-service", fleet: "workers", tlsCert: "/tls/cert", tlsKey: "/tls/key" })) await p.type(id, value);
+  await p.fire("hostForm:submit");
+  expect(p.posts()).toHaveLength(0);
+  expect(p.element("planSummary").textContent).toContain("builder-service");
+  expect(p.element("planSummary").textContent).toContain("https://build.example.test:4872");
+  await p.type("hostName", "Builder two");
+  expect(p.element("planPanel").hidden).toBe(true);
+  await p.fire("startEnrollment:click");
+  expect(p.posts()).toHaveLength(0);
+  await p.fire("hostForm:submit");
+  await p.fire("mode-connect:click");
+  await p.fire("mode-fresh:click");
+  await p.fire("startEnrollment:click");
+  expect(p.posts()).toHaveLength(0);
+  await p.fire("hostForm:submit");
+  await p.fire("startEnrollment:click");
+  expect(p.posts()).toHaveLength(1);
+  expect(p.posts()[0]?.body.name).toBe("Builder two");
+});
+
+test("saved plans reload separately from enrollment; malformed lists are not empty lists", async () => {
+  const plan = { id: "build", name: "Builder", mode: "fresh", url: "https://build.example.test:4872" };
+  for (const [body, expected] of [[{ plans: [plan] }, "Builder"], [{ plans: [] }, "No saved plans"], [{ plans: [null] }, "Cannot read saved plans"], [{}, "Cannot read saved plans"]] as const) {
+    const p = await page(path => ({ status: 200, body: path.endsWith("/plans") ? body : { pending: [] } }));
+    expect(p.element("savedPlans").textContent).toContain(expected);
+    expect(p.posts()).toHaveLength(0);
+  }
+});
+
+test("saving an installation plan posts only to the plan store", async () => {
+  let plans: unknown[] = [];
+  const p = await page((path, init) => {
+    if (!path.endsWith("/plans")) return { status: 200, body: { pending: [] } };
+    if (init?.method === "POST") { plans = [JSON.parse(init.body as string)]; return { status: 201, body: { saved: true } }; }
+    return { status: 200, body: { plans } };
+  });
+  await p.fire("mode-fresh:click");
+  for (const [id, value] of Object.entries({ hostId: "build", hostName: "Builder", hostUrl: "https://build.example.test:4872", principal: "gateway", dir: "/srv/new", ref: "main", port: "4872", label: "builder", fleet: "workers", tlsCert: "/tls/cert", tlsKey: "/tls/key" })) await p.type(id, value);
+  await p.fire("hostForm:submit");
+  expect(p.element("savePlan").disabled).toBe(false);
+  await p.fire("savePlan:click");
+  expect(p.posts().map(p => p.path)).toEqual(["./api/enroll/plans"]);
+  expect(p.element("savedPlans").textContent).toContain("Builder");
+  expect(p.element("pendingCount").textContent).toBe("None");
+});
+
 test("a gateway without enrollment says how to turn it on", async () => {
   const p = await page(() => ({ status: 404, body: { error: { kind: "not_found", message: "not found" } } }));
   expect(p.element("alert").hidden).toBe(false);

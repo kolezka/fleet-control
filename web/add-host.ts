@@ -13,6 +13,7 @@ const titles: Record<Mode, [string, string, string, string]> = {
 };
 
 let mode: Mode = "connect";
+let preview: string | null = null;
 let pending: Pending[] = [];
 const notes = new Map<string, string>();
 let busy = false;
@@ -44,11 +45,22 @@ function render() {
   $("freshFields").hidden = mode !== "fresh";
   const gate = formGate(form(), busy);
   $("begin").disabled = !gate.enabled;
-  $("formStatus").textContent = notice || gate.reason;
+  $("begin").textContent = mode === "fresh" ? "Preview installation plan" : "Make token and command";
+  $("planPanel").hidden = preview === null;
+  $("startEnrollment").disabled = busy || preview === null;
+  $("savePlan").disabled = busy || preview === null;
+  $("formStatus").textContent = notice || (mode === "fresh" && gate.enabled ? "Preview locally before starting enrollment." : gate.reason);
   $("pending").innerHTML = pending.length ? pending.map((p) => pendingHtml(p, notes.get(p.id) ?? "")).join("") : '<li class="phase-note">No host is being added.</li>';
   $("pendingCount").textContent = pending.length ? String(pending.length) : "None";
   $("alert").hidden = !alertText;
   $("alert").textContent = alertText;
+}
+
+async function loadPlans() {
+  const res = await call("/plans");
+  const rows = (res.body as { plans?: unknown } | null)?.plans;
+  const valid = res.status === 200 && Array.isArray(rows) && rows.every(p => p && p.mode === "fresh" && typeof p.name === "string" && typeof p.url === "string" && typeof p.id === "string");
+  $("savedPlans").textContent = valid ? rows.map(p => `${p.name} (${p.id}) · ${p.url}`).join("\n") || "No saved plans." : "Cannot read saved plans.";
 }
 
 async function load() {
@@ -56,6 +68,7 @@ async function load() {
   const list = res.status === 200 ? parsePendingList(res.body) : null;
   if (!list) { alertText = res.status === 404 ? "Adding hosts is not enabled in this gateway. Start it with FLEET_CONTROL_ENROLL=1." : "Cannot read the hosts being added. " + errorText(res.body, res.status); render(); return; }
   pending = list;
+  await loadPlans();
   alertText = "";
   render();
 }
@@ -111,9 +124,50 @@ const act = (id: string, action: string) => work("Working on " + id + ".", async
   }
 });
 
-for (const m of ["connect", "fresh"] as const) $("mode-" + m).addEventListener("click", () => { mode = m; notice = ""; render(); });
-for (const id of FIELDS) $(id).addEventListener("input", () => { notice = ""; render(); });
-$("hostForm").addEventListener("submit", (e) => { e.preventDefault(); void begin(); });
+function invalidatePreview() {
+  preview = null;
+  $("planSummary").textContent = "";
+  notice = "";
+  render();
+}
+for (const m of ["connect", "fresh"] as const) $("mode-" + m).addEventListener("click", () => { mode = m; invalidatePreview(); });
+for (const id of FIELDS) $(id).addEventListener("input", invalidatePreview);
+$("hostForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const fields = form();
+  if (!formGate(fields, busy).enabled) return;
+  if (mode === "connect") { void begin(); return; }
+  const plan = payload(fields);
+  preview = JSON.stringify(plan);
+  $("planSummary").textContent = [
+    `Workstation: ${plan.name} (${plan.id}) at ${plan.url}`,
+    `Checkout: ${plan.ref} into ${plan.dir}`,
+    `New service: ${plan.label}, port ${plan.port}, fleet ${plan.fleet}`,
+    `Certificate: ${plan.tlsCert}; key path: ${plan.tlsKey}`,
+    `Operator identity: ${plan.principal}`,
+    plan.ssh ? `Optional SSH target: ${plan.ssh}, port ${plan.sshPort ?? 22}` : "Manual execution on the workstation",
+  ].join("\n");
+  notice = "Preview ready. Enrollment has not started.";
+  render();
+});
+$("savePlan").addEventListener("click", () => {
+  const plan = payload(form());
+  if (busy || mode !== "fresh" || preview !== JSON.stringify(plan)) return;
+  void work("Saving installation plan.", async () => {
+    const res = await call("/plans", plan);
+    if (res.status !== 201 || (res.body as { saved?: unknown } | null)?.saved !== true) {
+      notice = res.status === null ? "No reply. Check saved plans before retrying." : "Plan save not confirmed: " + errorText(res.body, res.status);
+    } else {
+      notice = `Plan saved for ${plan.id}. Enrollment has not started.`;
+    }
+    await loadPlans();
+  });
+});
+$("startEnrollment").addEventListener("click", () => {
+  if (busy || mode !== "fresh" || preview === null || preview !== JSON.stringify(payload(form()))) return;
+  invalidatePreview();
+  void begin();
+});
 $("pending").addEventListener("click", (e) => {
   const b = (e.target as Element).closest?.("button[data-act]") as HTMLButtonElement | null;
   if (b?.dataset.id && b.dataset.act) void act(b.dataset.id, b.dataset.act);

@@ -3,11 +3,13 @@
 export type RequestKind = "approval" | "clarification" | "scope_change" | "blocker";
 export type RequestStatus = "open" | "resolved" | "acknowledged" | "stale" | "withdrawn";
 
-export type Run = { id: string; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
+export type Run = { id: string; projectId?: string | null; taskId?: string | null; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
 
 export type SupervisorRequest = {
   id: string;
   runId: string;
+  projectId?: string | null;
+  taskId?: string | null;
   phase: string;
   revision: number;
   kind: RequestKind;

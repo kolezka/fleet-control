@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Auth } from "./auth.ts";
 import { enrollUseCases } from "./application/enrollment.ts";
+import { workstationPlanUseCases } from "./application/workstation-plans.ts";
+import { workstationPlansFile } from "./data/workstation-plans.ts";
 import { loadGatewayConfig, startGateway, type GatewayConfig } from "./client-gateway.ts";
 import { reloadTokens } from "./config.ts";
 import { Store } from "./data/store.ts";
-import { enrollDeps, enrollHandler, gatewayHostAdder } from "./gateway-enroll.ts";
+import { enrollDeps, enrollHandler, gatewayEnrollment, gatewayHostAdder } from "./gateway-enroll.ts";
 import { serve } from "./server.ts";
 import { connect, parseArgs } from "../scripts/enroll.ts";
 
@@ -48,6 +50,62 @@ const post = (path: string, body: unknown, origin: string | null = gw.url.origin
   method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(body),
 });
 const request = { id: "new", name: "New host", url: URL_NEW, mode: "connect", principal: "macbook-gateway", dir: "/srv/fleet-control-service" };
+
+test("plans survive gateway reload without entering enrollment or registered inventory", async () => {
+  const plan = { ...request, id: "plan", mode: "fresh", ref: "main", port: 4871, label: "planned", fleet: "workers", tlsCert: "/tls/cert", tlsKey: "/tls/key" };
+  const before = readFileSync(configPath, "utf8");
+  // A new handler and a new store each time, as after a gateway restart.
+  const handler = () => planHandler(`${configPath}.workstation-plans.sqlite`);
+  expect((await handler()("POST", "/plans", new TextEncoder().encode(JSON.stringify(plan)))).status).toBe(201);
+  expect(await handler()("GET", "/plans", null)).toEqual({ status: 200, body: { plans: [plan] } });
+  expect(await handler()("GET", "", null)).toEqual({ status: 200, body: { pending: [] } });
+  expect(readdirSync(dir)).not.toContain("token-plan");
+  expect(readFileSync(configPath, "utf8")).toBe(before);
+});
+
+const planFor = (id: string) => ({ ...request, id, mode: "fresh", ref: "main", port: 4871, label: "planned", fleet: "workers", tlsCert: "/tls/cert", tlsKey: "/tls/key" });
+const planHandler = (file: string, log: (line: string) => void = () => {}) =>
+  gatewayEnrollment(configPath, config, workstationPlanUseCases(workstationPlansFile(file), () => config.hosts.map((h) => h.id)), { ssh: false, log });
+const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+
+test("a plan cannot take the id of a host this gateway already has", async () => {
+  const file = join(dir, "taken.sqlite");
+  expect(config.hosts.map((h) => h.id)).toContain("old");
+  expect(await planHandler(file)("POST", "/plans", bytes(planFor("old")))).toEqual({ status: 400, body: { error: { kind: "invalid", message: "host id old is already in use" } } });
+  expect(await planHandler(file)("GET", "/plans", null)).toEqual({ status: 200, body: { plans: [] } });
+  // Positive control: the same request with a free id is saved.
+  expect((await planHandler(file)("POST", "/plans", bytes(planFor("free")))).status).toBe(201);
+  expect(await planHandler(file)("GET", "/plans", null)).toEqual({ status: 200, body: { plans: [planFor("free")] } });
+});
+
+test("reading saved plans leaves no store file behind, and a broken store is logged with its cause", async () => {
+  const missing = join(dir, "never-saved.sqlite");
+  expect(await planHandler(missing)("GET", "/plans", null)).toEqual({ status: 200, body: { plans: [] } });
+  expect(readdirSync(dir)).not.toContain("never-saved.sqlite");
+  const broken = join(dir, "broken.sqlite");
+  writeFileSync(broken, "this is not a database, ".repeat(64));
+  const lines: string[] = [];
+  expect(await planHandler(broken, (l) => lines.push(l))("GET", "/plans", null)).toEqual({ status: 500, body: { error: { kind: "failed", message: "Cannot access workstation plans." } } });
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toMatch(/^reading workstation plans failed: .*not a database/);
+  // A refused request is the caller's mistake and is not logged as a failure.
+  lines.length = 0;
+  expect((await planHandler(join(dir, "quiet.sqlite"), (l) => lines.push(l))("POST", "/plans", bytes({ ...planFor("quiet"), extra: 1 }))).status).toBe(400);
+  expect(lines).toEqual([]);
+});
+
+test("a plan sent without this page's origin is refused and nothing is stored", async () => {
+  const file = join(dir, "origin.sqlite");
+  const g = startGateway(config, { port: 0, enroll: planHandler(file) });
+  try {
+    const send = (origin: string | null) => fetch(`${g.url}api/enroll/plans`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(planFor("origin")) });
+    for (const origin of [null, "http://evil.example"]) expect((await send(origin)).status).toBe(403);
+    expect(readdirSync(dir)).not.toContain("origin.sqlite");
+    // Positive control: the same request from the page's own origin is stored.
+    expect((await send(g.url.origin)).status).toBe(201);
+    expect(await (await fetch(`${g.url}api/enroll/plans`)).json()).toEqual({ plans: [planFor("origin")] });
+  } finally { g.stop(true); }
+});
 
 test("the add-host page and API exist only when enrollment is on", async () => {
   const off = startGateway(config, { port: 0 });
