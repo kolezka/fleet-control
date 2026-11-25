@@ -92,6 +92,8 @@ test("settings that cannot be read, or are malformed, leave the form locked inst
   const bad: ({ status: number; body: unknown } | null)[] = [
     null,
     { status: 404, body: { error: { message: "Unknown workstation." } } },
+    // An error status is not a saved state, even when its body looks like one.
+    { status: 500, body: saved },
     { status: 200, body: { name: "Build", origin: "https://build.example.test", profile: { group: "Lab" } } },
     { status: 200, body: { name: 7, origin: "https://build.example.test", profile: null } },
   ];
