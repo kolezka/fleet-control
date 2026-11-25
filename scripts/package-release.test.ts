@@ -36,8 +36,13 @@ test("the package holds the commit's code, the pinned agent-fleet, production no
   expect(manifest).toMatchObject({ name: "fleet-control", commit, tag: "v9", builtAt: "2026-11-23T12:00:00.000Z" });
   expect(manifest.agentFleet).toBe(git(join(checkout, "vendor/agent-fleet"), "rev-parse", "HEAD"));
   for (const f of ["index.ts", "scripts/updater.ts", "vendor/agent-fleet/scripts/fleet", "vendor/agent-fleet/scripts/watchdog.sh", "node_modules/hono/package.json", "RELEASE"]) expect(existsSync(join(root, f))).toBe(true);
-  // Not needed on a host: docs, design history, dev-only types.
-  for (const f of ["docs", ".design", "node_modules/@types/bun"]) expect(existsSync(join(root, f))).toBe(false);
+  // Not needed on a host: docs, design history, development scratch files, dev-only types.
+  for (const f of ["docs", ".design", ".agents"]) {
+    // The commit has it, so its absence below is the packaging and not an empty repository.
+    expect(git(checkout, "ls-tree", "--name-only", "HEAD", f)).toBe(f);
+    expect(existsSync(join(root, f))).toBe(false);
+  }
+  expect(existsSync(join(root, "node_modules/@types/bun"))).toBe(false);
 }, 120_000);
 
 test("a checkout with uncommitted changes, or a submodule off its pin, is not packaged", () => {
