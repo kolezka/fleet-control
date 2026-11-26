@@ -82,6 +82,9 @@ function css(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+// A workspace theme override must not change the palette of newly opened terminal panes.
+const terminalPalette = { background: css('--terminal'), foreground: css('--ink'), cursor: css('--muted') };
+
 // Replaces markup only when it changed, and puts keyboard focus back on the same control (data-fk).
 const lastHtml = new WeakMap<HTMLElement, string>();
 function setHtml(el: HTMLElement, html: string) {
@@ -104,8 +107,15 @@ function hostSubtitle(h: HostState): string {
   return v.lastKnownCount === null ? "State unknown" : `State unknown · last known ${plural(v.lastKnownCount)}`;
 }
 
+const collapsedGroups = new Set<string>();
 function renderNav() {
-  const groups = fleet.order.map((id) => {
+  const byGroup = new Map<string, string[]>();
+  for (const id of fleet.order) {
+    const group = fleet.hosts[id]!.info.group ?? "Ungrouped";
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group)!.push(id);
+  }
+  const renderHost = (id: string) => {
     const h = fleet.hosts[id]!;
     const here = id === fleet.selectedHost;
     const unknown = h.sessionsRead.status === "unknown";
@@ -117,6 +127,10 @@ function renderNav() {
       return `<button type="button" class="session" data-fk="s:${esc(id)}:${esc(s.name)}" data-host="${esc(id)}" data-session="${esc(s.name)}" aria-pressed="${here && h.selectedSession === s.name}"><span class="dot ${s.running && !unknown ? "good" : ""}"></span><span><strong>${esc(s.name)}</strong><small title="${esc(title)}">${esc(status)}</small></span></button>`;
     }).join("");
     return `<section class="hostgroup" aria-label="${esc(h.info.name)}"><button type="button" class="hostbutton" data-fk="h:${esc(id)}" data-host="${esc(id)}" aria-pressed="${here}">${HOST_ICON}<span class="hostidentity"><strong>${esc(h.info.name)}</strong><small>${esc(hostSubtitle(h))}</small></span></button><div class="host-sessions">${rows}</div></section>`;
+  };
+  const groups = Array.from(byGroup, ([group, ids]) => {
+    const expanded = !collapsedGroups.has(group), name = esc(group);
+    return `<section class="studio-host-group"><h3><button type="button" data-fk="group:${name}" data-toggle-group="${name}" aria-expanded="${expanded}"><span aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${name} (${ids.length})</button></h3>${expanded ? ids.map(renderHost).join("") : ""}</section>`;
   }).join("");
   // A single host service only links to other hosts' own services; it never reads their sessions.
   const peerLinks = peers.map((p) => `<section class="hostgroup peer" aria-label="${esc(p.name)}"><a class="hostbutton" href="${esc(p.url)}" target="_blank" rel="noopener">${HOST_ICON}<span class="hostidentity"><strong>${esc(p.name)}</strong><small>Own service · open</small></span></a></section>`).join("");
@@ -131,7 +145,8 @@ const SIZE_HINT = /\x1b\]777;fleet-size;(\d+);(\d+)\x07/;
 // The terminal is created at the agent window size announced by agent-fleet, so it never needs a
 // resize of the agent window. After an unexpected close the pane reconnects with backoff; a new
 // tmux attach redraws the whole screen, so the old terminal is replaced, not appended to.
-type Pane = { stop(): void };
+type Pane = { stop(): void; setFontSize(size: number): void };
+let terminalFont = 12, draftFont = 12;
 const RETRY_MS = [1000, 2000, 5000, 10000, 30000];
 
 
@@ -216,9 +231,9 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
         term?.dispose();
         el.replaceChildren();
         term = new Terminal({
-          cols: hint ? Number(hint[1]) : 80, rows: hint ? Number(hint[2]) : 24, disableStdin: !mayType(lease), cursorBlink: false, fontSize: 12,
+          cols: hint ? Number(hint[1]) : 80, rows: hint ? Number(hint[2]) : 24, disableStdin: !mayType(lease), cursorBlink: false, fontSize: terminalFont,
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-          theme: { background: css("--terminal"), foreground: css("--ink"), cursor: css("--muted") },
+          theme: { ...terminalPalette },
         });
         term.open(el);
         // Keys go out as binary frames: the gateway and the host treat a text frame from the page as a violation.
@@ -256,6 +271,7 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
   };
   connect();
   return {
+    setFontSize(size) { if (term) term.options.fontSize = size; },
     stop() {
       stopped = true;
       clearTimeout(timer);
@@ -352,16 +368,16 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-di
 const verb = (r: string) => (r === "approve" ? "Approve" : r === "decline" ? "Decline" : r[0]!.toUpperCase() + r.slice(1));
 
 // The review open in the centre: one project task, or (owner null) the requests of runs registered without one.
-let reviewing: { host: string; owner: { project: string; task: string } | null } | null = null;
+let reviewing: { host: string; requestId?: string; owner: { project: string; task: string } | null } | null = null;
 // "none": the run was registered without a project. "malformed": half an owner or a value that is not a name.
 // The host service stores both or neither, so a malformed owner is not treated as "none" and is in no review.
-function requestOwner(q: Req): { project: string; task: string } | "none" | "malformed" {
+function requestOwner(q: Pick<Req, 'projectId' | 'taskId'>): { project: string; task: string } | "none" | "malformed" {
   const { projectId: project, taskId: task } = q as { projectId?: unknown; taskId?: unknown };
   if (project == null && task == null) return "none";
   return typeof project === "string" && project && typeof task === "string" && task ? { project, task } : "malformed";
 }
 function inReview(h: HostState, q: Req): boolean {
-  if (reviewing?.host !== h.info.id) return false;
+  if (reviewing?.host !== h.info.id || (reviewing.requestId !== undefined && reviewing.requestId !== q.id)) return false;
   const want = reviewing.owner, owner = requestOwner(q);
   if (!want) return owner === "none";
   return typeof owner === "object" && owner.project === want.project && owner.task === want.task;
@@ -381,9 +397,9 @@ function renderRequests(h: HostState | undefined) {
       const answers = q.status !== "open" ? "" : q.allowedResponses.map((a) =>
         `<button type="button" data-host="${esc(h.info.id)}" data-request="${esc(q.id)}" data-revision="${revision}" data-answer="${esc(a)}"${h.answering.includes(answerKey(q.id, q.revision)) ? " disabled" : ""}>${esc(verb(a))}</button>`).join("");
       return `<section><h3>${esc(q.question)}</h3><p>${esc(q.phase)} · revision ${revision} · ${esc(requestLabel[q.status] ?? q.status)}</p><p>${esc(q.proposedAction)} ${esc(q.scope)}</p>` +
-        q.evidence.map((e) => `<p>${esc(e)}</p>`).join("") + (q.response ? `<p>Recorded: ${esc(q.response)}</p>` : "") + answers + `</section>`;
+        (q.evidence.length ? `<details${expandEvidence ? ' open' : ''}><summary>Evidence (${q.evidence.length})</summary>${q.evidence.map(e => `<p>${esc(e)}</p>`).join('')}</details>` : '') + (q.response ? `<p>Recorded: ${esc(q.response)}</p>` : "") + answers + `</section>`;
     }).join("");
-    setHtml(review, `<button type="button" data-close-review="yes">Back to terminals</button>${title}` +
+    setHtml(review, `<button type="button" data-close-review="yes">Back to ${studioTitles[studioView]}</button>${title}` +
       (rows || `<p>${ready ? "No matching decisions in the current request view." : "Request state unknown."}</p>`));
   }
   const box = $("requests");
@@ -1251,6 +1267,172 @@ async function readLog(hostId: string) {
   renderAdmin(selectedHostState(fleet));
 }
 
+let expandEvidence = false, draftEvidence = false;
+type WorkspaceTheme = 'system' | 'light' | 'dark';
+let workspaceTheme: WorkspaceTheme = 'system', draftTheme: WorkspaceTheme = 'system';
+const settingsTitles = { appearance: 'Appearance', terminal: 'Terminal', reviews: 'Reviews', navigation: 'Navigation', hosts: 'Hosts', about: 'About' };
+let settingsSection: keyof typeof settingsTitles = 'terminal';
+let groupLayout: 'expanded' | 'collapsed' = 'expanded';
+let draftGroups: 'expanded' | 'collapsed' = 'expanded';
+let paneLayout: 'grid' | 'stacked' = 'grid';
+let draftLayout = paneLayout as typeof paneLayout | 'stacked';
+const studioTitles = { settings: 'Settings', workspaces: "Workspaces", dashboard: "Dashboard", tasks: "Tasks", decisions: "Decisions", activity: "Activity", fleet: "Fleet", terminals: "Terminals", machine: "Workstation" };
+let studioView: keyof typeof studioTitles = "dashboard";
+let studioProject: string | null = null;
+const localProjects = new Set<string>();
+let visibleProjects: string[] = [];
+let editingProject = false;
+type SessionShortcut = { host: string; gen: number; name: string };
+const shortcutKey = (s: SessionShortcut) => JSON.stringify([s.host, s.gen, s.name]);
+const pinnedSessions = new Map<string, SessionShortcut>();
+let lastVisitedSession: SessionShortcut | null = null;
+let decisionQueue: "pending" | "recorded" | "other" = "pending";
+function renderStudio() {
+  $('terminals').dataset.layout = paneLayout;
+  const hosts = fleet.order.map(id => fleet.hosts[id]!);
+  const rows = hosts.flatMap(h => h.coordRead.status !== "ready" || h.info.supervisor ? [] : h.coord.requests.flatMap(q => {
+    const owner = requestOwner(q);
+    return typeof owner === "object" ? [{ h, q, owner }] : [];
+  }));
+  const runs = hosts.flatMap(h => h.coordRead.status !== 'ready' || h.info.supervisor ? [] : h.coord.runs.flatMap(run => {
+    const owner = run && requestOwner(run);
+    return owner && typeof owner === 'object' ? [{ h, owner }] : [];
+  }));
+  const projects = [...new Set([...localProjects, ...[...runs, ...rows].map(r => r.owner.project)])].sort();
+  visibleProjects = projects;
+  if (studioView !== 'workspaces') editingProject = false;
+  $('projectEditor').hidden = !editingProject;
+  const active = studioProject ?? projects[0];
+  setHtml($("studioProjects"), [...new Set([...projects, ...(active ? [active] : [])])].map(p => `<button type="button" data-workspace="${esc(p)}" aria-pressed="${p === active}">${esc(p)}</button>`).join(""));
+  const scoped = rows.filter(r => r.owner.project === active);
+  const decisionQueues = { pending: scoped.filter(r => r.q.status === "open"), recorded: scoped.filter(r => r.q.status === "resolved" || r.q.status === "acknowledged"), other: scoped.filter(r => !["open", "resolved", "acknowledged"].includes(r.q.status)) };
+  const queue = studioView === "dashboard" ? decisionQueues.pending : studioView === "decisions" ? decisionQueues[decisionQueue] : scoped;
+  const machine = selectedHostState(fleet);
+  const nav = $('workstationNav');
+  nav.hidden = !machine || !!reviewing || (studioView !== 'machine' && studioView !== 'terminals');
+  if (!nav.hidden && machine) {
+    const configuration = manage && mode === 'gateway' ? `<a href="./workstation?host=${encodeURIComponent(machine.info.id)}">Configuration</a>` : '';
+    setHtml(nav, `<strong>${esc(machine.info.name)}</strong><button type="button" data-view="machine" aria-current="${studioView === 'machine' ? 'page' : 'false'}">Overview</button><button type="button" data-view="terminals" aria-current="${studioView === 'terminals' ? 'page' : 'false'}">Terminals</button>${configuration}`);
+  }
+  const fleetQuery = studioView === 'fleet' ? ($('fleetQuery') as HTMLInputElement).value.trim().toLowerCase() : '';
+  const groupControl = $('fleetGroup') as HTMLSelectElement;
+  const groups = [...new Set(hosts.map(h => h.info.group ?? 'Ungrouped'))].sort();
+  const group = groups.includes(groupControl.value) ? groupControl.value : '';
+  setHtml(groupControl, '<option value="">All groups</option>' + groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join(''));
+  groupControl.value = group;
+  const readState = ($('fleetReadState') as HTMLSelectElement).value;
+  const inventory = hosts.filter(h => (!group || (h.info.group ?? 'Ungrouped') === group) && (!readState || h.sessionsRead.status === readState) && (!fleetQuery || [h.info.name, h.info.id, h.info.group ?? 'Ungrouped'].some(value => value.toLowerCase().includes(fleetQuery))));
+  const items = studioView === "fleet" || studioView === "machine" ? (studioView === "fleet" ? inventory : machine ? [machine] : []).map(h => `<button type="button" data-host="${esc(h.info.id)}"><strong>${esc(h.info.name)}</strong> <small>${esc(hostSubtitle(h))}</small></button>`).join("") : queue.map(({ h, q, owner }) => `<button type="button" data-open-task="1" data-review-request="${esc(String(q.id))}" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}"><span class="decision-copy"><small>${esc(owner.project)} / ${esc(owner.task)} / rev ${esc(String(q.revision))}</small><strong>${esc(String(q.question))}</strong><small>${esc(h.info.name)} · ${esc(requestLabel[q.status] ?? String(q.status))}</small></span><span>Review →</span></button>`).join("");
+  const partial = hosts.some(h => !h.info.supervisor && h.coordRead.status !== "ready");
+  const currentView = reviewing ? "decisions" : studioView === "machine" ? "fleet" : studioView;
+  for (const view of ["settings", "workspaces", "dashboard", "tasks", "decisions", "activity", "fleet", "terminals"]) {
+    $("studioNavigation").querySelector(`[data-view="${view}"]`)?.setAttribute("aria-current", view === currentView ? "page" : "false");
+  }
+  const terminal = studioView === "terminals" || !!reviewing;
+  $("fleetSearch").hidden = terminal || studioView !== 'fleet';
+  $("activitySearch").hidden = terminal || studioView !== 'activity';
+  $("studioContent").hidden = terminal;
+  $("studioConsole").hidden = !terminal;
+  const section = (label: string, title: string, body: string) => `<section class="studio-card"><small>${label}</small><h3>${title}</h3>${body}</section>`;
+  let body = `<div class="studio-list">${items || (studioView === 'fleet' && (fleetQuery || group || readState) && hosts.length ? '<p>No matching workstations.</p>' : '<p>No items in the current view.</p>')}</div>`;
+  if (studioView === 'workspaces') {
+    const directory = new Map<string, { tasks: Set<string>; pending: number }>();
+    for (const row of [...runs, ...rows]) {
+      const entry = directory.get(row.owner.project) ?? { tasks: new Set<string>(), pending: 0 };
+      entry.tasks.add(row.owner.task);
+      if ('q' in row && (row.q as Req).status === 'open') entry.pending++;
+      directory.set(row.owner.project, entry);
+    }
+    body = '<button type="button" data-new-project="1">New project</button>' + section('Projects', 'Project directory', projects.map(p => {
+      const entry = directory.get(p) ?? { tasks: new Set(), pending: 0 };
+      return `<button type="button" data-workspace="${esc(p)}"><strong>${esc(p)}</strong> · ${entry.tasks.size} ${entry.tasks.size === 1 ? 'task' : 'tasks'} · ${entry.pending} pending</button>`;
+    }).join('') || '<p>No projects in the available run and request data.</p>');
+  }
+  if (studioView === 'fleet' && inventory.length) {
+    const headings = ['Machine', 'Group', 'Session read', 'Last session read', 'Sessions', 'Open decisions'];
+    const records = inventory.map(h => {
+      const meta = h.sessionsRead;
+      const stamp = meta.at && Number.isFinite(Date.parse(meta.at)) ? esc(meta.at) : 'Unavailable';
+      const sessions = meta.status === 'ready' ? String(h.sessions.length) : meta.at ? `${h.sessions.length} last known` : 'Unknown';
+      const decisions = h.info.supervisor || h.coordRead.status !== 'ready' ? 'Unknown' : String(h.coord.requests.filter(q => q.status === 'open').length);
+      return `<tr><th scope="row"><button data-host="${esc(h.info.id)}">${esc(h.info.name)}</button></th><td>${esc(h.info.group ?? 'Ungrouped')}</td><td>${meta.status === 'ready' ? 'Ready' : meta.status === 'unknown' ? 'Read failed' : 'Loading'}</td><td>${stamp}</td><td>${sessions}</td><td>${decisions}</td></tr>`;
+    });
+    body = `<div class="studio-inventory"><table aria-label="Workstation inventory"><thead><tr>${headings.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${records.join('')}</tbody></table></div>`;
+  }
+  if (studioView === "decisions") {
+    const filters = ([['pending', 'Pending'], ['recorded', 'Recorded'], ['other', 'Other statuses']] as const).filter(([key]) => key !== 'other' || decisionQueues.other.length || key === decisionQueue);
+    body = `<nav aria-label="Decision queues">${filters.map(([key, title]) => `<button type="button" data-decision-queue="${key}" aria-pressed="${key === decisionQueue}">${title} (${decisionQueues[key].length})</button>`).join('')}</nav>${body}`;
+  }
+  const events = (studioView === "activity" || studioView === "dashboard" ? scoped : []).flatMap(({ h, owner, q }) => ([
+    { label: "Request opened", at: q.createdAt }, { label: "Decision recorded", at: q.resolvedAt },
+  ]).flatMap(({ label, at }) => typeof at === "string" && Number.isFinite(Date.parse(at)) ? [{ time: Date.parse(at), text: `${at} ${label} ${owner.task} ${h.info.name} ${q.question}`.toLowerCase(), html: `<li><time>${esc(at)}</time> <strong>${label}</strong> · ${esc(owner.task)} · ${esc(h.info.name)}<p>${esc(String(q.question))}</p></li>` }] : [])).sort((a, b) => b.time - a.time);
+  const query = studioView === 'activity' ? ($('activityQuery') as HTMLInputElement).value.trim().toLowerCase() : '';
+  const matches = query ? events.filter(e => e.text.includes(query)) : events;
+  const timeline = (limit: number) => matches.length ? `<ol>${matches.slice(0, limit).map(e => e.html).join("")}</ol>` : events.length ? '<p>No matching events.</p>' : '<p>No dated events in the current requests.</p>';
+  if (studioView === "activity") body = section("Current requests", "Decision timeline", timeline(events.length));
+  if (studioView === "machine" && machine) {
+    const h = machine, id = esc(h.info.id);
+    const prefs = h.info.defaultHarness === "deepseek-harness" ? "DeepSeek Harness" : h.info.defaultHarness === "claude-code" ? "Claude Code" : "No preference reported";
+    const settings = manage && mode === "gateway" ? `<a href="./workstation?host=${encodeURIComponent(h.info.id)}">Edit workstation settings</a>` : "";
+    const sessions = h.sessions.map(s => {
+      const pinned = pinnedSessions.has(shortcutKey({ host: h.info.id, gen: h.gen, name: s.name }));
+      return `<div><button type="button" data-host="${id}" data-session="${esc(s.name)}"><strong>${esc(s.name)}</strong> · ${esc(modelLabel(s.model))}</button><button type="button" data-host="${id}" data-pin-session="${esc(s.name)}" aria-label="Pin ${esc(s.name)}" aria-pressed="${pinned}"${h.sessionsRead.status !== 'ready' ? ' disabled' : ''}>${pinned ? 'Unpin' : 'Pin'}</button></div>`;
+    }).join("");
+    const taskLinks = new Map<string, string>();
+    for (const { h: source, owner } of rows) if (source === h) taskLinks.set(JSON.stringify([owner.project, owner.task]), `<button type="button" data-host="${id}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">${esc(owner.project)} / ${esc(owner.task)}</button>`);
+    const readAt = h.sessionsRead.at;
+    const lastRead = readAt && Number.isFinite(Date.parse(readAt)) ? esc(readAt) : 'Time unavailable';
+    body = section("Workstation", esc(h.info.name), `<p>${esc(hostSubtitle(h))}</p><p>Last successful session read: ${lastRead}</p><p>Harness preference for new sessions: ${prefs}</p>${settings}`)
+      + section("Terminal access", "Sessions on this workstation", (h.sessionsRead.status !== "ready" ? '<p>Session state unavailable or loading.</p>' : '') + (sessions || (h.sessionsRead.status === "ready" ? '<p>No sessions reported.</p>' : '')))
+      + section("Project ownership", "Review by project and task", [...taskLinks.values()].join("") || (h.coordRead.status === "ready" ? '<p>No assigned tasks in the current requests.</p>' : '<p>Project request data unavailable.</p>'));
+  }
+  if (studioView === "tasks") {
+    const groups = new Map<string, Map<string, typeof scoped>>();
+    for (const row of scoped) {
+      const byHost = groups.get(row.owner.task) ?? new Map<string, typeof scoped>();
+      const group = byHost.get(row.h.info.id) ?? [];
+      group.push(row); byHost.set(row.h.info.id, group); groups.set(row.owner.task, byHost);
+    }
+    for (const { h, owner } of runs) if (owner.project === active) {
+      const byHost = groups.get(owner.task) ?? new Map<string, typeof scoped>();
+      if (!byHost.has(h.info.id)) byHost.set(h.info.id, []);
+      groups.set(owner.task, byHost);
+    }
+    body = [...groups].map(([task, byHost]) => section("Project task", esc(task), [...byHost].map(([id, group]) => {
+      if (!group.length) return `<p>${esc(fleet.hosts[id]!.info.name)} · No current decisions</p>`;
+      const { h, owner } = group[0]!;
+      return `<button type="button" data-open-task="1" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(task)}">${esc(h.info.name)} · ${group.filter(r => r.q.status === "open").length} open of ${group.length} decisions</button>`;
+    }).join(""))).join("") || '<p>No tasks in the available request data.</p>';
+  }
+  if (studioView === "dashboard") {
+    const needsAttention = hosts.filter(h => h.sessionsRead.status !== "ready");
+    const shortcuts = new Map(pinnedSessions);
+    if (lastVisitedSession) shortcuts.set(shortcutKey(lastVisitedSession), lastVisitedSession);
+    const quick = Array.from(shortcuts, ([key, target]) => {
+      const source = fleet.hosts[target.host];
+      if (!source || source.gen !== target.gen || source.sessionsRead.status !== 'ready' || !source.sessions.some(s => s.name === target.name)) return '';
+      return `<button data-host="${esc(target.host)}" data-session="${esc(target.name)}"><small>${pinnedSessions.has(key) ? 'Pinned' : 'Last viewed'}</small> ${esc(source.info.name)} / ${esc(target.name)}</button>`;
+    }).join('') || '<button data-view="terminals">Open terminals →</button>';
+    const health = needsAttention.map(h => `<button data-host="${esc(h.info.id)}">${esc(h.info.name)} · ${esc(hostSubtitle(h))}</button>`).join("");
+    const receipts = scoped.filter(r => r.q.status === "resolved").map(({ q, owner }) => `<p class="studio-receipt"><strong>${esc(owner.task)} · ${esc(String(q.response ?? "Decision recorded"))}</strong><br>Awaiting host acknowledgement</p>`).join("");
+    const approval = section("Human approval", "Needs your decision", (items || '<p>No open decisions in the available project data.</p>') + receipts);
+    const resume = section("Quick access", "Return to work", quick);
+    const summary = queue.length ? `${queue.length} ${queue.length === 1 ? 'decision needs' : 'decisions need'} your attention` : 'No pending decisions in available project data';
+    body = `<p class="studio-summary">${summary}</p>${queue.length ? approval : resume}<div class="studio-dash">${section("Project history", "Recent activity", timeline(3) + '<button data-view="activity">View activity →</button>')}<div>${queue.length ? resume : approval}${section("Connectivity", "Fleet attention", health || (hosts.length ? '<p>No session read failures reported.</p>' : '<p>No workstations connected.</p>'))}</div></div>`;
+  }
+  if (studioView === 'settings') {
+    const tabs = `<nav class="studio-settings-tabs" aria-label="Settings sections">${Object.entries(settingsTitles).map(([key, label]) => `<button type="button" data-settings-section="${key}" aria-current="${settingsSection === key ? 'page' : 'false'}">${label}</button>`).join('')}</nav>`;
+    const connections = hosts.map(h => `<p><button type="button" data-host="${esc(h.info.id)}">${esc(h.info.name)}</button> ${mode === 'gateway' && manage ? `<a href="./workstation?host=${encodeURIComponent(h.info.id)}">Configure host</a>` : ''}</p>`).join('') || '<p>No workstations in the available host list.</p>';
+    const layoutClean = draftLayout === paneLayout && draftFont === terminalFont;
+    const layoutControls = `<p>Terminal font size</p>${[12, 13, 15, 17].map(size => `<button data-terminal-font="${size}" aria-pressed="${size === draftFont}">${size} px</button>`).join(' ')}<pre style="font-size:${draftFont}px">Preview: Awaiting operator decision</pre><p>Pane layout for this page. Changing it does not restart sessions.</p>${(['grid', 'stacked'] as const).map(v => `<button type="button" data-pane-layout="${v}" aria-pressed="${draftLayout === v}">${v === 'grid' ? 'Grid' : 'Stacked'}</button>`).join(' ')}<p><button data-apply-layout="1" ${layoutClean ? 'disabled' : ''}>Apply changes</button> <button data-discard-layout="1" ${layoutClean ? 'disabled' : ''}>Discard</button></p>`;
+    const groupControls = `<p>Arrange current host groups. Each group can still be opened separately.</p>${(['expanded', 'collapsed'] as const).map(v => `<button data-group-layout="${v}" aria-pressed="${draftGroups === v}">${v === 'expanded' ? 'Expanded' : 'Collapsed'}</button>`).join(' ')}<p><button data-apply-groups="1" ${draftGroups === groupLayout ? 'disabled' : ''}>Apply changes</button> <button data-discard-groups="1" ${draftGroups === groupLayout ? 'disabled' : ''}>Discard</button></p>`;
+    const reviewControls = `<p>Choose whether evidence opens with the request. This does not approve or execute anything.</p><button data-evidence-mode="collapsed" aria-pressed="${!draftEvidence}">Collapsed</button> <button data-evidence-mode="expanded" aria-pressed="${draftEvidence}">Expanded</button><p><button data-apply-evidence="1" ${draftEvidence === expandEvidence ? 'disabled' : ''}>Apply changes</button> <button data-discard-evidence="1" ${draftEvidence === expandEvidence ? 'disabled' : ''}>Discard</button></p>`;
+    const themeControls = `<p>Workspace colors for this page. The terminal palette stays unchanged.</p>${(['system', 'light', 'dark'] as const).map(v => `<button data-workspace-theme="${v}" aria-pressed="${draftTheme === v}">${{system:'System', light:'Light', dark:'Dark'}[v]}</button>`).join(' ')}<p><button data-apply-appearance="1" ${draftTheme === workspaceTheme ? 'disabled' : ''}>Apply changes</button> <button data-discard-appearance="1" ${draftTheme === workspaceTheme ? 'disabled' : ''}>Discard</button></p>`;
+    body = tabs + (settingsSection === 'appearance' ? section('Operator preferences', 'Workspace appearance', themeControls) : settingsSection === 'reviews' ? section('Review requests', 'Evidence on open', reviewControls) : settingsSection === 'navigation' ? section('Operator preferences', 'Host navigation', groupControls) : settingsSection === 'terminal' ? section('Operator preferences', 'Terminal layout', layoutControls) : settingsSection === 'hosts' ? section('Per host', 'Host connections', connections + (mode === 'gateway' && enroll ? '<a href="./add-host">Add host</a>' : '')) : section('About', 'Terminal Studio', '<p>Terminal renderer: ghostty-web. Sessions and decisions belong to their host services.</p><p>Local workspace shortcuts last until this page reloads.</p>'));
+  }
+  const addHost = studioView === 'fleet' && mode === 'gateway' && enroll ? '<a class="footlink" href="./add-host">Add host</a>' : '';
+  setHtml($("studioContent"), `<header><small>${studioView === "fleet" || studioView === "machine" ? "Infrastructure" : studioView === 'workspaces' ? 'Operator workspace' : esc(active ?? "Workspace")}</small><h2>${studioTitles[studioView]}</h2>${addHost}</header>${partial ? '<p>Some host data is unavailable or still loading.</p>' : ''}${body}`);
+}
 function render() {
   const h = selectedHostState(fleet);
   renderAgents(h);
@@ -1262,6 +1444,7 @@ function render() {
   renderWorkflow(h);
   renderExchange(h);
   renderComposer(h);
+  renderStudio();
 }
 
 // --- reading ---------------------------------------------------------------------------------------
@@ -1310,6 +1493,7 @@ async function readCooperativePage(hostId: string, kind: "commands" | "inspectio
 const refreshAll = (kind: ReadKind) => Promise.all(fleet.order.map((id) => refresh(id, kind)));
 
 let hostListBusy = false;
+let initialLocationRead = false;
 async function loadHostList() {
   if (hostListBusy) return;
   hostListBusy = true;
@@ -1326,6 +1510,13 @@ async function loadHostList() {
     hostListError = list.hosts.length ? "" : enroll ? "No hosts yet. Use Add a host at the bottom of the host list." : "The gateway lists no hosts.";
     peers = list.peers;
     apply(setHosts(fleet, list.hosts));
+    if (!initialLocationRead) {
+      initialLocationRead = true;
+      const params = new URL(location.href).searchParams, host = params.get('host'), view = params.get('view');
+      if (host && fleet.order.includes(host) && (view === 'machine' || view === 'terminals')) {
+        apply(selectHost(fleet, host)); studioView = view;
+      }
+    }
     render();
     // Hosts are read concurrently; a failing host does not delay the others.
     void refreshAll("sessions");
@@ -1345,6 +1536,67 @@ async function loadHostList() {
 document.addEventListener("click", (e) => {
   const b = (e.target as Element).closest("button");
   if (!b) return;
+  if (b.dataset.pinSession) {
+    const h = selectedHostState(fleet), name = b.dataset.pinSession;
+    if (studioView === 'machine' && h && h.info.id === b.dataset.host && h.sessionsRead.status === 'ready' && h.sessions.some(s => s.name === name)) {
+      const target = { host: h.info.id, gen: h.gen, name }, key = shortcutKey(target);
+      if (!pinnedSessions.delete(key)) pinnedSessions.set(key, target);
+      renderStudio();
+    }
+    return;
+  }
+  if (b.dataset.toggleGroup) {
+    const group = b.dataset.toggleGroup;
+    if (!collapsedGroups.delete(group)) collapsedGroups.add(group);
+    renderNav(); return;
+  }
+  if (studioView === 'settings' && settingsSection === 'terminal') {
+    if (b.dataset.paneLayout === 'grid' || b.dataset.paneLayout === 'stacked') { draftLayout = b.dataset.paneLayout; renderStudio(); return; }
+    if (['12', '13', '15', '17'].includes(b.dataset.terminalFont ?? '')) { draftFont = Number(b.dataset.terminalFont); renderStudio(); return; }
+    if (b.dataset.applyLayout) {
+      paneLayout = draftLayout;
+      if (terminalFont !== draftFont) { terminalFont = draftFont; for (const p of panes.values()) p.setFontSize(terminalFont); }
+      renderStudio(); return;
+    }
+    if (b.dataset.discardLayout) { draftFont = terminalFont; draftLayout = paneLayout; renderStudio(); return; }
+  }
+  if (studioView === 'settings' && settingsSection === 'appearance') {
+    const theme = b.dataset.workspaceTheme;
+    if (theme === 'system' || theme === 'light' || theme === 'dark') { draftTheme = theme; renderStudio(); return; }
+    if (b.dataset.discardAppearance) { draftTheme = workspaceTheme; renderStudio(); return; }
+    if (b.dataset.applyAppearance) {
+      workspaceTheme = draftTheme;
+      if (workspaceTheme === 'system') delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = workspaceTheme;
+      renderStudio(); return;
+    }
+  }
+  if (studioView === 'settings' && settingsSection === 'reviews') {
+    if (b.dataset.evidenceMode === 'collapsed' || b.dataset.evidenceMode === 'expanded') { draftEvidence = b.dataset.evidenceMode === 'expanded'; renderStudio(); return; }
+    if (b.dataset.applyEvidence) { expandEvidence = draftEvidence; renderStudio(); return; }
+    if (b.dataset.discardEvidence) { draftEvidence = expandEvidence; renderStudio(); return; }
+  }
+  if (studioView === 'settings' && settingsSection === 'navigation') {
+    if (b.dataset.groupLayout === 'expanded' || b.dataset.groupLayout === 'collapsed') { draftGroups = b.dataset.groupLayout; renderStudio(); return; }
+    if (b.dataset.discardGroups) { draftGroups = groupLayout; renderStudio(); return; }
+    if (b.dataset.applyGroups) {
+      groupLayout = draftGroups; collapsedGroups.clear();
+      if (groupLayout === 'collapsed') for (const id of fleet.order) collapsedGroups.add(fleet.hosts[id]!.info.group ?? 'Ungrouped');
+      renderNav(); renderStudio(); return;
+    }
+  }
+  if (studioView === 'settings' && b.dataset.settingsSection && Object.hasOwn(settingsTitles, b.dataset.settingsSection)) { settingsSection = b.dataset.settingsSection as keyof typeof settingsTitles; renderStudio(); return; }
+  if (b.dataset.newProject && studioView === 'workspaces') {
+    editingProject = true; ($('projectName') as HTMLInputElement).value = ''; $('projectError').textContent = ''; renderStudio(); $('projectName').focus(); return;
+  }
+  if (b.dataset.cancelProject) { editingProject = false; renderStudio(); return; }
+  if (b.dataset.view && Object.hasOwn(studioTitles, b.dataset.view)) { reviewing = null; studioView = b.dataset.view as keyof typeof studioTitles; render(); return; }
+  if (studioView === "decisions" && (b.dataset.decisionQueue === "pending" || b.dataset.decisionQueue === "recorded" || b.dataset.decisionQueue === "other")) { decisionQueue = b.dataset.decisionQueue; render(); return; }
+  if (b.dataset.workspace) { decisionQueue = "pending"; reviewing = null; studioProject = b.dataset.workspace; studioView = "dashboard"; render(); return; }
+  if (b.dataset.openTask && b.dataset.host !== fleet.selectedHost && b.dataset.host && fleet.hosts[b.dataset.host]) {
+    for (const v of adminViews.values()) v.newToken = "";
+    apply(selectHost(fleet, b.dataset.host));
+  }
   if (b.dataset.page) {
     const hostId = b.dataset.host!;
     if (b.dataset.page === "select") { apply(selectCommand(fleet, hostId, b.dataset.command!)); void readCooperativePage(hostId, "inspection"); }
@@ -1354,7 +1606,7 @@ document.addEventListener("click", (e) => {
   if (b.dataset.stop) { void stopAgent(b.dataset.host!, b.dataset.stop); return; }
   if (b.dataset.closeReview) { reviewing = null; render(); return; }
   if (b.dataset.project && b.dataset.task && b.dataset.host === fleet.selectedHost) {
-    reviewing = { host: b.dataset.host, owner: { project: b.dataset.project, task: b.dataset.task } }; render(); return;
+    reviewing = { host: b.dataset.host, requestId: b.dataset.reviewRequest, owner: { project: b.dataset.project, task: b.dataset.task } }; render(); return;
   }
   if (b.dataset.unassigned && b.dataset.host === fleet.selectedHost) { reviewing = { host: b.dataset.host, owner: null }; render(); return; }
   if (b.dataset.answer) {
@@ -1367,10 +1619,14 @@ document.addEventListener("click", (e) => {
   }
   if (b.id === "inspectorToggle") { setInspector(!inspectorOpen); return; }
   if (b.dataset.host && b.dataset.session) {
+    studioView = "terminals"; reviewing = null;
     if (b.dataset.host !== fleet.selectedHost) for (const v of adminViews.values()) v.newToken = "";
     apply(selectSession(fleet, b.dataset.host, b.dataset.session));
+    const visited = selectedHostState(fleet);
+    if (visited?.info.id === b.dataset.host && visited.selectedSession === b.dataset.session) lastVisitedSession = { host: visited.info.id, gen: visited.gen, name: visited.selectedSession };
     render();
   } else if (b.dataset.host) {
+    studioView = "machine"; reviewing = null;
     // A token shown after a rotate is for that moment only; picking a host clears every shown token.
     for (const v of adminViews.values()) v.newToken = "";
     apply(selectHost(fleet, b.dataset.host));
@@ -1549,6 +1805,18 @@ async function answer(hostId: string, requestId: string, response: string, expec
   void refresh(hostId, "coord");
 }
 
+$("fleetGroup").addEventListener("change", renderStudio);
+$("fleetReadState").addEventListener("change", renderStudio);
+$('projectEditor').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!editingProject || studioView !== 'workspaces') return;
+  const name = ($('projectName') as HTMLInputElement).value.trim();
+  if (!name || name.length > 48 || /[<>&\x00-\x1f]/.test(name)) { $('projectError').textContent = 'Choose a name of up to 48 characters without markup or control characters.'; return; }
+  if (['All projects', ...visibleProjects].some(p => p.toLowerCase() === name.toLowerCase())) { $('projectError').textContent = 'That project name already exists or is reserved.'; return; }
+  localProjects.add(name); studioProject = name; studioView = 'dashboard'; render();
+});
+$("fleetQuery").addEventListener("input", renderStudio);
+$("activityQuery").addEventListener("input", renderStudio);
 $("instruction").addEventListener("input", () => {
   const h = selectedHostState(fleet);
   if (h) apply(setDraft(fleet, h.info.id, ($("instruction") as HTMLTextAreaElement).value));

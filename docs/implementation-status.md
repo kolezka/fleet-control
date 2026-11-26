@@ -2,6 +2,14 @@
 
 Recorded 2026-11-09. This is a source-scoped status report for the local Fleet Control prototype, not an inventory of unrelated services on the machine.
 
+## Terminal Studio product workspace (2026-11-26, branch `terminal-studio-product`, not deployed)
+
+The gateway home page opens a project Dashboard. Workspaces, Tasks, Decisions and Activity use project and task identifiers reported by runs and requests; sharing a workstation does not assign a request to a project. The machine overview links to reviews without offering an approval button. Fleet and Terminals remain cross-project views. Existing host enrollment and configuration use their gateway capability checks.
+
+The [product Dashboard](design/terminal-studio-comparison/product-dashboard.png) and [approved v21 reference](design/terminal-studio-comparison/v21-dashboard.png) were captured at 1440 × 900. The product capture used a running loopback gateway with two independent local shell-only services. It is not a deployment or a check against a real fleet. The fixture's one approval is actual request data; the two approvals in the reference are sample content.
+
+New empty workspaces, pinned sessions and operator display preferences last until reload. The workspace list reflects available host reads, not a durable project catalog. Request activity is derived from the current request data, not a complete audit history. A missing session read is not proof a machine is offline.
+
 ## Workstation onboarding, configuration and project-owned decisions (2026-11-25, PR #222, on `main` as `19afaaf`, not released, not deployed)
 
 From Terminal Studio v21 (`.design/briefs/operator-workspace-nov24`). Nothing here ran against a real host, a real gateway or a real fleet.

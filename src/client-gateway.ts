@@ -660,7 +660,7 @@ export function startGateway(config: GatewayConfig, opts: GatewayOptions = {}) {
       if (url.pathname === "/api/hosts") {
         if (req.method !== "GET") return fail(405, "method_not_allowed", "method not allowed", {}, { allow: "GET" });
         return Response.json(
-          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.profile?.defaultHarness ? { defaultHarness: h.profile.defaultHarness } : {}), ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}), ...(opts.manage ? { manage: true } : {}) },
+          { hosts: config.hosts.map((h) => ({ id: h.id, name: h.name, apiBase: `/api/hosts/${h.id}`, ...(h.profile ? { group: h.profile.group } : {}), ...(h.profile?.defaultHarness ? { defaultHarness: h.profile.defaultHarness } : {}), ...(h.supervisor ? { supervisor: h.supervisor } : {}) })), ...(opts.installer ? { installer: true } : {}), ...(opts.enroll ? { enroll: true } : {}), ...(opts.manage ? { manage: true } : {}) },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
         );
       }

@@ -3,6 +3,8 @@ import { parseWorkstationProfile, type WorkstationProfile } from '../src/domain/
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const field = (id: string) => element<HTMLInputElement>(id);
 const host = new URLSearchParams(location.search).get('host') ?? '';
+element<HTMLAnchorElement>('overviewLink').href = './?view=machine&host=' + encodeURIComponent(host);
+element<HTMLAnchorElement>('terminalsLink').href = './?view=terminals&host=' + encodeURIComponent(host);
 const api = './api/manage/' + encodeURIComponent(host) + '/profile';
 type Snapshot = {name:string; origin:string; profile:WorkstationProfile|null};
 let snapshot: Snapshot | null = null;

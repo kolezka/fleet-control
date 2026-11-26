@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Fleet Control</title>
+<title>Terminal Studio | Fleet Control</title>
 <link rel="stylesheet" href="./deck.css">
 <link rel="stylesheet" href="./live.css">
+<link rel="stylesheet" href="./studio.css">
 </head>
 <body>
 <div class="shell" id="app">
   <header class="titlebar">
     <div class="identity">
-      <h1>Fleet Control</h1>
+      <h1><b class="studio-mark">FC</b> Terminal Studio</h1>
       <div class="hostcontext"><strong id="hostTitle">This host</strong><small id="hostSubtitle">Loading sessions</small></div>
     </div>
     <div class="tools">
@@ -19,10 +20,33 @@
     </div>
   </header>
   <div class="body">
-    <nav class="sidebar" id="sidebar" aria-label="Hosts and sessions"></nav>
+    <div class="studio-rail">
+      <nav aria-label="Workspaces" class="studio-navigation" id="studioNavigation">
+        <button type="button" data-view="workspaces">Workspaces</button>
+        <div id="studioProjects"></div>
+        <button type="button" data-view="dashboard" aria-current="page">Dashboard</button>
+        <button type="button" data-view="tasks">Tasks</button>
+        <button type="button" data-view="decisions">Decisions</button>
+        <button type="button" data-view="activity">Activity</button>
+        <strong>Infrastructure</strong>
+        <button type="button" data-view="fleet">Fleet</button>
+        <button type="button" data-view="terminals">Terminals</button>
+        <button type="button" data-view="settings">Settings</button>
+      </nav>
+      <nav class="sidebar" id="sidebar" aria-label="Hosts and sessions"></nav>
+    </div>
     <main class="main" id="main">
       <div class="alert" id="alert" hidden></div>
-      <div class="workarea">
+      <nav id="workstationNav" aria-label="Selected workstation" hidden></nav>
+      <form id="projectEditor" class="studio-card" hidden><h2>New project</h2><label>Project name <input id="projectName" required maxlength="48" autocomplete="off"></label><p>This workspace lasts until reload. No host or harness is required.</p><p id="projectError" role="alert"></p><button type="submit">Create project</button> <button type="button" data-cancel-project="1">Cancel</button></form>
+      <div id="fleetSearch" hidden>
+        <label>Search workstations <input type="search" id="fleetQuery" placeholder="Name, identifier or group" autocomplete="off" aria-controls="studioContent"></label>
+        <label>Group <select id="fleetGroup" aria-controls="studioContent"><option value="">All groups</option></select></label>
+        <label>Session read <select id="fleetReadState" aria-controls="studioContent"><option value="">All states</option><option value="ready">Ready</option><option value="unknown">Read failed</option><option value="loading">Loading</option></select></label>
+      </div>
+      <label id="activitySearch" hidden>Search activity <input type="search" id="activityQuery" placeholder="Event, task, host or question" autocomplete="off" aria-controls="studioContent"></label>
+      <section id="studioContent" aria-label="Workspace content"><h2>Dashboard</h2><p>Loading workspace data…</p></section>
+      <div class="workarea" id="studioConsole">
         <section class="projectreview" id="projectReview" aria-label="Project task decisions" hidden></section>
         <section class="terminals" id="terminals" aria-label="Session terminals"></section>
         <aside class="inspector coordination" id="phaseInspector" aria-label="Supervisor requests and workflow">

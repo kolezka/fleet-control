@@ -1,0 +1,31 @@
+.studio-mark { background:var(--ink); color:var(--surface); font:700 13px var(--mono); padding:5px; border-radius:4px; margin-right:6px }
+.studio-rail { background:var(--sidebar); border-right:1px solid var(--line); min-height:0; overflow:auto }
+.studio-navigation { padding:12px; display:grid; gap:3px }
+.studio-navigation strong, .studio-card > small, #studioContent header small { color:var(--muted); font:650 10px var(--mono); text-transform:uppercase; letter-spacing:.12em }
+.studio-navigation strong { padding:12px 8px 4px }
+.studio-navigation button, .studio-card button, .studio-list button { width:100%; text-align:left }
+.studio-navigation button[aria-pressed=true], .studio-navigation button[aria-current=page] { background:var(--selected); color:var(--accent); font-weight:650 }
+.studio-rail .sidebar { width:auto; border:0; overflow:visible }
+#studioContent { height:100%; overflow:auto; background:var(--bg); padding:32px clamp(16px,3vw,48px) }
+#studioContent header { margin-bottom:24px }
+#studioContent header h2 { font-size:29px; letter-spacing:-1px }
+.studio-dash { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:16px; align-items:start }
+.studio-card, .studio-list { background:var(--surface); border:1px solid var(--line); padding:20px; margin-bottom:16px }
+.studio-card [data-review-request] { display:flex; align-items:center; justify-content:space-between; gap:12px }
+.decision-copy { display:grid; gap:4px; min-width:0; overflow-wrap:anywhere }
+.decision-copy small { color:var(--muted) }
+.studio-card h3 { margin:3px 0 12px; font-size:18px; letter-spacing:-.4px }
+.studio-card button, .studio-list button { border-top:1px solid var(--line); border-radius:0; padding:12px 4px }
+.studio-inventory { overflow-x:auto; background:var(--surface); border:1px solid var(--line) }
+.studio-inventory table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums }
+.studio-inventory :is(th,td) { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line) }
+.studio-inventory thead { background:var(--sidebar); color:var(--muted) }
+#workstationNav:not([hidden]) { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 12px; border-bottom:1px solid var(--line) }
+#workstationNav [aria-current=page] { color:var(--accent); font-weight:650 }
+#terminals[data-layout=grid]:has(> .terminal:only-child) { grid-template-columns:minmax(0,1fr) }
+#terminals[data-layout=grid]:has(> .terminal:nth-child(2):last-child) { grid-template-columns:repeat(2,minmax(0,1fr)) }
+#terminals[data-layout=stacked] { grid-template-columns:minmax(0,1fr) }
+.studio-settings-tabs { display:flex; gap:6px; margin-bottom:12px }
+@media (max-width:850px) { .studio-settings-tabs { flex-direction:column; align-items:stretch } }
+#studioContent[hidden], #studioConsole[hidden] { display:none }
+@media (max-width:700px) { .studio-dash { grid-template-columns:1fr; gap:0 } #studioContent { padding:16px } .studio-rail { max-height:36dvh } }
