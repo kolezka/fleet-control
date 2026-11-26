@@ -248,6 +248,8 @@ function openPane(s: Session, el: HTMLElement, host: HostInfo): Pane {
           theme: { ...terminalPalette },
         });
         term.open(el);
+        // Clear the new local screen before replay: recycled cells can retain glyphs from a longer line.
+        term.write('\x1b[2J\x1b[H');
         // Keys go out as binary frames: the gateway and the host treat a text frame from the page as a violation.
         term.onData((d) => { if (mayType(lease) && sock === ws && sock.readyState === WebSocket.OPEN) sock.send(enc.encode(d)); });
         fresh = false;
