@@ -4,6 +4,8 @@
 // the code and installs a new service. The gateway adds the host only after the host answers
 // /api/whoami with the expected principal and the operator role.
 
+import { parseWorkstationProfile, type WorkstationProfile } from "./workstation-profile.ts";
+
 export type EnrollMode = "connect" | "fresh";
 export const ENROLL_MODES: readonly EnrollMode[] = ["connect", "fresh"];
 
@@ -22,6 +24,7 @@ export type EnrollRequest = {
   tlsKey?: string;
   ssh?: string; // optional user@host to run the command over SSH
   sshPort?: number;
+  profile?: WorkstationProfile; // gateway metadata only; never sent to the host
 };
 
 export class EnrollError extends Error {}
@@ -51,7 +54,7 @@ const path = (v: unknown, what: string) => {
 export function checkEnrollRequest(input: unknown): EnrollRequest {
   if (!input || typeof input !== "object" || Array.isArray(input)) fail("expected a JSON object");
   const r = input as Record<string, unknown>;
-  const keys = ["id", "name", "url", "mode", "principal", "dir", "ref", "port", "label", "fleet", "tlsCert", "tlsKey", "ssh", "sshPort"];
+  const keys = ["id", "name", "url", "mode", "principal", "dir", "ref", "port", "label", "fleet", "tlsCert", "tlsKey", "ssh", "sshPort", "profile"];
   for (const k of Object.keys(r)) if (!keys.includes(k)) fail(`unknown field ${k}`);
   const id = field(r.id, HOST_ID, "host id");
   if (typeof r.name !== "string" || !r.name.trim() || r.name.length > 80 || /[\x00-\x1f\x7f]/.test(r.name)) fail("name must be 1-80 printable characters");
@@ -78,6 +81,7 @@ export function checkEnrollRequest(input: unknown): EnrollRequest {
     if (!out.ssh) fail("SSH port needs an SSH target");
     out.sshPort = port(r.sshPort, "SSH port");
   }
+  if (r.profile !== undefined) out.profile = parseWorkstationProfile(r.profile) ?? fail("invalid workstation profile");
   return out;
 }
 

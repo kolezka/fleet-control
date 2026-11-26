@@ -160,11 +160,35 @@ test("a gateway without enrollment says how to turn it on", async () => {
   expect(p.element("alert").textContent).toContain("FLEET_CONTROL_ENROLL=1");
 });
 
+test('optional profile uses inventory suggestions or a new group on both paths', async () => {
+  const p = await page(path => ({status: 200, body: path === './api/hosts' ? { hosts: [{ id: 'old', name: 'Old', apiBase: '/api/hosts/old', group: 'Existing' }] } : path.endsWith('/plans') ? { plans: [] } : { pending: [] }}));
+  expect(p.element('groupOptions').innerHTML).toContain('Existing');
+  for (const [id, value] of Object.entries({ hostId: 'build', hostName: 'Builder', hostUrl: 'https://fixture.invalid:4872', principal: 'gateway', dir: '/srv/new', ref: 'main', port: '4872', label: 'builder', fleet: 'workers', tlsCert: '/cert', tlsKey: '/key', description: 'Release workers', defaultHarness: 'deepseek-harness' })) await p.type(id, value);
+  expect(p.element('begin').disabled).toBe(true);
+  await p.type('group', 'Existing');
+  await p.fire('hostForm:submit');
+  expect(p.posts()[0]?.body.profile).toEqual({ group: 'Existing', description: 'Release workers', defaultHarness: 'deepseek-harness' });
+  await p.fire('mode-fresh:click');
+  await p.fire('hostForm:submit');
+  await p.type('group', 'New group');
+  expect(p.element('planPanel').hidden).toBe(true);
+  await p.fire('hostForm:submit');
+  expect(p.element('planSummary').textContent).toContain('New group');
+  await p.fire('savePlan:click');
+  await p.fire('startEnrollment:click');
+  expect(p.posts().slice(1).map(c => [c.path, c.body.profile])).toEqual(['./api/enroll/plans','./api/enroll'].map(path => [path, { group: 'New group', description: 'Release workers', defaultHarness: 'deepseek-harness' }]));
+});
+
 test('onboarding offers the existing and plan-only paths inside the editor', async () => {
   const html = await Bun.file(new URL('./add-host.html', import.meta.url)).text();
   const form = html.split('id="hostForm"')[1]!.split('</form>')[0]!;
   expect(form).toContain('Register existing host');
   expect(form).toContain('Prepare new machine');
+  expect(form).toContain('id="group" list="groupOptions"');
+  expect(form).toContain('id="description"');
+  expect(form).toContain('<select id="defaultHarness">');
+  expect(form).toContain('Observed harness: Unknown');
+  expect(form).toContain('Connection and credentials');
   expect(html).toContain('href="./?view=fleet"');
   expect(html).toContain('href="./?view=terminals"');
 });
