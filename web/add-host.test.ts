@@ -159,3 +159,12 @@ test("a gateway without enrollment says how to turn it on", async () => {
   expect(p.element("alert").hidden).toBe(false);
   expect(p.element("alert").textContent).toContain("FLEET_CONTROL_ENROLL=1");
 });
+
+test('onboarding offers the existing and plan-only paths inside the editor', async () => {
+  const html = await Bun.file(new URL('./add-host.html', import.meta.url)).text();
+  const form = html.split('id="hostForm"')[1]!.split('</form>')[0]!;
+  expect(form).toContain('Register existing host');
+  expect(form).toContain('Prepare new machine');
+  expect(html).toContain('href="./?view=fleet"');
+  expect(html).toContain('href="./?view=terminals"');
+});

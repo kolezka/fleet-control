@@ -14,7 +14,7 @@ export type Session = { name: string; host: string | null; role: string | null; 
 export type Run = { id: string; projectId?: string | null; taskId?: string | null; orchestrator: string; phase: string; revision: number; phaseStatus: string; updatedAt: string };
 export type Req = {
   id: string; runId: string; projectId?: string | null; taskId?: string | null; phase: string; revision: number; kind: string; question: string; proposedAction: string; scope: string;
-  createdAt?: string; resolvedAt?: string | null;
+  origin?: string; createdAt?: string; resolvedAt?: string | null;
   evidence: string[]; allowedResponses: string[]; status: string; response: string | null; resolvedBy: string | null; resolutionNote: string | null;
 };
 export type Command = { hostId?: string; id: string; target: string; actor: string; text: string; status: string; response: string | null; updatedAt: string; createdAt: string };

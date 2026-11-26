@@ -51,8 +51,13 @@ try {
     }
     const commands = new Commands(store.db);
     const requests = new Requests(store.db);
-    requests.registerRun({ runId: "same-run", orchestrator: fleet.session, phase: "phase-1", projectId: id === "alpha" ? "Atlas" : "Beacon", taskId: "review-scope" });
-    requests.create({ runId: "same-run", origin: fleet.session, expectedRevision: 1, kind: "approval", question: `Approve test scope on ${id}?`, scope: "Shell-only fixture. No phase is executed by this demo." });
+    const compareDashboard = process.argv.includes('--v21-dashboard') && id === 'alpha';
+    const tasks = compareDashboard ? [['A-17', 'Authorize the read API phase?'], ['A-18', 'Authorize fixture review?']] as const : [['review-scope', `Approve test scope on ${id}?`]] as const;
+    for (const [index, [taskId, question]] of tasks.entries()) {
+      const runId = index === 0 ? 'same-run' : 'fixture-review';
+      requests.registerRun({ runId, orchestrator: fleet.session, phase: 'phase-1', projectId: id === 'alpha' ? 'Atlas' : 'Beacon', taskId });
+      requests.create({ runId, origin: fleet.session, expectedRevision: 1, kind: 'approval', question, scope: 'Shell-only fixture. No phase is executed by this demo.' });
+    }
     const token = newToken();
     const tokenFile = join(dir, `${id}.token`);
     await Bun.write(tokenFile, token, { mode: 0o600 });

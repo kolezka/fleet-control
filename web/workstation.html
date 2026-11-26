@@ -1,1 +1,24 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workstation configuration | Fleet Control</title><link rel="stylesheet" href="./deck.css"><link rel="stylesheet" href="./install.css"></head><body><main class="installpage" style="max-width:48rem;margin:2rem auto;padding:1rem"><nav aria-label="Selected workstation"><a id="overviewLink" href="./">Overview</a> · <a id="terminalsLink" href="./">Terminals</a> · <strong aria-current="page">Configuration</strong></nav><h1>Workstation configuration</h1><p id="identity"></p><form id="profileForm"><fieldset id="fields" disabled><legend>Identity and session preferences</legend><div class="field"><label for="name">Display name</label><input id="name" required maxlength="80"></div><div class="field"><label for="group">Group</label><input id="group" required maxlength="40"></div><div class="field"><label for="description">Description</label><input id="description" maxlength="160"></div><div class="field"><label for="harness">Configured harness preference</label><select id="harness"><option value="">Not configured</option><option value="deepseek-harness">DeepSeek Harness</option><option value="claude-code">Claude Code</option></select><small>This records a preference; it does not change any running session.</small></div><h2>Changes to review</h2><pre id="changes"></pre><button id="save" disabled>Save changes</button></fieldset></form><p role="status" id="notice"></p><button type="button" id="reload">Reload saved settings</button></main><script type="module" src="./workstation.ts"></script></body></html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Workstation configuration | Fleet Control</title><link rel="stylesheet" href="./machine-editor.css"></head>
+<body class="machine-editor">
+  <nav class="rail" aria-label="Workspace navigation">
+    <a class="brand" href="./"><b aria-hidden="true">F/</b> Fleet Control</a>
+    <small>Workspace</small><a href="./">Dashboard</a>
+    <small>Shared infrastructure</small><a href="./?view=fleet">Fleet</a><a href="./?view=terminals">Terminals</a>
+  </nav>
+  <header class="crumb">Workspace / Configuration</header>
+  <main><div class="editor-content"><header><small class="cap">Fleet / Workstation</small><h1 id="machineName">Workstation configuration</h1>
+    <nav class="tabs" aria-label="Selected workstation"><a id="overviewLink" href="./">Overview</a><a id="terminalsLink" href="./">Terminals</a><strong aria-current="page">Configuration</strong></nav></header>
+    <form class="editor-card" id="profileForm"><fieldset id="fields" disabled><legend class="cap">Workstation configuration</legend>
+      <h2>Identity</h2>
+      <div class="field"><label for="name">Display name</label><input id="name" required maxlength="80"></div>
+      <div class="field"><label for="group">Group</label><input id="group" required maxlength="40"></div>
+      <div class="field"><label for="description">Machine role or description</label><input id="description" maxlength="160"></div>
+      <h2>Connection</h2><p id="identity">Address and credentials are not editable here.</p>
+      <h2>Session defaults</h2><div class="field"><label for="harness">Configured harness preference</label><select id="harness"><option value="">Not configured</option><option value="deepseek-harness">DeepSeek Harness</option><option value="claude-code">Claude Code</option></select><small>This records a preference; it does not change any running session.</small></div>
+      <h2>Changes to review</h2><pre class="callout" id="changes" aria-live="polite">No settings loaded.</pre>
+      <button class="primary" type="submit" id="save" disabled>Save changes</button>
+    </fieldset></form>
+    <footer><button type="button" id="reload">Reload saved settings</button><span role="status" id="notice"></span></footer>
+  </div></main><script type="module" src="./workstation.ts"></script></body></html>

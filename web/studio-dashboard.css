@@ -1,0 +1,28 @@
+.studio-dashboard {
+  font: 14px/1.55 -apple-system, system-ui, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+.dashboard-box {
+  min-width: 0;
+  margin: 16px 0;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.dashboard-box h2 { margin: 4px 0 10px; font-size: 18px; font-weight: 700; letter-spacing: -.4px; }
+.dashboard-box h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.dashboard-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.dashboard-row > div { min-width: 0; }
+.dashboard-row small { color: var(--muted); font: 11px/1.55 ui-monospace, Menlo, monospace; }
+.dashboard-row time { font: inherit; font-variant-numeric: tabular-nums; }
+.dashboard-box button { max-width: 100%; padding: 7px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font: inherit; }
+.dashboard-box button:hover { background: var(--subtle); }
+.dashboard-row button, .dashboard-row time { flex: none; }
+.dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(215px, .95fr); gap: 20px; align-items: start; }
+.dashboard-links { display: flex; flex-wrap: wrap; gap: 4px; }
+.dashboard-box hr { margin: 7px 0; }
+@media (max-width: 850px) {
+  .dashboard-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .dashboard-row { flex-wrap: wrap; }
+}

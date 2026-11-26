@@ -7,8 +7,9 @@
 .studio-navigation button[aria-pressed=true], .studio-navigation button[aria-current=page] { background:var(--selected); color:var(--accent); font-weight:650 }
 .studio-rail .sidebar { width:auto; border:0; overflow:visible }
 #studioContent { height:100%; overflow:auto; background:var(--bg); padding:32px clamp(16px,3vw,48px) }
-#studioContent header { margin-bottom:24px }
-#studioContent header h2 { font-size:29px; letter-spacing:-1px }
+#studioContent .studio-pagehead { margin-bottom:16px }
+#studioContent .studio-pagehead > small { display:block; font:650 10px/1.55 ui-monospace, Menlo, monospace }
+.studio-pagehead h1 { margin:4px 0; font-size:29px; line-height:1.55; letter-spacing:-1px }
 .studio-dash { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:16px; align-items:start }
 .studio-card, .studio-list { background:var(--surface); border:1px solid var(--line); padding:20px; margin-bottom:16px }
 .studio-card [data-review-request] { display:flex; align-items:center; justify-content:space-between; gap:12px }
@@ -27,5 +28,16 @@
 #terminals[data-layout=stacked] { grid-template-columns:minmax(0,1fr) }
 .studio-settings-tabs { display:flex; gap:6px; margin-bottom:12px }
 @media (max-width:850px) { .studio-settings-tabs { flex-direction:column; align-items:stretch } }
+.workspace-directory-head,.workspace-entry { display:flex; align-items:center; justify-content:space-between; gap:12px }
+#studioContent .workspace-directory-head { margin-bottom:24px; font:14px/1.55 var(--sans) }
+#studioContent .workspace-directory-head small,.workspace-directory > small { display:block; font:650 10px/1.55 ui-monospace,Menlo,monospace }
+.workspace-directory-head h1 { font-size:32px }
+.workspace-directory-head p { color:var(--muted); margin:0 }
+.workspace-directory-head button,.workspace-entry button { font:inherit; border-radius:5px; padding:7px 12px; border:1px solid var(--line); flex:none }
+.workspace-directory-head button { background:var(--ink); color:var(--surface) }
+.workspace-directory { background:var(--surface); border:1px solid var(--line); padding:24px; font-size:14px; line-height:1.55 }
+.workspace-directory > small { color:var(--muted); font:650 10px/1.55 var(--mono); letter-spacing:.12em; text-transform:uppercase }
+.workspace-entry { border-top:1px solid var(--line); padding:12px 0 }
+.workspace-entry small { display:block; color:var(--muted); font:11px/1.55 ui-monospace,Menlo,monospace }
 #studioContent[hidden], #studioConsole[hidden] { display:none }
 @media (max-width:700px) { .studio-dash { grid-template-columns:1fr; gap:0 } #studioContent { padding:16px } .studio-rail { max-height:36dvh } }

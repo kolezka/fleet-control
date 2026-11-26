@@ -11,8 +11,12 @@ async function browser(hosts: unknown[] | { hosts: unknown[]; enroll: boolean },
   const elements = new Map<string, any>();
   const listeners = new Map<string, (event: any) => unknown>();
   const element = (id: string): any => {
-    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, focus() {}, setAttribute() {}, contains: () => false, querySelector: (sel: string) => element(id + (sel === ".typebtn" ? ":typebtn" : ":child")), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
-    return elements.get(id);
+    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, focus() {}, setAttribute() {}, contains: () => false, querySelector: (sel: string) => element(id + (sel === '.stage-heading' || sel === '.stage-requests' ? ':' + sel.slice(1) : sel === '.typebtn' ? ':typebtn' : ':child')), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
+    const node = elements.get(id);
+    if (id === 'projectReview' && !node.showModal) Object.assign(node, {
+      open: false, showModal() { node.open = true; }, close() { node.open = false; },
+    });
+    return node;
   };
   const document = { hidden: false, getElementById: element, documentElement: element("root"), activeElement: null, addEventListener: (kind: string, fn: any) => listeners.set(kind, fn) };
   const calls: { path: string; init?: RequestInit }[] = [];
@@ -47,45 +51,64 @@ async function browser(hosts: unknown[] | { hosts: unknown[]; enroll: boolean },
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
     await new Promise(resolve => setTimeout(resolve, 0));
   };
-  return { app, element, calls, click, listeners, document, sockets, terms };
+  const preference = (key: string, value: string) => listeners.get('studioContent:change')!({ target: { dataset: { pref: key }, value } });
+  return { app, element, calls, click, preference, listeners, document, sockets, terms };
 }
+
+test('settings opens on Appearance, preserves drafts across tabs and returns to the console', async () => {
+  const { b, posts } = await decisions(); await b.click({ view: 'settings' });
+  const html = () => b.element('studioContent').innerHTML;
+  expect(html()).toContain('Workspace appearance');
+  expect(html()).toContain('Manage your console, review workflow and host connections.');
+  b.preference('byline', 'hide');
+  expect(html()).toContain('Unapplied changes');
+  await b.click({ settingsSection: 'about' });
+  expect(html()).toContain('Diagnostics');
+  await b.click({ applyPrefs: '1' });
+  expect(b.document.documentElement.dataset.descriptions).toBe('hide');
+  expect(html()).toContain('Preferences applied');
+  expect(html()).toContain('data-view="terminals">Back to console');
+  await b.click({ view: 'terminals' }); expect(b.element('studioConsole').hidden).toBe(false);
+  expect(posts()).toEqual([]);
+});
 
 test('font preview does not resize the live read-only terminal until applied', async () => {
   const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.endsWith('/sessions') ? { sessions: [{ name: 'probe', registered: true, running: true, model: { state: 'not_applicable' } }] } : path.includes('/requests') ? { requests: [], runs: [] } : { commands: [] });
   const sock = b.sockets[0] as any; sock.onmessage({ data: new TextEncoder().encode('x'.repeat(70)).buffer });
-  const term = b.terms[0]!; await b.click({ view: 'settings' }); await b.click({ settingsSection: 'terminal' }); await b.click({ terminalFont: '17' });
-  expect(term.options).toMatchObject({ fontSize: 12, disableStdin: true });
-  await b.click({ applyLayout: '1' }); expect(term.options).toMatchObject({ fontSize: 17, disableStdin: true });
+  const term = b.terms[0]!; await b.click({ view: 'settings' }); await b.click({ settingsSection: 'terminal' }); b.preference('font', '17');
+  expect(term.options).toMatchObject({ fontSize: 13, disableStdin: true, theme: { background: '#181b1f', foreground: '#d9dde4', cursor: '#959da9' } });
+  await b.click({ applyPrefs: '1' }); expect(term.options).toMatchObject({ fontSize: 17, disableStdin: true });
   expect(b.sockets).toHaveLength(1); expect(sock.closed).toBe(false);
 });
 
 test('appearance applies a page theme only on confirmation and can return to system colors', async () => {
   const { b, posts } = await decisions(); await b.click({ view: 'settings' }); await b.click({ settingsSection: 'appearance' });
-  await b.click({ workspaceTheme: 'dark' }); expect(b.document.documentElement.dataset.theme).toBeUndefined();
-  await b.click({ applyAppearance: '1' }); expect(b.document.documentElement.dataset.theme).toBe('dark');
-  await b.click({ workspaceTheme: 'system' }); await b.click({ applyAppearance: '1' }); expect(b.document.documentElement.dataset.theme).toBeUndefined();
+  b.preference('theme', 'dark'); expect(b.document.documentElement.dataset.theme).toBe('light');
+  await b.click({ applyPrefs: '1' }); expect(b.document.documentElement.dataset.theme).toBe('dark');
+  b.preference('theme', 'system'); await b.click({ applyPrefs: '1' }); expect(b.document.documentElement.dataset.theme).toBeUndefined();
   expect(posts()).toEqual([]);
 });
 
-test('applying collapsed navigation hides hosts until the group is individually reopened', async () => {
+test('applying collapsed navigation hides session lists but leaves each workstation accessible', async () => {
   const { b } = await decisions(); await b.click({ view: 'settings' }); await b.click({ settingsSection: 'navigation' });
-  await b.click({ groupLayout: 'collapsed' }); expect(b.element('sidebar').innerHTML).toContain('Shared runner');
-  await b.click({ applyGroups: '1' }); expect(b.element('sidebar').innerHTML).not.toContain('Shared runner');
-  await b.click({ toggleGroup: 'Ungrouped' }); expect(b.element('sidebar').innerHTML).toContain('Shared runner');
+  b.preference('groups', 'collapsed'); expect(b.element('sidebar').innerHTML).toContain('Collapse Shared runner');
+  await b.click({ applyPrefs: '1' }); expect(b.element('sidebar').innerHTML).toContain('Expand Shared runner');
+  await b.click({ toggleHost: 'a' }); expect(b.element('sidebar').innerHTML).toContain('Collapse Shared runner');
 });
 
 test('terminal layout changes only after apply and discard preserves the applied layout', async () => {
   const { b } = await decisions(); await b.click({ view: 'settings' }); await b.click({ settingsSection: 'terminal' });
-  await b.click({ paneLayout: 'stacked' }); expect(b.element('terminals').dataset.layout).toBe('grid');
-  await b.click({ applyLayout: '1' }); expect(b.element('terminals').dataset.layout).toBe('stacked');
-  await b.click({ paneLayout: 'grid' }); await b.click({ discardLayout: '1' });
-  expect(b.element('studioContent').innerHTML).toContain('data-pane-layout="stacked" aria-pressed="true"');
+  b.preference('layout', 'stacked'); expect(b.element('terminals').dataset.layout).toBe('grid');
+  await b.click({ applyPrefs: '1' }); expect(b.element('terminals').dataset.layout).toBe('stacked');
+  b.preference('layout', 'grid'); await b.click({ discardPrefs: '1' });
+  expect(b.element('studioContent').innerHTML).toContain('<option value="stacked" selected>Stacked</option>');
+  expect(b.element('studioContent').innerHTML).toContain('Changes discarded');
   expect(b.element('terminals').dataset.layout).toBe('stacked');
 });
 
 test('settings shows discovered hosts without granting management controls', async () => {
   const { b } = await decisions(); await b.click({ view: 'settings' });
-  expect(b.element('studioContent').innerHTML).toContain('<h2>Settings</h2>');
+  expect(b.element('studioContent').innerHTML).toContain('<h1>Settings</h1>');
   await b.click({ settingsSection: 'hosts' });
   expect(b.element('studioContent').innerHTML).toContain('Shared runner');
   expect(b.element('studioContent').innerHTML).not.toContain('href="./workstation?');
@@ -99,25 +122,27 @@ test("a local workspace starts empty without registering a host or run", async (
   b.element('projectName').value = 'atlas'; b.listeners.get('projectEditor:submit')!({preventDefault(){}});
   expect(b.element('projectError').textContent).toContain('already exists');
   b.element('projectName').value = 'Orchid'; b.listeners.get('projectEditor:submit')!({preventDefault(){}});
-  expect(b.element('studioContent').innerHTML).toContain('<small>Orchid</small><h2>Dashboard</h2>');
-  await b.click({ view: 'workspaces' }); expect(b.element('studioContent').innerHTML).toContain('Orchid</strong> · 0 tasks · 0 pending');
+  expect(b.element('studioContent').innerHTML).toContain('<small>Project workspace / Orchid</small><h1>Dashboard</h1>');
+  await b.click({ view: 'workspaces' }); expect(b.element('studioContent').innerHTML).toContain('Orchid</strong><small>0 tasks · 0 pending decisions');
   expect(b.calls.some(c => c.init?.method === 'POST')).toBe(false);
 });
 
 test("project directory lists separate workspaces sharing a host and opens the selected dashboard", async () => {
   const { b } = await decisions(); await b.click({ view: 'workspaces' });
   const html = b.element('studioContent').innerHTML;
-  expect(html).toContain('<h2>Workspaces</h2>');
+  expect(html).toContain('Operator workspace / Projects');
+  expect(html).toContain('Open workspace →');
+  expect(html).toContain('<h1>Workspaces</h1>');
   expect(html).toContain('data-workspace="Atlas"'); expect(html).toContain('data-workspace="Beacon"');
   await b.click({ workspace: 'Beacon' });
-  expect(b.element('studioContent').innerHTML).toContain('<small>Beacon</small><h2>Dashboard</h2>');
+  expect(b.element('studioContent').innerHTML).toContain('<small>Project workspace / Beacon</small><h1>Dashboard</h1>');
 });
 
 test("returning from configuration opens the requested workstation without resetting later host choices", async () => {
   const hosts = ['a','b'].map(id => ({ id, name: id, apiBase: '/api/hosts/' + id }));
   const b = await browser(hosts, path => path.includes('/sessions') ? { sessions: [] } : path.includes('/requests') ? { runs: [], requests: [] } : { commands: [] }, [], null, 'http://127.0.0.1:4870/?view=machine&host=b');
   expect(b.app.getFleet().selectedHost).toBe('b');
-  expect(b.element('studioContent').innerHTML).toContain('<h2>Workstation</h2>');
+  expect(b.element('workstationNav').innerHTML).toContain('<h1>b</h1>');
   await b.click({ host: 'a' }); await b.app.loadHostList();
   expect(b.app.getFleet().selectedHost).toBe('a');
 });
@@ -138,7 +163,7 @@ test("Fleet opens onboarding only when the gateway advertises enrollment", async
   for (const enroll of [true, false]) {
     const b = await browser({ hosts: [], enroll }, () => ({}));
     await b.click({ view: 'fleet' });
-    expect(b.element('studioContent').innerHTML.includes('href="./add-host"')).toBe(enroll);
+    expect(b.element('fleetHeading').innerHTML.includes('href="./add-host"')).toBe(enroll);
     expect(b.calls.some(c => c.init?.method === 'POST')).toBe(false);
   }
 });
@@ -160,8 +185,35 @@ test("fleet inventory distinguishes a failed read from a known empty workstation
   await b.click({ view: 'fleet' });
   const html = b.element('studioContent').innerHTML;
   expect(html).toContain('<th scope="col">Last session read</th>');
-  expect(html).toContain('<td>Ready</td><td>2026-01-02T06:00:00Z</td><td>0</td>');
+  expect(html).toMatch(/<td>Ready<\/td><td><time datetime="2026-01-02T06:00:00Z"[^>]*>[^<]+<\/time><\/td><td>0<\/td>/);
   expect(html).toContain('<td>Read failed</td><td>Unavailable</td><td>Unknown</td>');
+});
+
+test('Fleet console opens the chosen workstation and machine work includes reported runs before decisions', async () => {
+  const hosts = ['a', 'b'].map(id => ({ id, name: `Host ${id}`, apiBase: `/api/hosts/${id}` }));
+  const run = { id: 'r', projectId: 'Atlas', taskId: 'compile', revision: 1, orchestrator: 'worker', phase: 'build', phaseStatus: 'active', updatedAt: '2026-01-02T06:00:00Z' };
+  const b = await browser(hosts, path => path.includes('/sessions') ? { sessions: [] } : path.includes('/requests') ? { runs: path.includes('/b/') ? [run] : [], requests: [] } : { commands: [] });
+  await b.click({ view: 'fleet' });
+  expect(b.element('studioContent').innerHTML).toContain('data-console-host="b"');
+  expect(b.element('studioContent').innerHTML).toContain('data-fk="decisions:b" data-decisions-host="b"');
+  await b.click({ decisionsHost: 'b' });
+  expect(b.element('studioContent').innerHTML).toContain('<h1>Decisions</h1>');
+  expect(b.element('studioContent').innerHTML).toContain('Workstation: Host b');
+  await b.click({ view: 'fleet' });
+  await b.click({ host: 'b', consoleHost: 'b' });
+  expect(b.app.getFleet().selectedHost).toBe('b');
+  expect(b.element('studioConsole').hidden).toBe(false);
+  await b.click({ view: 'machine' });
+  const body = b.element('studioContent').innerHTML;
+  expect(body).toContain('Work on this machine');
+  expect(body).toContain('data-project="Atlas" data-task="compile"');
+  expect(body).not.toContain('Focus terminal');
+  expect(body).not.toContain('data-answer=');
+  await b.click({ host: 'b', project: 'Atlas', task: 'compile', machineTask: '1' });
+  expect(b.element('studioContent').innerHTML).toContain('<h1>Tasks</h1>');
+  expect(b.element('studioContent').innerHTML).toContain('compile');
+  expect(b.element('projectReview').hidden).toBe(true);
+  expect(b.calls.some(c => c.init?.method === 'POST')).toBe(false);
 });
 
 test("workstation overview reports the selected host's last successful session read", async () => {
@@ -185,10 +237,21 @@ test("fleet inventory search filters workstations without filtering the host tre
   expect(b.element('studioContent').innerHTML).toContain('No matching workstations');
 });
 
+test('All projects keeps run-only tasks and same-named tasks on one machine distinct', async () => {
+  const runs = ['Atlas', 'Beacon'].map(projectId => ({ id: projectId, projectId, taskId: 'prepare', orchestrator: 'worker', phase: 'build', phaseStatus: 'active', revision: 2, updatedAt: '2026-01-01T10:00:00Z' }));
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { requests: [], runs } : path.includes('/sessions') ? { sessions: [] } : { commands: [] });
+  b.element('studioProjects').value = ''; b.listeners.get('studioProjects:change')!({});
+  await b.click({ view: 'tasks' });
+  const html = b.element('studioContent').innerHTML;
+  for (const { projectId } of runs) expect(html).toContain(`${projectId} / prepare / rev 2`);
+  expect(html.match(/<h3>prepare<\/h3>/g)).toHaveLength(2);
+  expect(html).not.toContain('data-answer=');
+});
+
 test("a registered project task is visible before its first decision", async () => {
   const run = { id: 'build-1', projectId: 'Orchid', taskId: 'prepare', orchestrator: 'worker', phase: 'build', phaseStatus: 'active', revision: 1, updatedAt: '2026-01-01T10:00:00Z' };
   const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { requests: [], runs: [run] } : path.includes('/sessions') ? { sessions: [] } : { commands: [] });
-  expect(b.element('studioProjects').innerHTML).toContain('data-workspace="Orchid"');
+  expect(b.element('studioProjects').innerHTML).toContain('<option value="Orchid">Orchid</option>');
   await b.click({ view: 'tasks' });
   expect(b.element('studioContent').innerHTML).toContain('prepare');
   expect(b.element('studioContent').innerHTML).toContain('No current decisions');
@@ -206,7 +269,7 @@ test("activity search filters dated events without narrowing dashboard history",
   input.value = "no-match"; b.listeners.get("activityQuery:input")!({});
   expect(b.element("studioContent").innerHTML).toContain("No matching events");
   await b.click({ view: "dashboard" });
-  expect(b.element("studioContent").innerHTML).toContain("Request opened");
+  expect(b.element("studioContent").innerHTML).toContain("Requested approval");
 });
 
 test("pinning a workstation session adds a dashboard shortcut without launching it", async () => {
@@ -513,16 +576,66 @@ test('dashboard identifies the project, task and revision before opening review'
   const { b } = await decisions();
   const html = b.element('studioContent').innerHTML;
   expect(html).toContain('Atlas / A1 / rev 3');
-  expect(html).toContain('Review →');
+  expect(html).toContain('<h3>Atlas question</h3><small>Shared runner · Waiting for approval</small>');
+  expect(html).toContain('>Review →</button>');
+  expect(html).toContain('>Atlas / A1 ↗</button>');
+  expect(html).toContain('<h3>Requested approval</h3>');
+  expect(html).toMatch(/<time datetime="2026-01-02T10:00:00Z"[^>]*>\d{2}:\d{2}<\/time>/);
+  expect(html).toContain('<h3>Shared fleet</h3>');
+  expect(html).not.toContain('data-answer=');
   expect(html.indexOf('Needs your decision')).toBeLessThan(html.indexOf('Recent activity'));
   expect(html.indexOf('Recent activity')).toBeLessThan(html.indexOf('Return to work'));
+});
+
+test('dashboard return links survive resolution and require matching session evidence to open a terminal', async () => {
+  const run = { id: 'r', projectId: 'Atlas', taskId: 'A1', orchestrator: 'supervisor', phase: 'build', revision: 3, phaseStatus: 'done', updatedAt: '2026-01-03T10:00:00Z' };
+  const request = { id: 'closed', runId: 'r', projectId: 'Atlas', taskId: 'A1', kind: 'approval', question: 'Proceed?', phase: 'build', proposedAction: '', scope: '', evidence: [], allowedResponses: ['approve'], revision: 3, status: 'resolved', response: 'approve', resolvedAt: '2026-01-03T10:00:00Z' };
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { runs: [run], requests: [request, { ...request, id: 'other', taskId: 'A2' }] } : path.endsWith('/sessions') ? { sessions: [{ name: 'supervisor', registered: true, running: true, model: { state: 'not_applicable' } }] } : { commands: [] });
+  const html = b.element('studioContent').innerHTML;
+  expect(html).toMatch(/<button[^>]*data-host="a" data-session="supervisor"[^>]*>Atlas \/ A1 ↗<\/button>/);
+  expect(html).toMatch(/<button[^>]*data-open-task="1"[^>]*data-task="A2"[^>]*>Atlas \/ A2 ↗<\/button>/);
+  expect(html).toContain('<h3>Approved · Awaiting host acknowledgement</h3>');
+  expect(html).not.toContain('data-answer=');
+});
+
+test('review names the scope and binds the approval label to the shown revision', async () => {
+  const { b, posts } = await decisions();
+  await b.click({ ...atlas, openTask: '1', reviewRequest: 'a1' });
+  const html = b.element('projectReview').innerHTML;
+  for (const label of ['Review request', 'Atlas / A1 / rev 3', 'Approval scope', 'Approve revision 3', 'Verification log', 'Shared runner']) expect(html).toContain(label);
+  expect(html).not.toContain('Atlas closed');
+  expect(b.element('projectReview').open).toBe(true);
+  b.element('projectReview').oncancel({ preventDefault() {} });
+  expect(b.element('projectReview').open).toBe(false);
+  expect(posts()).toEqual([]);
+});
+
+test('terminal focus switches the visible pane without replacing either viewer', async () => {
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.endsWith('/sessions') ? { sessions: ['first', 'second'].map(name => ({ name, registered: true, running: true, model: { state: 'not_applicable' } })) } : path.includes('/requests') ? { runs: [], requests: [] } : { commands: [] });
+  await b.click({ host: 'a', session: 'second' });
+  expect(b.element('terminals:stage-heading').innerHTML).toContain('All terminals');
+  expect(b.element('terminals').dataset.focused).toBe('true');
+  await b.click({ view: 'terminals' });
+  expect(b.element('terminals').dataset.focused).toBe('false');
+  expect(b.sockets.map(s => s.closed)).toEqual([false, false]);
+  expect(b.calls.some(c => c.init?.method === 'POST')).toBe(false);
+});
+
+test('session request links use the reported origin even without a current run', async () => {
+  const base = { runId: 'prior-run', origin: 'second', projectId: 'Atlas', taskId: 'A-17', kind: 'approval', phase: 'build', revision: 1, status: 'open', response: null, question: 'Proceed?', scope: '', proposedAction: '', evidence: [], allowedResponses: ['approve'] };
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.endsWith('/sessions') ? { sessions: ['first', 'second'].map(name => ({ name, registered: true, running: true, model: { state: 'not_applicable' } })) } : path.includes('/requests') ? { runs: [], requests: [{ ...base, id: 'wanted' }, { ...base, origin: 'first', id: 'other' }] } : { commands: [] });
+  await b.click({ host: 'a', session: 'second' });
+  const links = b.element('terminals:stage-requests').innerHTML;
+  expect(links).toContain('data-review-request="wanted"'); expect(links).not.toContain('data-review-request="other"');
+  await b.click({ host: 'a', project: 'Atlas', task: 'A-17', reviewRequest: 'wanted' });
+  expect(b.element('projectReview').innerHTML).toContain('wanted · Runner / second');
 });
 
 test('review evidence disclosure follows the applied preference without answering', async () => {
   const { b, posts } = await decisions(); await b.click(atlas);
   expect(b.element('projectReview').innerHTML).toContain('<details><summary>Evidence (1)</summary><p>Verification log</p></details>');
   await b.click({ view: 'settings' }); await b.click({ settingsSection: 'reviews' });
-  await b.click({ evidenceMode: 'expanded' }); await b.click({ applyEvidence: '1' }); await b.click(atlas);
+  b.preference('evidence', 'expanded'); await b.click({ applyPrefs: '1' }); await b.click(atlas);
   expect(b.element('projectReview').innerHTML).toContain('<details open><summary>Evidence (1)</summary>');
   expect(posts()).toEqual([]);
 });
@@ -606,8 +719,15 @@ test("Studio groups task requests and shows dated project activity", async () =>
 
 test("Studio switches project scope without mixing decisions on a shared machine", async () => {
   const { b, posts } = await decisions();
-  expect(b.element("studioProjects").innerHTML).toContain('data-workspace="Beacon"');
-  await b.click({ workspace: "Beacon" });
+  const picker = b.element('studioProjects');
+  expect(picker.innerHTML).toContain('<option value="Beacon">Beacon</option>');
+  picker.value = '';
+  b.listeners.get('studioProjects:change')!({});
+  expect(b.element('studioContent').innerHTML).toContain('<small>Project workspace / All projects</small>');
+  expect(b.element('studioContent').innerHTML).toContain('data-project="Atlas"');
+  expect(b.element('studioContent').innerHTML).toContain('data-project="Beacon"');
+  picker.value = 'Beacon';
+  b.listeners.get('studioProjects:change')!({});
   await b.click({ view: "decisions" });
   expect(b.element("studioContent").innerHTML).toContain("Beacon same task id");
   expect(b.element("studioContent").innerHTML).not.toContain('data-project="Atlas"');
@@ -931,14 +1051,14 @@ test("the sidebar links to the add-host page only when the gateway offers it", a
   const off = await browser([host], reply);
   expect(off.element("sidebar").innerHTML).not.toContain("./add-host");
   const on = await browser({ hosts: [host], enroll: true } as never, reply);
-  expect(on.element("sidebar").innerHTML).toContain('<a class="footlink" href="./add-host">Add a host</a>');
+  expect(on.element("sidebar").innerHTML).toContain('href="./add-host" aria-label="Add a host"');
 });
 
 test("an empty gateway that can add hosts points at Add a host instead of a dead end", async () => {
   const reply = () => ({});
   const empty = await browser({ hosts: [], enroll: true } as never, reply);
-  expect(empty.element("sidebar").innerHTML).toContain('href="./add-host">Add a host</a>');
-  expect(empty.element("hostSubtitle").textContent).toBe("No hosts yet. Use Add a host at the bottom of the host list.");
+  expect(empty.element("sidebar").innerHTML).toContain('href="./add-host" aria-label="Add a host"');
+  expect(empty.element("hostSubtitle").textContent).toBe("No hosts yet. Use Add a host in the host tree.");
   expect(empty.element("terminals").innerHTML).toContain("<span>No hosts yet</span>");
   const closed = await browser({ hosts: [] } as never, reply);
   expect(closed.element("hostSubtitle").textContent).toBe("The gateway lists no hosts.");
