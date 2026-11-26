@@ -1355,7 +1355,7 @@ function renderStudio() {
       const stamp = meta.at && Number.isFinite(Date.parse(meta.at)) ? esc(meta.at) : 'Unavailable';
       const sessions = meta.status === 'ready' ? String(h.sessions.length) : meta.at ? `${h.sessions.length} last known` : 'Unknown';
       const decisions = h.info.supervisor || h.coordRead.status !== 'ready' ? 'Unknown' : String(h.coord.requests.filter(q => q.status === 'open').length);
-      return `<tr><th scope="row"><button data-host="${esc(h.info.id)}">${esc(h.info.name)}</button></th><td>${esc(h.info.group ?? 'Ungrouped')}</td><td>${meta.status === 'ready' ? 'Ready' : meta.status === 'unknown' ? 'Read failed' : 'Loading'}</td><td>${stamp}</td><td>${sessions}</td><td>${decisions}</td></tr>`;
+      return `<tr><th scope="row"><button data-fk="inventory:${esc(h.info.id)}" data-host="${esc(h.info.id)}">${esc(h.info.name)}</button></th><td>${esc(h.info.group ?? 'Ungrouped')}</td><td>${meta.status === 'ready' ? 'Ready' : meta.status === 'unknown' ? 'Read failed' : 'Loading'}</td><td>${stamp}</td><td>${sessions}</td><td>${decisions}</td></tr>`;
     });
     body = `<div class="studio-inventory"><table aria-label="Workstation inventory"><thead><tr>${headings.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${records.join('')}</tbody></table></div>`;
   }
@@ -1373,13 +1373,13 @@ function renderStudio() {
   if (studioView === "machine" && machine) {
     const h = machine, id = esc(h.info.id);
     const prefs = h.info.defaultHarness === "deepseek-harness" ? "DeepSeek Harness" : h.info.defaultHarness === "claude-code" ? "Claude Code" : "No preference reported";
-    const settings = manage && mode === "gateway" ? `<a href="./workstation?host=${encodeURIComponent(h.info.id)}">Edit workstation settings</a>` : "";
+    const settings = manage && mode === "gateway" ? `<a data-fk="settings:${id}" href="./workstation?host=${encodeURIComponent(h.info.id)}">Edit workstation settings</a>` : "";
     const sessions = h.sessions.map(s => {
       const pinned = pinnedSessions.has(shortcutKey({ host: h.info.id, gen: h.gen, name: s.name }));
-      return `<div><button type="button" data-host="${id}" data-session="${esc(s.name)}"><strong>${esc(s.name)}</strong> · ${esc(modelLabel(s.model))}</button><button type="button" data-host="${id}" data-pin-session="${esc(s.name)}" aria-label="Pin ${esc(s.name)}" aria-pressed="${pinned}"${h.sessionsRead.status !== 'ready' ? ' disabled' : ''}>${pinned ? 'Unpin' : 'Pin'}</button></div>`;
+      return `<div><button type="button" data-fk="session:${id}:${esc(s.name)}" data-host="${id}" data-session="${esc(s.name)}"><strong>${esc(s.name)}</strong> · ${esc(modelLabel(s.model))}</button><button type="button" data-fk="pin:${id}:${esc(s.name)}" data-host="${id}" data-pin-session="${esc(s.name)}" aria-label="Pin ${esc(s.name)}" aria-pressed="${pinned}"${h.sessionsRead.status !== 'ready' ? ' disabled' : ''}>${pinned ? 'Unpin' : 'Pin'}</button></div>`;
     }).join("");
     const taskLinks = new Map<string, string>();
-    for (const { h: source, owner } of rows) if (source === h) taskLinks.set(JSON.stringify([owner.project, owner.task]), `<button type="button" data-host="${id}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">${esc(owner.project)} / ${esc(owner.task)}</button>`);
+    for (const { h: source, owner } of rows) if (source === h) taskLinks.set(JSON.stringify([owner.project, owner.task]), `<button type="button" data-fk="task:${esc(JSON.stringify([h.info.id, owner.project, owner.task]))}" data-host="${id}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}">${esc(owner.project)} / ${esc(owner.task)}</button>`);
     const readAt = h.sessionsRead.at;
     const lastRead = readAt && Number.isFinite(Date.parse(readAt)) ? esc(readAt) : 'Time unavailable';
     body = section("Workstation", esc(h.info.name), `<p>${esc(hostSubtitle(h))}</p><p>Last successful session read: ${lastRead}</p><p>Harness preference for new sessions: ${prefs}</p>${settings}`)
@@ -1414,11 +1414,15 @@ function renderStudio() {
       return `<button data-host="${esc(target.host)}" data-session="${esc(target.name)}"><small>${pinnedSessions.has(key) ? 'Pinned' : 'Last viewed'}</small> ${esc(source.info.name)} / ${esc(target.name)}</button>`;
     }).join('') || '<button data-view="terminals">Open terminals →</button>';
     const health = needsAttention.map(h => `<button data-host="${esc(h.info.id)}">${esc(h.info.name)} · ${esc(hostSubtitle(h))}</button>`).join("");
+    const unassigned = hosts.filter(h => !h.info.supervisor && h.coordRead.status === 'ready').map(h => {
+      const count = h.coord.requests.filter(q => q.status === 'open' && requestOwner(q) === 'none').length;
+      return count ? `<button type="button" data-open-task="1" data-unassigned="1" data-host="${esc(h.info.id)}">${esc(h.info.name)} · ${count} unassigned request${count === 1 ? '' : 's'} · Review →</button>` : '';
+    }).join('');
     const receipts = scoped.filter(r => r.q.status === "resolved").map(({ q, owner }) => `<p class="studio-receipt"><strong>${esc(owner.task)} · ${esc(String(q.response ?? "Decision recorded"))}</strong><br>Awaiting host acknowledgement</p>`).join("");
     const approval = section("Human approval", "Needs your decision", (items || '<p>No open decisions in the available project data.</p>') + receipts);
     const resume = section("Quick access", "Return to work", quick);
     const summary = queue.length ? `${queue.length} ${queue.length === 1 ? 'decision needs' : 'decisions need'} your attention` : 'No pending decisions in available project data';
-    body = `<p class="studio-summary">${summary}</p>${queue.length ? approval : resume}<div class="studio-dash">${section("Project history", "Recent activity", timeline(3) + '<button data-view="activity">View activity →</button>')}<div>${queue.length ? resume : approval}${section("Connectivity", "Fleet attention", health || (hosts.length ? '<p>No session read failures reported.</p>' : '<p>No workstations connected.</p>'))}</div></div>`;
+    body = `<p class="studio-summary">${summary}</p>${queue.length ? approval : resume}<div class="studio-dash">${section("Project history", "Recent activity", timeline(3) + '<button data-view="activity">View activity →</button>')}<div>${queue.length ? resume : approval}${unassigned ? section('Across workstations', 'No project assigned', unassigned) : ''}${section("Connectivity", "Fleet attention", health || (hosts.length ? '<p>No session read failures reported.</p>' : '<p>No workstations connected.</p>'))}</div></div>`;
   }
   if (studioView === 'settings') {
     const tabs = `<nav class="studio-settings-tabs" aria-label="Settings sections">${Object.entries(settingsTitles).map(([key, label]) => `<button type="button" data-settings-section="${key}" aria-current="${settingsSection === key ? 'page' : 'false'}">${label}</button>`).join('')}</nav>`;
@@ -1430,7 +1434,10 @@ function renderStudio() {
     const themeControls = `<p>Workspace colors for this page. The terminal palette stays unchanged.</p>${(['system', 'light', 'dark'] as const).map(v => `<button data-workspace-theme="${v}" aria-pressed="${draftTheme === v}">${{system:'System', light:'Light', dark:'Dark'}[v]}</button>`).join(' ')}<p><button data-apply-appearance="1" ${draftTheme === workspaceTheme ? 'disabled' : ''}>Apply changes</button> <button data-discard-appearance="1" ${draftTheme === workspaceTheme ? 'disabled' : ''}>Discard</button></p>`;
     body = tabs + (settingsSection === 'appearance' ? section('Operator preferences', 'Workspace appearance', themeControls) : settingsSection === 'reviews' ? section('Review requests', 'Evidence on open', reviewControls) : settingsSection === 'navigation' ? section('Operator preferences', 'Host navigation', groupControls) : settingsSection === 'terminal' ? section('Operator preferences', 'Terminal layout', layoutControls) : settingsSection === 'hosts' ? section('Per host', 'Host connections', connections + (mode === 'gateway' && enroll ? '<a href="./add-host">Add host</a>' : '')) : section('About', 'Terminal Studio', '<p>Terminal renderer: ghostty-web. Sessions and decisions belong to their host services.</p><p>Local workspace shortcuts last until this page reloads.</p>'));
   }
-  const addHost = studioView === 'fleet' && mode === 'gateway' && enroll ? '<a class="footlink" href="./add-host">Add host</a>' : '';
+  if (['workspaces', 'tasks', 'decisions', 'activity'].includes(studioView)) {
+    body = '<p class="studio-scope">Based on current host reports. Older runs and decisions may not appear.</p>' + body;
+  }
+  const addHost = studioView === 'fleet' && mode === 'gateway' && enroll ? '<a class="footlink" data-fk="fleet:add" href="./add-host">Add host</a>' : '';
   setHtml($("studioContent"), `<header><small>${studioView === "fleet" || studioView === "machine" ? "Infrastructure" : studioView === 'workspaces' ? 'Operator workspace' : esc(active ?? "Workspace")}</small><h2>${studioTitles[studioView]}</h2>${addHost}</header>${partial ? '<p>Some host data is unavailable or still loading.</p>' : ''}${body}`);
 }
 function render() {

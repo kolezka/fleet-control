@@ -492,6 +492,23 @@ async function decisions(failRequests = { now: false }, intervals: (() => void)[
 }
 const atlas = { project: "Atlas", task: "A1", host: "a" };
 
+test('dashboard links unassigned blockers separately from project approvals', async () => {
+  const { b, posts } = await decisions();
+  expect(b.element('studioContent').innerHTML).toContain('1 unassigned request');
+  await b.click({ openTask: '1', host: 'a', unassigned: '1' });
+  expect(b.element('projectReview').innerHTML).toContain('Unowned question');
+  expect(b.element('projectReview').innerHTML).not.toContain('Atlas question');
+  expect(posts()).toEqual([]);
+});
+
+test('project lists disclose their current-data scope even when all reads succeed', async () => {
+  const { b } = await decisions();
+  for (const view of ['workspaces', 'tasks', 'decisions', 'activity']) {
+    await b.click({ view });
+    expect(b.element('studioContent').innerHTML).toContain('Older runs and decisions may not appear');
+  }
+});
+
 test('dashboard identifies the project, task and revision before opening review', async () => {
   const { b } = await decisions();
   const html = b.element('studioContent').innerHTML;
