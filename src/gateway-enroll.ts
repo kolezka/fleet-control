@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { newToken } from "./auth.ts";
-import { enrollUseCases, type EnrollDeps, type EnrollUseCases } from "./application/enrollment.ts";
+import { enrollUseCases, type EnrollDeps, type EnrolledHost, type EnrollUseCases } from "./application/enrollment.ts";
 import type { WorkstationPlanUseCases } from "./application/workstation-plans.ts";
 import { EnrollError, HOST_ID } from "./domain/enrollment.ts";
 import { GatewayConfigError, parseGatewayConfig, type EnrollHandler, type GatewayConfig } from "./client-gateway.ts";
@@ -20,9 +20,9 @@ class TokenFileExists extends Error {
 
 // Adds one host to a running gateway: the in-memory list and credentials, then the config file.
 export function gatewayHostAdder(configPath: string, config: GatewayConfig, renameFile: (from: string, to: string) => Promise<void> = rename) {
-  return (host: { id: string; name: string; url: string; tokenFile: string }, token: string) => withConfigLock(configPath, async () => {
+  return (host: EnrolledHost, token: string) => withConfigLock(configPath, async () => {
     const json = JSON.parse(await readFile(configPath, "utf8")) as { hosts: unknown[] };
-    const entry = { id: host.id, name: host.name, url: host.url, tokenFile: host.tokenFile };
+    const entry = { id: host.id, name: host.name, url: host.url, tokenFile: host.tokenFile, ...(host.profile ? { profile: host.profile } : {}) };
     const next = { ...json, hosts: [...json.hosts, entry] };
     // The same checks the gateway runs at start, so the file stays loadable.
     const parsed = parseGatewayConfig(next, dirname(configPath));
@@ -44,7 +44,7 @@ export function gatewayHostAdder(configPath: string, config: GatewayConfig, rena
       await rm(tmp, { force: true });
       throw e;
     }
-    config.hosts.push({ id: added.id, name: added.name, origin: added.origin });
+    config.hosts.push({ id: added.id, name: added.name, origin: added.origin, ...(added.profile ? { profile: added.profile } : {}) });
   });
 }
 

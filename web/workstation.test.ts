@@ -58,6 +58,15 @@ test("a change is listed before saving, saved once against the loaded snapshot, 
   expect(p.posts()).toHaveLength(1);
 });
 
+test('configuration breadcrumb follows the confirmed name, not the draft', async () => {
+  const p = await page((_path, init) => ({ status: 200, body: init?.method === 'POST' ? { ...saved, name: 'Compute' } : saved }));
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Build');
+  await p.type('name', 'Compute');
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Build');
+  await p.fire('profileForm:submit');
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Compute');
+});
+
 test("a save the gateway refuses as stale locks the form until the settings are read again", async () => {
   const p = await page((_path, init) => init?.method === "POST" ? { status: 409, body: { error: { message: "Workstation changed. Reload before saving." } } } : { status: 200, body: saved });
   await p.type("group", "Compute");
@@ -113,4 +122,18 @@ test("settings that cannot be read, or are malformed, leave the form locked inst
   const odd = await page(() => ({ status: 200, body: saved }), "?host=../etc");
   expect(odd.calls).toEqual([]);
   expect(odd.element("notice").textContent).toBe("Cannot read workstation configuration.");
+});
+
+test('configuration identifies the selected workstation and separates its immutable connection from preferences', async () => {
+  const p = await page(() => ({ status: 200, body: saved }));
+  expect(p.element('machineName').textContent).toBe('Build');
+  expect(p.element('overviewLink').href).toBe('./?view=machine&host=build');
+  expect(p.element('terminalsLink').href).toBe('./?view=terminals&host=build');
+  const renamed = await page((_path, init) => ({ status: 200, body: init?.method === 'POST' ? { ...saved, name: 'New bench' } : saved }));
+  await renamed.type('name', 'New bench');
+  expect(renamed.element('machineName').textContent).toBe('Build');
+  await renamed.fire('profileForm:submit');
+  expect(renamed.element('machineName').textContent).toBe('New bench');
+  const html = await Bun.file(new URL('./workstation.html', import.meta.url)).text();
+  for (const heading of ['Identity', 'Connection', 'Session defaults', 'Changes to review']) expect(html).toContain(`<h2>${heading}</h2>`);
 });

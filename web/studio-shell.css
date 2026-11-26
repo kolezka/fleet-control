@@ -1,0 +1,77 @@
+/* The rail spans the window; the workspace owns its own header and status line. */
+.shell { grid-template: 'rail header' 52px 'rail content' minmax(0,1fr) 'rail footer' 39px / 220px minmax(0,1fr); height:100dvh }
+.shell > .body { grid-area:content; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) }
+.shell > .body > .main { min-height:0; display:flex; flex-direction:column }
+.main > :is(#studioContent,#studioConsole) { flex:1; min-height:0 }
+.shell .titlebar,.shell .statusbar { padding-inline:max(24px,env(safe-area-inset-left)) max(24px,env(safe-area-inset-right)); background:var(--surface) }
+.shell .titlebar { grid-area:header; gap:8px; font:600 14px/1.55 var(--sans) }
+#studioCrumb { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:600 }
+.titlebar button { font:400 14px/1.55 var(--sans); background:var(--surface); border:1px solid var(--line); border-radius:5px; padding:7px 12px }
+.titlebar button:hover { background:var(--selected) }
+#navigationToggle { display:none }
+.shell .statusbar { grid-area:footer; font:11px/1.55 var(--mono); min-width:0 }
+.statusbar .hostcontext { display:flex; font:inherit; min-width:0; justify-content:flex-end }
+.statusbar .hostcontext :is(strong,small) { font:inherit }
+.statusbar #status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0 }
+.studio-navigation { grid-area:rail; display:flex; flex-flow:column nowrap; align-items:stretch; gap:2px; padding:0 10px 8px; background:var(--surface); overflow:auto; max-height:none; min-width:0 }
+.studio-navigation > * { flex-shrink:0 }
+.studio-brand { margin:0 -10px 12px; padding:0 14px; height:52px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; font:700 15px/1.55 var(--sans); letter-spacing:-.4px }
+.studio-brand b { display:grid; place-items:center; background:var(--ink); color:var(--surface); border-radius:6px; width:25px; height:25px }
+.studio-navigation svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; flex:none }
+.studio-navigation [data-view] { display:flex; align-items:center; gap:9px; min-height:32px; padding:7px 9px; border:0; border-radius:5px; font-size:13px; line-height:1.55 }
+.studio-navigation > [data-view][aria-current=page] { box-shadow:inset 2px 0 var(--accent) }
+.project-picker { display:grid; gap:3px; margin:10px 6px 5px; padding-top:10px; border-top:1px solid var(--line); min-width:0 }
+.project-picker small,.infra-heading,.studio-navigation .sidebarhead > span { font:650 10px/1.55 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted) }
+.project-picker small { font-weight:400 }
+.project-picker select { width:100%; min-width:0; height:37px; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); font:600 14px var(--sans); padding:8px }
+.infra-heading { margin:14px 6px 3px; padding-top:10px; border-top:1px solid var(--line) }
+#decisionBadge { margin-left:auto; border-radius:4px; padding:0 5px; background:var(--subtle); color:var(--muted); font:11px var(--mono) }
+.studio-rail .sidebar { background:transparent; display:block; margin-top:4px; padding:0; border:0 }
+.studio-navigation .sidebarhead { display:flex; justify-content:flex-start; align-items:center; gap:3px; min-height:36px; margin:0 -10px; padding:4px 10px 5px; border-bottom:1px solid var(--line) }
+.sidebarhead > span { margin-right:auto }
+.tree-action { display:grid; place-items:center; width:27px; height:27px; color:var(--ink); text-decoration:none; font:20px var(--sans); border-radius:5px }
+.tree-action:hover { background:var(--selected) }
+.studio-host-group { margin-top:10px }
+.studio-host-group h3 button { width:100%; color:var(--muted); font:600 11px/1.55 var(--sans); padding:1px 6px; border:0 }
+.studio-navigation .hostgroup { gap:0 }
+.studio-host-row { display:flex; align-items:center }
+.studio-host-row .host-disclosure { width:24px; flex:none; padding:4px 0; text-align:center; color:var(--muted); border:0 }
+.studio-host-row .hostbutton,.studio-navigation .peer .hostbutton { min-width:0; flex:1; gap:7px; padding:6px 4px; border:0; min-height:29px }
+.studio-navigation .hosticon { width:16px; height:16px; flex:0 0 16px; border:0; background:transparent }
+.studio-navigation .hostidentity { min-width:0; flex:1 }
+.studio-navigation .hostbutton .hostidentity strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:inherit; font:600 12px/1.4 ui-monospace,monospace; padding:0; letter-spacing:0; text-transform:none }
+.studio-host-row .hostbutton small { font:10px var(--mono) }
+.studio-navigation .host-sessions { margin:0 0 0 21px; grid-template-columns:minmax(0,1fr); gap:2px; padding:0 0 0 1px }
+.studio-navigation .session { position:relative; padding:4px 5px; gap:4px; min-height:26px; border:0 }
+.studio-navigation .session strong { padding:0; font:400 12px/1.55 var(--sans); letter-spacing:0; text-transform:none; color:var(--muted) }
+.studio-navigation .session[aria-pressed=true] strong { color:var(--accent); font-weight:650 }
+.studio-navigation .session small { font:10px/1.3 var(--mono); margin:0; overflow-wrap:anywhere }
+/* Keep observed state in the accessible name. Pointer and keyboard previews do not reflow the tree. */
+@media (hover:hover) {
+  .studio-navigation .session small { position:absolute; top:100%; inset-inline:0; z-index:2; padding:4px 6px; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); pointer-events:none }
+  .studio-navigation .session:not(:hover):not(:focus-within) small { width:1px; height:1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap }
+}
+.studio-rail-foot { margin-top:auto; padding-top:20px }
+.studio-rail-foot button { border-top:1px solid var(--line); border-radius:0 }
+#workspaceInspector:not([hidden]) { background:var(--surface); border-left:1px solid var(--line); padding:20px; overflow:auto; overflow-wrap:anywhere; font:14px/1.55 var(--sans) }
+#workspaceInspector small { display:block; font:650 10px/1.55 var(--mono); color:var(--muted); text-transform:uppercase; letter-spacing:.12em }
+#workspaceInspector h2 { margin:4px 0 10px; font-size:18px; font-weight:700; letter-spacing:-.4px }
+#workspaceInspector p { margin:4px 0 16px; color:var(--muted) }
+@media(min-width:901px) { .shell > .body:has(#workspaceInspector:not([hidden])) { grid-template-columns:minmax(0,1fr) 240px } }
+@media(max-width:900px) { #workspaceInspector:not([hidden]) { position:absolute; z-index:5; right:0; top:52px; bottom:39px; width:min(240px,90vw); box-shadow:-3px 3px 12px rgb(0 0 0 / .12) } }
+@media(max-width:700px) {
+  .shell { grid-template:'header' 52px 'content' minmax(0,1fr) 'footer' auto / minmax(0,1fr); min-height:0 }
+  .shell .titlebar,.shell .statusbar { padding-inline:max(10px,env(safe-area-inset-left)) max(10px,env(safe-area-inset-right)) }
+  .shell .statusbar { padding-block:6px; gap:8px }
+  .statusbar .hostcontext { display:flex; flex-wrap:wrap; gap:2px 6px }
+  .shell .titlebar { padding-inline:max(8px,env(safe-area-inset-left)) max(8px,env(safe-area-inset-right)); gap:10px }
+  .titlebar button { flex:none; white-space:nowrap }
+  #studioCrumb { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; overflow-wrap:anywhere; line-height:1.35 }
+  #navigationToggle { display:block }
+  .studio-navigation { display:none }
+  .navigation-open .studio-navigation { display:flex; position:fixed; left:0; top:52px; bottom:0; width:min(260px,90vw); z-index:10; box-shadow:3px 4px 12px rgb(0 0 0 / .12) }
+}
+@media(max-width:360px) {
+  .shell .titlebar { gap:4px }
+  .titlebar button { padding-inline:6px }
+}

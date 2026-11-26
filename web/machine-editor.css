@@ -1,0 +1,48 @@
+/* The editors use the same viewport grid and color tokens as the workspace. */
+.machine-editor .editor-scroll { grid-area:content; min-height:0; overflow:auto; min-width:0; background:var(--bg); padding:32px clamp(16px,3vw,48px); font:14px/1.55 var(--sans) }
+.machine-editor a { color:inherit; text-underline-offset:3px }
+.machine-editor .studio-navigation a { text-decoration:none }
+.machine-editor .studio-navigation a:hover { background:var(--selected) }
+.machine-editor .host-sessions[hidden] { display:none }
+.machine-editor .project-picker > a { display:block; border:1px solid var(--line); border-radius:4px; padding:7px 8px; font:600 14px/1.5 var(--sans) }
+.machine-editor .studio-rail-foot a { border-top:1px solid var(--line) }
+.machine-editor .studio-navigation [aria-current=page] { background:var(--selected); color:var(--accent) }
+.machine-editor .studio-navigation summary { cursor:pointer; padding:2px 6px; color:var(--muted) }
+.machine-editor .host-sessions a { display:block; margin:3px 0; padding:3px 5px; overflow-wrap:anywhere }
+.editor-content header > .cap { display:block }
+.editor-content .cap { color:var(--muted); font:650 10px/1.55 var(--mono); letter-spacing:.12em; text-transform:uppercase }
+[data-descriptions=hide] .editor-content > header > p { display:none }
+.editor-content { max-width:850px; margin:0 auto 0 0 }
+.editor-content h1 { margin:4px 0; font:700 29px/1.55 var(--sans); letter-spacing:-1px; overflow-wrap:anywhere }
+.configuration-editor .editor-scroll { padding:0 }
+.configuration-editor .editor-content { max-width:none }
+.editor-machine-title { display:flex; align-items:center; min-height:43px; padding:4px 14px; background:var(--surface) }
+.editor-machine-title h1 { margin:0; font-size:17px }
+.configuration-editor .editor-card,.configuration-editor .editor-actions { max-width:850px; margin:12px 14px }
+@media(min-width:701px) { .configuration-editor .shell { grid-template-columns:195px minmax(0,1fr) } }
+.editor-content p { margin:8px 0 14px; overflow-wrap:anywhere }
+.editor-content .tabs,.editor-content .editor-actions,.editor-content .formactions { display:flex; align-items:center; flex-wrap:wrap; gap:10px }
+.editor-content .tabs { gap:6px; margin:0; padding:4px 10px; background:var(--surface); border-bottom:1px solid var(--line) }
+.editor-content .tabs > * { padding:7px 12px; border-radius:5px; text-decoration:none }
+.editor-content .tabs [aria-current=page] { background:var(--selected); color:var(--accent); font-weight:650 }
+.editor-content .editor-card { min-width:0; background:var(--surface); border:1px solid var(--line); padding:24px; margin:18px 0 }
+.editor-content h2 { font-size:18px; margin:20px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px }
+.editor-content h3 { font-size:15px; margin:16px 0 4px }
+.editor-content .field { display:grid; gap:4px; margin:12px 0 }
+.editor-content :is(input,select,button) { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:7px 12px }
+.editor-content :is(input,select) { width:min(100%,440px); padding:8px }
+.editor-content :is(small,.phase-note,#formStatus,#notice) { color:var(--muted) }
+.editor-content :is(button,a,input,select):focus-visible { outline:2px solid var(--accent); outline-offset:2px }
+.editor-content button:not(:disabled) { cursor:pointer }
+.editor-content button:disabled { opacity:.55 }
+.editor-content .primary,.editor-content button[aria-pressed=true] { background:var(--ink); color:var(--surface); border-color:var(--ink) }
+.editor-content fieldset { min-width:0; margin:0; padding:0; border:0 }
+.editor-content .paths { padding:8px 16px 12px; border:1px solid var(--line) }
+.editor-content .paths button { margin:4px 3px 0 0 }
+.editor-content :is(.callout,.command,#changes) { padding:12px; background:var(--bg); white-space:pre-wrap; overflow-wrap:anywhere }
+.editor-content .alert { border-left:3px solid var(--bad); padding:12px; background:var(--surface) }
+.editor-content .pendinglist { padding:0; list-style:none }
+.editor-content .pending { border-top:1px solid var(--line); margin-top:16px }
+.editor-content .pending h3 small { display:block; overflow-wrap:anywhere }
+.editor-content .editor-actions { justify-content:space-between }
+@media(max-width:700px) { .machine-editor:not(.configuration-editor) .editor-scroll,.editor-content .editor-card { padding:16px } }

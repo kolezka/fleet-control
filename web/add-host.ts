@@ -1,15 +1,15 @@
 // Add-host page. Begin makes the token on the gateway and shows the command; the operator (or SSH)
 // runs it on the host; Check adds the host only after the host answers with the right identity.
-import { errorText, formGate, parseCheck, parsePending, parsePendingList, parseSsh, payload, pendingHtml, type Form, type Mode, type Pending } from "./add-host-view.ts";
+import { esc, inventoryGroups, parseWorkstationProfile, profileSummary, errorText, formGate, parseCheck, parsePending, parsePendingList, parseSsh, payload, pendingHtml, type Form, type Mode, type Pending } from "./add-host-view.ts";
 
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
 const TIMEOUT_MS = 15000;
 // SSH runs clone and install for a fresh host, which takes minutes.
 const SSH_TIMEOUT_MS = 11 * 60_000;
-const FIELDS = ["hostName", "hostId", "hostUrl", "principal", "dir", "ref", "port", "label", "fleet", "tlsCert", "tlsKey", "ssh", "sshPort"];
+const FIELDS = ["hostName", "hostId", "hostUrl", "principal", "dir", "ref", "port", "label", "fleet", "tlsCert", "tlsKey", "ssh", "sshPort", "group", "description", "defaultHarness"];
 const titles: Record<Mode, [string, string, string, string]> = {
   connect: ["Connect a running host service", "Use this for a host whose service already runs. The command adds the gateway's token hash to that service's tokens file and asks it to reread the file. Nothing restarts. The host must run a release that has scripts/enroll.ts; on an older one the command says so and changes nothing.", "Service folder on that host", "The folder the running service starts in, absolute or ~/..."],
-  fresh: ["Install a new host service", "Use this for a machine without Fleet Control. The command clones the code, installs it, makes an empty fleet and starts a new service on its own port. Existing services, folders and sessions are refused, never changed.", "New code folder on that host", "Must not exist yet. Absolute, or ~/..."],
+  fresh: ["Plan a new host service", "Preview and save a plan without installing anything. Enrollment is a separate step. Use this for a machine without Fleet Control. The command clones the code, installs it, makes an empty fleet and starts a new service on its own port. Existing services, folders and sessions are refused, never changed.", "New code folder on that host", "Must not exist yet. Absolute, or ~/..."],
 };
 
 let mode: Mode = "connect";
@@ -23,6 +23,7 @@ let alertText = "";
 const form = (): Form => ({
   mode, id: $("hostId").value, name: $("hostName").value, url: $("hostUrl").value, principal: $("principal").value, dir: $("dir").value,
   ref: $("ref").value, port: $("port").value, label: $("label").value, fleet: $("fleet").value, tlsCert: $("tlsCert").value, tlsKey: $("tlsKey").value,
+  group: $("group").value, description: $("description").value, defaultHarness: $("defaultHarness").value,
   ssh: $("ssh").value, sshPort: $("sshPort").value,
 });
 
@@ -56,11 +57,21 @@ function render() {
   $("alert").textContent = alertText;
 }
 
+async function loadGroups() {
+  let groups: string[] | null = null;
+  try {
+    const res = await fetch('./api/hosts', { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (res.status === 200) groups = inventoryGroups(await res.json());
+  } catch { /* Group suggestions are optional; manual entry still works. */ }
+  $("groupOptions").innerHTML = (groups ?? []).map(g => `<option value="${esc(g)}"></option>`).join('');
+  $("groupNote").textContent = groups === null ? 'Cannot read existing groups. You can still enter a group name.' : 'Select an existing group or type a new name. A profile needs a group.';
+}
+
 async function loadPlans() {
   const res = await call("/plans");
   const rows = (res.body as { plans?: unknown } | null)?.plans;
-  const valid = res.status === 200 && Array.isArray(rows) && rows.every(p => p && p.mode === "fresh" && typeof p.name === "string" && typeof p.url === "string" && typeof p.id === "string");
-  $("savedPlans").textContent = valid ? rows.map(p => `${p.name} (${p.id}) · ${p.url}`).join("\n") || "No saved plans." : "Cannot read saved plans.";
+  const valid = res.status === 200 && Array.isArray(rows) && rows.every(p => p && p.mode === "fresh" && typeof p.name === "string" && typeof p.url === "string" && typeof p.id === "string" && (p.profile === undefined || parseWorkstationProfile(p.profile)));
+  $("savedPlans").textContent = valid ? rows.map(p => `${p.name} (${p.id}) · ${p.url}${p.profile ? '\n' + profileSummary(p.profile) : ''}`).join("\n") || "No saved plans." : "Cannot read saved plans.";
 }
 
 async function load() {
@@ -68,7 +79,7 @@ async function load() {
   const list = res.status === 200 ? parsePendingList(res.body) : null;
   if (!list) { alertText = res.status === 404 ? "Adding hosts is not enabled in this gateway. Start it with FLEET_CONTROL_ENROLL=1." : "Cannot read the hosts being added. " + errorText(res.body, res.status); render(); return; }
   pending = list;
-  await loadPlans();
+  await Promise.all([loadGroups(), loadPlans()]);
   alertText = "";
   render();
 }
@@ -112,6 +123,7 @@ const act = (id: string, action: string) => work("Working on " + id + ".", async
     if (!r.added) { notes.set(id, "Not added: " + (r.reason ?? "no reason given")); return; }
     pending = pending.filter((x) => x.id !== id);
     notes.delete(id);
+    if (p.profile) await loadGroups();
     notice = p.name + " was added. It shows on the terminals page.";
     return;
   }
@@ -139,8 +151,10 @@ $("hostForm").addEventListener("submit", (e) => {
   if (mode === "connect") { void begin(); return; }
   const plan = payload(fields);
   preview = JSON.stringify(plan);
+  const profile = parseWorkstationProfile(plan.profile);
   $("planSummary").textContent = [
     `Workstation: ${plan.name} (${plan.id}) at ${plan.url}`,
+    ...(profile ? [profileSummary(profile)] : []),
     `Checkout: ${plan.ref} into ${plan.dir}`,
     `New service: ${plan.label}, port ${plan.port}, fleet ${plan.fleet}`,
     `Certificate: ${plan.tlsCert}; key path: ${plan.tlsKey}`,

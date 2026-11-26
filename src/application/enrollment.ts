@@ -4,22 +4,25 @@
 import { createHash } from "node:crypto";
 import { checkEnrollRequest, EnrollError, enrolledAs, pasteCommand, type EnrollRequest } from "../domain/enrollment.ts";
 
+export type EnrolledHost = Pick<EnrollRequest, "id" | "name" | "url" | "profile"> & { tokenFile: string };
+
 export type EnrollDeps = {
   newToken(): string;
   knownIds(): string[];
   writeToken(id: string, token: string): Promise<string>; // returns the file; must refuse to overwrite
   removeToken(file: string): Promise<void>;
   whoami(url: string, token: string): Promise<{ status: number; body: unknown }>;
-  addHost(host: { id: string; name: string; url: string; tokenFile: string }, token: string): Promise<void>;
+  addHost(host: EnrolledHost, token: string): Promise<void>;
   ssh?(target: string, port: number | undefined, command: string): Promise<{ code: number; output: string }>;
   now?(): Date;
 };
 
 type Pending = { request: EnrollRequest; token: string; tokenFile: string; command: string; createdAt: string };
-export type PendingView = { id: string; name: string; url: string; mode: string; principal: string; command: string; ssh: string | null; createdAt: string };
+export type PendingView = Pick<EnrollRequest, "profile"> & { id: string; name: string; url: string; mode: string; principal: string; command: string; ssh: string | null; createdAt: string };
 
 const view = (p: Pending): PendingView => ({
   id: p.request.id, name: p.request.name, url: p.request.url, mode: p.request.mode, principal: p.request.principal,
+  ...(p.request.profile ? { profile: { ...p.request.profile } } : {}),
   command: p.command, ssh: p.request.ssh ?? null, createdAt: p.createdAt,
 });
 
@@ -69,7 +72,7 @@ export function enrollUseCases(deps: EnrollDeps) {
       const why = enrolledAs(answer.body, p.request.principal);
       if (why) return { added: false, reason: why };
       if (deps.knownIds().includes(id)) throw new EnrollError(`host id ${id} is already in use`);
-      await deps.addHost({ id, name: p.request.name, url: p.request.url, tokenFile: p.tokenFile }, p.token);
+      await deps.addHost({ id, name: p.request.name, url: p.request.url, tokenFile: p.tokenFile, ...(p.request.profile ? { profile: p.request.profile } : {}) }, p.token);
       pending.delete(id);
       return { added: true, reason: null };
     }),

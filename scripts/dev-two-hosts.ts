@@ -41,10 +41,23 @@ try {
     const store = new Store(join(dir, `${id}.db`));
     stores.push(store);
     store.upsertSession({ name: fleet.session, host: id, role: "test", kind: "script", configuredModel: null });
+    if (id === 'alpha' && process.argv.includes('--two-panes')) {
+      const second = 'probe-observer';
+      const config = await Bun.file(fleet.confPath).text();
+      await Bun.write(fleet.confPath, config + `\nAGENTS+=("${second}|Probe observer|observer.txt")\n`);
+      const started = await fleet.tmux('new-session', '-d', '-s', second, '-x', '120', '-y', '30', 'exec sleep 3600');
+      if (started.exitCode !== 0) throw new Error('Could not start the second local test session');
+      store.upsertSession({ name: second, host: id, role: 'test', kind: 'script', configuredModel: null });
+    }
     const commands = new Commands(store.db);
     const requests = new Requests(store.db);
-    requests.registerRun({ runId: "same-run", orchestrator: fleet.session, phase: "phase-1" });
-    requests.create({ runId: "same-run", origin: fleet.session, expectedRevision: 1, kind: "approval", question: `Approve test scope on ${id}?`, scope: "Shell-only fixture. No phase is executed by this demo." });
+    const compareDashboard = process.argv.includes('--v21-dashboard') && id === 'alpha';
+    const tasks = compareDashboard ? [['A-17', 'Authorize the read API phase?'], ['A-18', 'Authorize fixture review?']] as const : [['review-scope', `Approve test scope on ${id}?`]] as const;
+    for (const [index, [taskId, question]] of tasks.entries()) {
+      const runId = index === 0 ? 'same-run' : 'fixture-review';
+      requests.registerRun({ runId, orchestrator: fleet.session, phase: 'phase-1', projectId: id === 'alpha' ? 'Atlas' : 'Beacon', taskId });
+      requests.create({ runId, origin: fleet.session, expectedRevision: 1, kind: 'approval', question, scope: 'Shell-only fixture. No phase is executed by this demo.' });
+    }
     const token = newToken();
     const tokenFile = join(dir, `${id}.token`);
     await Bun.write(tokenFile, token, { mode: 0o600 });
