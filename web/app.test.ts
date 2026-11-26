@@ -549,7 +549,7 @@ test("machine requests link to project review without offering approval on the m
 });
 
 // One shared host with requests of two projects, two tasks, one closed request and one with no owner.
-async function decisions(failRequests = { now: false }, intervals: (() => void)[] = []) {
+async function decisions(failRequests = { now: false }, intervals: (() => void)[] = [], resolveStatus = 200) {
   const base = { runId: "r", phase: "build", revision: 3, kind: "approval", proposedAction: "", scope: "", evidence: [], allowedResponses: ["approve", "decline"], status: "open", response: null };
   const requests = [
     { ...base, id: "a1", projectId: "Atlas", taskId: "A1", question: "Atlas question", evidence: ['Verification log'] },
@@ -560,7 +560,7 @@ async function decisions(failRequests = { now: false }, intervals: (() => void)[
     { ...base, id: "b2", projectId: "Beacon", taskId: "A1", question: "Beacon same task id" },
     { ...base, id: "u1", question: "Unowned question" },
   ];
-  const b = await browser([{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }], (path, init) => init?.method === "POST" ? { ok: true }
+  const b = await browser([{ id: "a", name: "Shared runner", apiBase: "/api/hosts/a" }], (path, init) => init?.method === "POST" ? { __status: resolveStatus, ok: resolveStatus === 200 }
     : path.includes("/requests") ? (failRequests.now ? { __status: 500 } : { runs: [], requests }) : path.endsWith("/sessions") ? { sessions: [] } : { commands: [] }, intervals);
   await new Promise(resolve => setTimeout(resolve, 0));
   const posts = () => b.calls.filter(c => c.init?.method === "POST").map(c => ({ path: c.path, body: JSON.parse(String(c.init!.body)) }));
@@ -625,6 +625,32 @@ test('all task surfaces retain request origin outside the latest run window', as
   const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { runs: [], requests: [q] } : path.endsWith('/sessions') ? { sessions: [{ name: 'worker', registered: true, running: true, model: { state: 'not_applicable' } }] } : { commands: [] });
   for (const view of ['dashboard','decisions','tasks']) { await b.click({ view }); expect(b.element('studioContent').innerHTML).toContain('Runner / worker'); }
   await b.click({ host: 'a' }); expect(b.element('studioContent').innerHTML).toContain('data-session="worker"');
+});
+
+test('decision inspector shows the current queue receipt, not another project', async () => {
+  const { b } = await decisions(); await b.click({ view:'decisions' });
+  expect(b.element('workspaceInspectorTitle').textContent).toContain('a1 · revision 3');
+  expect(b.element('workspaceInspectorText').textContent).toContain('No decision yet');
+  await b.click({decisionQueue:'recorded'});
+  expect(b.element('workspaceInspectorTitle').textContent).toContain('a2 · revision 3');
+  expect(b.element('workspaceInspectorText').textContent).toContain('Awaiting host acknowledgement');
+});
+
+test('a successful resolve announces recording without claiming acknowledgement in the modal', async () => {
+  const { b, posts } = await decisions();
+  await b.click({ ...atlas, openTask:'1', reviewRequest:'a1' });
+  await b.click({ host:'a', request:'a1', revision:'3', answer:'decline' });
+  expect(b.element('projectReview').innerHTML).toContain('recorded for revision 3. The supervisor has not acknowledged it yet.');
+  expect(posts()).toHaveLength(1);
+});
+
+test('an ambiguous resolve is announced in its own review, not a sibling review', async () => {
+  const { b } = await decisions({now:false}, [], 502);
+  await b.click({ ...atlas, openTask:'1', reviewRequest:'a1' });
+  await b.click({ host:'a', request:'a1', revision:'3', answer:'decline' });
+  expect(b.element('projectReview').innerHTML).toContain('Unknown whether the answer was recorded.');
+  await b.click({closeReview:'1'}); await b.click({ ...atlas, task:'A2', openTask:'1', reviewRequest:'a3' });
+  expect(b.element('projectReview').innerHTML).not.toContain('Unknown whether the answer was recorded.');
 });
 
 test('review names the scope and binds the approval label to the shown revision', async () => {

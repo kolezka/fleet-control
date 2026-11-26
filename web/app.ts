@@ -417,6 +417,7 @@ function inReview(h: HostState, q: Req): boolean {
   if (!want) return owner === "none";
   return typeof owner === "object" && owner.project === want.project && owner.task === want.task;
 }
+let lastReviewNotice: { hostId: string; gen: number; requestId: string; revision: number; text: string } | null = null;
 function reportedSession(q?: Req, run?: { orchestrator: string }) {
   return typeof q?.origin === 'string' && q.origin ? q.origin : run?.orchestrator;
 }
@@ -438,6 +439,7 @@ function renderRequests(h: HostState | undefined) {
         `<div class="review-scope"><strong>${q.kind === 'approval' ? 'Approval scope' : 'Request scope'}</strong>${q.proposedAction ? `<p>${esc(q.proposedAction)}</p>` : ''}<p>${esc(q.scope || 'No scope reported.')}</p></div>` +
         (q.evidence.length ? `<details${preferences.evidence === 'expanded' ? ' open' : ''}><summary>Evidence (${q.evidence.length})</summary>${q.evidence.map(e => `<p>${esc(e)}</p>`).join('')}</details>` : '<p class="review-evidence-empty">No evidence supplied.</p>') +
         `<p class="review-status" role="status">${esc(q.phase)} · ${esc(requestLabel[q.status] ?? q.status)}</p>` +
+        (lastReviewNotice?.hostId === h.info.id && lastReviewNotice.gen === h.gen && lastReviewNotice.requestId === q.id && lastReviewNotice.revision === q.revision && q.status === 'open' ? `<p role="status">${esc(lastReviewNotice.text)}</p>` : '') +
         (q.response ? `<p>Recorded: ${esc(q.response)}${q.resolvedBy ? ` by ${esc(q.resolvedBy)}` : ''}</p>` : '') +
         (answers ? `<div class="review-actions">${answers}</div>` : '') + `</section>`;
     }).join("");
@@ -590,6 +592,7 @@ function renderChrome(h: HostState | undefined) {
   const consoleVisible = studioView === 'terminals';
   const contextToggle = $('workspaceInspectorToggle');
   contextToggle.hidden = consoleVisible;
+  contextToggle.textContent = workspaceInspectorOpen ? 'Hide inspector' : 'Inspector';
   $('inspectorToggle').hidden = !consoleVisible;
   contextToggle.setAttribute('aria-expanded', String(workspaceInspectorOpen && !consoleVisible));
   $('workspaceInspector').hidden = !workspaceInspectorOpen || consoleVisible;
@@ -1369,6 +1372,12 @@ function renderStudio() {
   const decisionQueues = { pending: scoped.filter(r => r.q.status === "open"), recorded: scoped.filter(r => r.q.status === "resolved" || r.q.status === "acknowledged"), other: scoped.filter(r => !["open", "resolved", "acknowledged"].includes(r.q.status)) };
   const queue = studioView === "dashboard" ? decisionQueues.pending : studioView === "decisions" ? decisionQueues[decisionQueue] : scoped;
   const machine = selectedHostState(fleet);
+  if (studioView === 'decisions') {
+    const row = queue.find(r => (!decisionsHost || decisionsHost === r.h.info.id) && (!reviewing || inReview(r.h, r.q)));
+    const q = row?.q;
+    $('workspaceInspectorTitle').textContent = q ? `${q.id} · revision ${q.revision}` : 'Supervisor receipt';
+    $('workspaceInspectorText').textContent = !q ? 'No reported request in this queue.' : `${row!.h.info.name} · ${row!.owner.project} / ${row!.owner.task} · ${q.status === 'open' ? 'No decision yet' : q.status === 'resolved' ? `Recorded: ${q.response ?? 'response unavailable'} · Awaiting host acknowledgement` : requestLabel[q.status] ?? q.status}`;
+  }
   const nav = $('workstationNav');
   nav.hidden = !machine || !!reviewing || (studioView !== 'machine' && studioView !== 'terminals');
   if (!nav.hidden && machine) {
@@ -1975,6 +1984,7 @@ async function answer(hostId: string, requestId: string, response: string, expec
   const notice = outcome.ok ? `${host.name}: answer "${response}" recorded for revision ${expectedRevision}. The supervisor has not acknowledged it yet.`
     : outcome.kind === "network" || outcome.kind === "invalid" || (outcome.status ?? 0) >= 500 || outcome.status === 408 ? `${host.name} did not answer clearly. Unknown whether the answer was recorded.`
     : `${host.name}: answer not recorded: ${outcome.message}`;
+  if (fleet.hosts[hostId]?.gen === handle.gen) lastReviewNotice = { ...handle, text: notice };
   apply(finishAnswer(fleet, handle, notice));
   render();
   void refresh(hostId, "coord");
