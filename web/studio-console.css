@@ -1,26 +1,28 @@
 /* The terminal palette belongs to the session stage, not the workspace theme. */
 #terminals:has(.stage-grid) {
   display:block; min-width:0; min-height:0; padding:0; overflow:auto;
-  background:var(--bg); align-self:stretch;
+  background:#17191c; align-self:stretch;
 }
 #terminals :is(.stage-heading,.stage-grid,.stage-meta) { background:#17191c; color:#d9dde4 }
 .stage-heading,.terminal .termhead,.stage-requests,#projectReview header { display:flex; align-items:center; justify-content:space-between; gap:10px }
 #terminals .stage-heading { min-height:47px; padding:6px 11px }
-.stage-heading small { color:#959da9; font:650 10px/1.55 var(--mono); letter-spacing:.12em; text-transform:uppercase }
-#terminals .stage-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; padding:0 6px }
+.stage-heading small { color:#a8bcda; font:400 11px/1.55 var(--mono); text-transform:uppercase }
+#terminals .stage-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0 6px; padding:0; background:#32363d }
 #terminals:is([data-focused=true],[data-layout=stacked]) .stage-grid,#terminals .stage-grid:has(> :only-child) { grid-template-columns:minmax(0,1fr) }
 #terminals[data-focused=true] .terminal:not(.active),#terminals[data-focused=true] .stage-focus { display:none }
-#terminals .terminal { display:flex; flex-flow:column; min-width:0; min-height:0; height:auto; padding:6px; background:#181b1f; color:#d9dde4; border:1px solid #32363d; border-radius:0 }
+#terminals .terminal { display:flex; flex-flow:column; min-width:0; min-height:0; height:auto; padding:6px; background:#181b1f; color:#d9dde4; border:0; border-radius:0 }
 #terminals .terminal.typing { outline-color:#a8bcda }
 #terminals .termhead,#terminals .termfooter { background:transparent; border:0; padding:2px 4px; flex-wrap:wrap }
-#terminals .termhead strong { margin-right:auto; font:650 14px/1.55 var(--sans); overflow-wrap:anywhere }
+#terminals .termhead { padding:0 }
+#terminals .termhead strong { margin-right:auto; font:700 14px/1.55 var(--sans); overflow-wrap:anywhere }
 #terminals :is(.termstate,.modelinfo,.stage-meta) { color:#aab2bf; font:11px/1.5 var(--mono) }
-#terminals .xterm-host { min-height:240px; overflow:auto; padding:4px; background:#181b1f }
+#terminals .xterm-host { min-height:240px; overflow:auto; padding:0; background:#181b1f }
 #terminals .stage-meta { padding:5px 10px 8px }
 #terminals .stage-config { text-decoration:none }
 #terminals .stage-config,#terminals :is(.stage-heading,.terminal) button { background:#252a31; color:#d9dde4; padding:6px 11px; border:1px solid #414750; border-radius:5px }
 #terminals .termfooter .typebtn.danger { color:#f2c99b; border-color:#d2b38a }
-#terminals .stage-requests { justify-content:flex-start; flex-wrap:wrap; padding:6px 14px; min-height:44px; border-bottom:1px solid var(--line); font-size:12px }
+#terminals .stage-requests { justify-content:flex-start; flex-wrap:wrap; gap:20px; background:var(--bg); padding:4px 14px; border-bottom:1px solid var(--line); font:12px/1.55 var(--sans) }
+.stage-requests button { margin-inline-start:auto }
 .stage-requests button,#projectReview button { padding:7px 12px; border-radius:5px; border:1px solid var(--line); background:var(--surface); color:var(--ink) }
 #projectReview { width:min(430px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); margin:auto; overflow:auto; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font:14px/1.55 var(--sans); overflow-wrap:anywhere }
 #projectReview:not([open]) { display:none }
@@ -35,6 +37,8 @@
 #projectReview .review-actions { display:flex; flex-wrap:wrap; gap:8px }
 #projectReview button[data-answer=approve] { background:var(--ink); color:var(--surface) }
 @media(min-width:701px) {
+  .shell:has(#studioConsole:not([hidden]) .stage-grid) { grid-template-rows:52px minmax(0,1fr) auto }
+  .shell:has(#studioConsole:not([hidden]) .stage-grid) > .statusbar { padding:3px 12px; border-bottom:1px solid var(--line) }
   #terminals:has(.stage-grid) { display:flex; flex-direction:column }
   #terminals .stage-grid { flex:1; min-height:0; grid-auto-rows:minmax(135px,1fr); overflow:auto }
   #terminals .xterm-host { min-height:0 }
