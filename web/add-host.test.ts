@@ -58,6 +58,10 @@ test("replies are validated and text is escaped", () => {
 test("the form is enabled only with the fields its mode needs", () => {
   const f: view.Form = { mode: "connect", id: "new", name: "New", url: "https://n:1", principal: "p", dir: "/srv", ref: "", port: "", label: "", fleet: "", tlsCert: "", tlsKey: "", ssh: "", sshPort: "" };
   expect(view.formGate(f, false).enabled).toBe(true);
+  for (const id of ['Bad ID', '-leading', 'a'.repeat(33)]) {
+    expect(view.formGate({ ...f, id }, false)).toEqual({ enabled: false, reason: 'Use a host id of up to 32 lowercase letters, digits, hyphens or underscores. Start with a letter or digit.' });
+  }
+  expect(view.formGate({ ...f, id: ' 0-new_host ' }, false).enabled).toBe(true);
   expect(view.formGate({ ...f, mode: "fresh" }, false)).toEqual({ enabled: false, reason: "Enter the git ref." });
   expect(view.formGate({ ...f, dir: " " }, false)).toEqual({ enabled: false, reason: "Enter the folder." });
   expect(view.formGate(f, true).enabled).toBe(false);

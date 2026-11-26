@@ -1,6 +1,7 @@
 // Pure view logic for the add-host page: form payloads, reply parsing and markup.
 import { parseWorkstationProfile, type WorkstationProfile } from "../src/domain/workstation-profile.ts";
 import { parseHostList } from "./host-state.ts";
+import { HOST_ID } from "../src/domain/enrollment.ts";
 
 export function inventoryGroups(body: unknown): string[] | null {
   const inventory = parseHostList(body);
@@ -87,6 +88,7 @@ export function formGate(f: Form, busy: boolean): { enabled: boolean; reason: st
   for (const [k, what] of [["id", "host id"], ["name", "name"], ["url", "address"], ["principal", "gateway name"], ["dir", "folder"]] as const) {
     if (!f[k].trim()) return { enabled: false, reason: "Enter the " + what + "." };
   }
+  if (!HOST_ID.test(f.id.trim())) return { enabled: false, reason: 'Use a host id of up to 32 lowercase letters, digits, hyphens or underscores. Start with a letter or digit.' };
   if (f.mode === "fresh") {
     for (const [k, what] of [["ref", "git ref"], ["port", "port"], ["label", "service name"], ["fleet", "fleet name"], ["tlsCert", "certificate path"], ["tlsKey", "key path"]] as const) {
       if (!f[k].trim()) return { enabled: false, reason: "Enter the " + what + "." };
