@@ -600,7 +600,7 @@ function renderChrome(h: HostState | undefined) {
   $('workspaceInspector').hidden = !workspaceInspectorOpen || consoleVisible;
   $('workspaceInspectorTitle').textContent = studioTitles[studioView];
   $('workspaceInspectorText').textContent = studioView === 'machine' && h ? `${h.info.name} · ${hostSubtitle(h)}` : 'Workspace-level view. Select a host or a request for its details.';
-  $('studioCrumb').textContent = reviewing ? 'Workspace　/　Task review' : h && (studioView === 'machine' || studioView === 'terminals') ? `Fleet　/　${h.info.name}` : `Workspace　/　${studioTitles[studioView]}`;
+  $('studioCrumb').textContent = h && (studioView === 'machine' || studioView === 'terminals') ? `Fleet　/　${h.info.name}` : `Workspace　/　${studioTitles[studioView]}`;
   const title = $("hostTitle");
   title.textContent = h ? h.info.name : "Fleet Control";
   // The header clips long names, so the full name stays reachable as a tooltip.
@@ -1381,7 +1381,7 @@ function renderStudio() {
     $('workspaceInspectorText').textContent = !q ? 'No reported request in this queue.' : `${row!.h.info.name} · ${row!.owner.project} / ${row!.owner.task} · ${q.status === 'open' ? 'No decision yet' : q.status === 'resolved' ? `Recorded: ${q.response ?? 'response unavailable'} · Awaiting host acknowledgement` : requestLabel[q.status] ?? q.status}`;
   }
   const nav = $('workstationNav');
-  nav.hidden = !machine || !!reviewing || (studioView !== 'machine' && studioView !== 'terminals');
+  nav.hidden = !machine || (studioView !== 'machine' && studioView !== 'terminals');
   if (!nav.hidden && machine) {
     const configuration = manage && mode === 'gateway' ? `<a href="./workstation?host=${encodeURIComponent(machine.info.id)}">Configuration</a>` : '';
     setHtml(nav, `<div class="machine-title"><h1>${esc(machine.info.name)}</h1><small>${esc(machine.info.group ?? 'Ungrouped')} · ${esc(hostSubtitle(machine))}</small></div><div class="machine-tabs"><button type="button" data-view="machine" aria-current="${studioView === 'machine' ? 'page' : 'false'}" data-fk="machine:overview">Overview</button><button type="button" data-view="terminals" aria-current="${studioView === 'terminals' ? 'page' : 'false'}" data-fk="machine:terminals">Terminals</button>${configuration}</div>`);
@@ -1399,7 +1399,7 @@ function renderStudio() {
   const badge = $('decisionBadge');
   badge.hidden = !decisionQueues.pending.length;
   badge.textContent = String(decisionQueues.pending.length);
-  const currentView = reviewing ? "decisions" : studioView === "machine" ? "fleet" : studioView;
+  const currentView = studioView === "machine" ? "fleet" : studioView;
   for (const view of ["settings", "workspaces", "dashboard", "tasks", "decisions", "activity", "fleet", "terminals"]) {
     $("studioNavigation").querySelector(`[data-view="${view}"]`)?.setAttribute("aria-current", view === currentView ? "page" : "false");
   }

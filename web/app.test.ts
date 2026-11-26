@@ -627,6 +627,20 @@ test('all task surfaces retain request origin outside the latest run window', as
   await b.click({ host: 'a' }); expect(b.element('studioContent').innerHTML).toContain('data-session="worker"');
 });
 
+test('opening a task review leaves the machine navigation and breadcrumb in place', async () => {
+  const { b, posts } = await decisions();
+  for (const view of ['machine', 'terminals']) {
+    await b.click({ view });
+    const crumb = b.element('studioCrumb').textContent;
+    await b.click({ ...atlas, openTask:'1', reviewRequest:'a1' });
+    expect(b.element('workstationNav').hidden).toBe(false);
+    expect(b.element('studioCrumb').textContent).toBe(crumb);
+    expect(b.element('projectReview').innerHTML).toContain('Atlas / A1 / rev 3');
+    await b.click({closeReview:'1'});
+  }
+  expect(posts()).toEqual([]);
+});
+
 test('decision inspector shows the current queue receipt, not another project', async () => {
   const { b } = await decisions(); await b.click({ view:'decisions' });
   expect(b.element('workspaceInspectorTitle').textContent).toContain('a1 · revision 3');
