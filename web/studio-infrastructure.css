@@ -28,9 +28,12 @@
 #workstationNav .machine-tabs [aria-current=page] { background:var(--selected); color:var(--accent); font-weight:650 }
 #workstationNav:not([hidden]) ~ #studioContent { padding:12px 14px }
 .machine-status,.machine-work,.machine-sessions { background:var(--surface); border:1px solid var(--line); margin-bottom:12px; overflow-wrap:anywhere; font:400 14px/1.55 var(--sans) }
-.machine-status { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); padding:8px 14px; gap:12px }
-.machine-status :is(b,small,time),.machine-work-row small { display:block }
-.machine-status b { font-size:13px }
+.machine-status { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding:8px 14px; border-width:1px 0 0 }
+.machine-status > div { display:grid; gap:1px; min-width:0 }
+.machine-status > div:first-child { padding-right:16px; border-right:1px solid var(--line) }
+.machine-status :is(small,time) { font:10px/1.55 var(--mono) }
+.machine-work-row small { display:block }
+.machine-status b { font-size:12px }
 .machine-work,.machine-sessions { padding:24px }
 .machine-work h2,.machine-sessions h2 { margin:4px 0 16px; font:700 20px/1.55 var(--sans); letter-spacing:-.5px }
 .machine-work-row,.machine-sessions > div { display:flex; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid var(--line); padding:12px 0 }
@@ -38,8 +41,10 @@
 .machine-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:5px }
 .machine-actions button { white-space:nowrap }
 @media(min-width:701px) { .shell:has(#workstationNav:not([hidden])) { grid-template-columns:195px minmax(0,1fr) } }
-@media(max-width:850px) { .machine-status { grid-template-columns:repeat(auto-fit,minmax(110px,1fr)) } .machine-work-row { flex-wrap:wrap } }
+@media(max-width:850px) { .machine-work-row { flex-wrap:wrap } }
 @media(max-width:700px) {
+  .machine-status { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .machine-status > div:first-child { grid-column:1/-1; padding:0; border:0 }
   #fleetHeading:not([hidden]) { padding:16px 16px 0 }
   #fleetSearch:not([hidden]) { flex-wrap:wrap; margin:14px 16px }
   #fleetSearch label:first-child { flex:1 0 100% }

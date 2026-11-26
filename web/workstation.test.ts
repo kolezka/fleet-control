@@ -58,6 +58,15 @@ test("a change is listed before saving, saved once against the loaded snapshot, 
   expect(p.posts()).toHaveLength(1);
 });
 
+test('configuration breadcrumb follows the confirmed name, not the draft', async () => {
+  const p = await page((_path, init) => ({ status: 200, body: init?.method === 'POST' ? { ...saved, name: 'Compute' } : saved }));
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Build');
+  await p.type('name', 'Compute');
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Build');
+  await p.fire('profileForm:submit');
+  expect(p.element('studioCrumb').textContent).toBe('Fleet　/　Compute');
+});
+
 test("a save the gateway refuses as stale locks the form until the settings are read again", async () => {
   const p = await page((_path, init) => init?.method === "POST" ? { status: 409, body: { error: { message: "Workstation changed. Reload before saving." } } } : { status: 200, body: saved });
   await p.type("group", "Compute");

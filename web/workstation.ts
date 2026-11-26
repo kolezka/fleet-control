@@ -11,6 +11,10 @@ let snapshot: Snapshot | null = null;
 let busy = false;
 const notice = (s:string) => {element('notice').textContent=s};
 const values = () => ({name:field('name').value.trim(),group:field('group').value.trim(),description:field('description').value.trim(),defaultHarness:field('harness').value || null});
+function showSavedName(name: string) {
+  element('machineName').textContent = name;
+  element('studioCrumb').textContent = `Fleet　/　${name}`;
+}
 function diff() {
   if (!snapshot) return;
   const old = {name:snapshot.name,group:snapshot.profile?.group ?? '',description:snapshot.profile?.description ?? '', defaultHarness:snapshot.profile?.defaultHarness ?? null};
@@ -30,7 +34,7 @@ async function load() {
     const raw=await res.json();const profile=parseWorkstationProfile(raw.profile);
     if(typeof raw.name!=='string'||typeof raw.origin!=='string'||(raw.profile!==null&&!profile)) throw Error();
     snapshot={name:raw.name,origin:raw.origin,profile};
-    element('machineName').textContent=raw.name;
+    showSavedName(raw.name);
     element('identity').textContent=`${host} · ${raw.origin} (address and credentials are not editable here)`;
     field('name').value=raw.name;field('group').value=profile?.group ?? '';field('description').value=profile?.description ?? '';field('harness').value=profile?.defaultHarness ?? '';notice('Loaded saved settings.');
   } catch {notice('Cannot read workstation configuration.');} finally {busy=false;lock()}
@@ -44,7 +48,7 @@ element('profileForm').addEventListener('submit',async e=>{
     const res=await fetch(api,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected:snapshot,name,profile}),signal:AbortSignal.timeout(15000)});
     if(res.status===409){snapshot=null;notice('Configuration changed. Reload saved settings before editing again.');return}
     if(!res.ok)throw Error();const stored=await res.json();if(stored.name!==name||stored.origin!==snapshot.origin||!parseWorkstationProfile(stored.profile)||Object.keys(profile).some(k=>stored.profile[k]!==profile[k as keyof typeof profile]))throw Error();
-    snapshot={name,origin:stored.origin,profile:stored.profile};element('machineName').textContent=name;notice('Changes saved.');
+    snapshot={name,origin:stored.origin,profile:stored.profile};showSavedName(name);notice('Changes saved.');
   }catch{snapshot=null;notice('Save not confirmed. Reload to check the stored configuration.')}finally{busy=false;lock()}
 });
 field('reload').addEventListener('click',()=>void load());void load();

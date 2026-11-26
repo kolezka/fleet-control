@@ -31,7 +31,8 @@ try {
   for (const path of ['/add-host','/workstation?host=bench']) {
     await open(path); await run('wait','--text','Fixture bench');
     await check(`document.querySelectorAll('#studioNavigation [data-view]').length === 8`);
-    await check(`document.querySelector('.studio-navigation').getBoundingClientRect().width === 220`);
+    const railWidth = path === '/add-host' ? 220 : 195;
+    await check(`document.querySelector('.studio-navigation').getBoundingClientRect().width === ${railWidth}`);
     await check(`document.querySelector('.titlebar').getBoundingClientRect().height === 52 && document.querySelector('.statusbar').getBoundingClientRect().top === innerHeight - 39`);
     await run('eval',`document.querySelector('main').scrollTop = 500`);
     await check(`document.querySelector('main').scrollTop > 0 && document.scrollingElement.scrollHeight === innerHeight`);
