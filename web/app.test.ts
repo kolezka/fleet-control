@@ -11,7 +11,7 @@ async function browser(hosts: unknown[] | { hosts: unknown[]; enroll: boolean },
   const elements = new Map<string, any>();
   const listeners = new Map<string, (event: any) => unknown>();
   const element = (id: string): any => {
-    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, focus() {}, setAttribute() {}, contains: () => false, querySelector: (sel: string) => element(id + (sel === '.stage-heading' || sel === '.stage-requests' ? ':' + sel.slice(1) : sel === '.typebtn' ? ':typebtn' : ':child')), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
+    if (!elements.has(id)) elements.set(id, { innerHTML: "", textContent: "", value: "", disabled: false, hidden: false, dataset: {}, classList: { toggle() {} }, focus() {}, attributes: new Map<string, string>(), setAttribute(name: string, value: string) { this.attributes.set(name, value); }, contains: () => false, querySelector: (sel: string) => element(id + (sel === '.stage-heading' || sel === '.stage-requests' ? ':' + sel.slice(1) : sel === '.typebtn' ? ':typebtn' : ':child')), closest: () => element(id + ":parent"), replaceChildren() {}, addEventListener: (kind: string, fn: any) => listeners.set(id + ":" + kind, fn) });
     const node = elements.get(id);
     if (id === 'projectReview' && !node.showModal) Object.assign(node, {
       open: false, showModal() { node.open = true; }, close() { node.open = false; },
@@ -36,16 +36,18 @@ async function browser(hosts: unknown[] | { hosts: unknown[]; enroll: boolean },
   source = source.replace(/import {([\s\S]*?)} from ".\/host-state.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = state;");
   source = source.replace(/import {([\s\S]*?)} from ".\/fleet-admin.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = adminModule;");
   source = source.replace(/import {([\s\S]*?)} from ".\/agents.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = agentsModule;");
+  source = source.replace(/import \{([^}]+)\} from ".\/studio-prefs.ts";/, (_m, names) => "const {" + names.replace(/type \w+,?/g, "") + "} = prefsModule;");
+  source = source.replace('import { navigationMarkup } from "./studio-navigation.ts";', 'const navigationMarkup = "";');
   source = source.replace(/export /g, "");
   source += "\nreturn { loadHostList, getFleet: () => fleet };";
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync("(async () => {" + source + "})()");
   const agentsModule = await import("./agents.ts");
   const leaseModule = await import("./lease.ts");
   const adminModule = await import("./fleet-admin.ts");
-  const run = new Function("adminModule", "FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
+  const run = new Function("prefsModule", "adminModule", "FakeTerminal", "leaseModule", "state", "agentsModule", "document", "window", "fetch", "setInterval", "location", "CSS", "getComputedStyle", "WebSocket", "setTimeout", "clearTimeout", "return " + js);
   const later = timers ? (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; } : setTimeout;
   const cancel = timers ? (t: unknown) => { const i = timers.indexOf(t as never); if (i >= 0) timers.splice(i, 1); } : clearTimeout;
-  const app = await run(adminModule, FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
+  const app = await run(await import('./studio-prefs.ts'), adminModule, FakeTerminal, leaseModule, state, agentsModule, document, { matchMedia: () => ({ matches: false }) }, fetch, (fn: () => void) => { intervals.push(fn); return 0; }, { assign() {}, href }, { escape: (s: string) => s }, () => ({ getPropertyValue: () => "" }), FakeSocket, later, cancel);
   await new Promise(resolve => setTimeout(resolve, 0));
   const click = async (dataset: Record<string, string>) => {
     await listeners.get("click")!({ target: { closest: () => ({ dataset }) } });
@@ -69,6 +71,17 @@ test('settings opens on Appearance, preserves drafts across tabs and returns to 
   expect(html()).toContain('Preferences applied');
   expect(html()).toContain('data-view="terminals">Back to console');
   await b.click({ view: 'terminals' }); expect(b.element('studioConsole').hidden).toBe(false);
+  expect(posts()).toEqual([]);
+});
+
+test('desktop console inspector starts closed and can be opened and closed without requests', async () => {
+  const { b, posts } = await decisions();
+  await b.click({ view: 'terminals' });
+  const toggle = b.element('inspectorToggle');
+  const clickToggle = () => b.listeners.get('click')!({ target: { closest: () => ({ id: 'inspectorToggle', dataset: {} }) } });
+  expect(toggle.attributes.get('aria-expanded')).toBe('false');
+  await clickToggle(); expect(toggle.attributes.get('aria-expanded')).toBe('true');
+  await clickToggle(); expect(toggle.attributes.get('aria-expanded')).toBe('false');
   expect(posts()).toEqual([]);
 });
 
@@ -572,6 +585,15 @@ test('project lists disclose their current-data scope even when all reads succee
   }
 });
 
+test('dashboard puts the longest waiting approval first without reversing history', async () => {
+  const q = { runId: 'r', projectId: 'Atlas', taskId: 'A', phase: 'build', kind: 'approval', status: 'open', revision: 1, evidence: [], allowedResponses: [] };
+  const requests = [{ ...q, id: 'new', question: 'Newer approval?', createdAt: '2026-01-02T10:00:00Z' }, { ...q, id: 'old', question: 'Older approval?', createdAt: '2026-01-01T10:00:00Z' }];
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { runs: [], requests } : path.endsWith('/sessions') ? { sessions: [] } : { commands: [] });
+  const html = b.element('studioContent').innerHTML;
+  expect(html.match(/<h3>(Older approval\?|Newer approval\?)<\/h3>/g)).toEqual(['<h3>Older approval?</h3>', '<h3>Newer approval?</h3>']);
+  expect([...html.matchAll(/<time datetime="([^"]+)"/g)].map(m => m[1])).toEqual(requests.map(q => q.createdAt));
+});
+
 test('dashboard identifies the project, task and revision before opening review', async () => {
   const { b } = await decisions();
   const html = b.element('studioContent').innerHTML;
@@ -596,6 +618,13 @@ test('dashboard return links survive resolution and require matching session evi
   expect(html).toMatch(/<button[^>]*data-open-task="1"[^>]*data-task="A2"[^>]*>Atlas \/ A2 ↗<\/button>/);
   expect(html).toContain('<h3>Approved · Awaiting host acknowledgement</h3>');
   expect(html).not.toContain('data-answer=');
+});
+
+test('all task surfaces retain request origin outside the latest run window', async () => {
+  const q = { id: 'one', runId: 'older', projectId: 'Atlas', taskId: 'task', origin: 'worker', phase: 'build', kind: 'approval', question: 'Continue?', status: 'open', revision: 1, evidence: [], allowedResponses: [] };
+  const b = await browser([{ id: 'a', name: 'Runner', apiBase: '/api/hosts/a' }], path => path.includes('/requests') ? { runs: [], requests: [q] } : path.endsWith('/sessions') ? { sessions: [{ name: 'worker', registered: true, running: true, model: { state: 'not_applicable' } }] } : { commands: [] });
+  for (const view of ['dashboard','decisions','tasks']) { await b.click({ view }); expect(b.element('studioContent').innerHTML).toContain('Runner / worker'); }
+  await b.click({ host: 'a' }); expect(b.element('studioContent').innerHTML).toContain('data-session="worker"');
 });
 
 test('review names the scope and binds the approval label to the shown revision', async () => {

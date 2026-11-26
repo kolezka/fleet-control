@@ -10,7 +10,7 @@
 #terminals .stage-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0; padding:0 6px }
 #terminals:is([data-focused=true],[data-layout=stacked]) .stage-grid,#terminals .stage-grid:has(> :only-child) { grid-template-columns:minmax(0,1fr) }
 #terminals[data-focused=true] .terminal:not(.active),#terminals[data-focused=true] .stage-focus { display:none }
-#terminals .terminal { display:flex; flex-flow:column; min-width:0; min-height:345px; padding:6px; background:#181b1f; color:#d9dde4; border:1px solid #32363d; border-radius:0 }
+#terminals .terminal { display:flex; flex-flow:column; min-width:0; min-height:0; height:auto; padding:6px; background:#181b1f; color:#d9dde4; border:1px solid #32363d; border-radius:0 }
 #terminals .terminal.typing { outline-color:#a8bcda }
 #terminals .termhead,#terminals .termfooter { background:transparent; border:0; padding:2px 4px; flex-wrap:wrap }
 #terminals .termhead strong { margin-right:auto; font:650 14px/1.55 var(--sans); overflow-wrap:anywhere }
@@ -24,7 +24,7 @@
 .stage-requests button,#projectReview button { padding:7px 12px; border-radius:5px; border:1px solid var(--line); background:var(--surface); color:var(--ink) }
 #projectReview { width:min(430px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); margin:auto; overflow:auto; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font:14px/1.55 var(--sans); overflow-wrap:anywhere }
 #projectReview:not([open]) { display:none }
-#projectReview::backdrop { background:rgb(20 24 30 / 32%) }
+#projectReview::backdrop { background:rgb(0 0 0 / 15%) }
 #projectReview header { margin:0 0 14px; border-bottom:1px solid var(--line); padding-bottom:8px }
 #projectReview .review-body + .review-body { border-top:1px solid var(--line); margin-top:16px; padding-top:16px }
 #projectReview h2 { margin:4px 0; font-size:18px; letter-spacing:-.35px }
@@ -34,4 +34,17 @@
 #projectReview .review-status,#projectReview .review-actions { margin-top:12px }
 #projectReview .review-actions { display:flex; flex-wrap:wrap; gap:8px }
 #projectReview button[data-answer=approve] { background:var(--ink); color:var(--surface) }
-@media(max-width:700px) { #terminals .stage-grid { grid-template-columns:minmax(0,1fr) } }
+@media(min-width:701px) {
+  #terminals:has(.stage-grid) { display:flex; flex-direction:column }
+  #terminals .stage-grid { flex:1; min-height:0; grid-auto-rows:minmax(135px,1fr); overflow:auto }
+  #terminals .xterm-host { min-height:0 }
+  #terminals :is(.stage-heading,.stage-meta,.stage-requests,.termhead,.termfooter) { flex:none }
+  #projectReview { margin:auto 12px 58px auto; max-height:calc(100dvh - 80px) }
+}
+@media(min-width:901px) { .shell:not(.only-terminal) #studioConsole { grid-template-columns:minmax(0,1fr) 240px } }
+@media(max-width:900px) { #studioConsole > .inspector { width:min(240px,90vw); top:52px } }
+@media(max-width:700px) {
+  #terminals .stage-grid { grid-template-columns:minmax(0,1fr) }
+  #terminals .xterm-host { flex:none; height:48dvh }
+  #terminals[data-focused=true] .xterm-host { height:66dvh }
+}

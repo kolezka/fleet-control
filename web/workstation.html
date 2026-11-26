@@ -1,14 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Workstation configuration | Fleet Control</title><link rel="stylesheet" href="./machine-editor.css"></head>
+<title>Workstation configuration | Fleet Control</title><link rel="stylesheet" href="./deck.css"><link rel="stylesheet" href="./live.css"><link rel="stylesheet" href="./studio.css"><link rel="stylesheet" href="./studio-shell.css"><link rel="stylesheet" href="./machine-editor.css"></head>
 <body class="machine-editor">
-  <nav class="rail" aria-label="Workspace navigation">
-    <a class="brand" href="./"><b aria-hidden="true">F/</b> Fleet Control</a>
-    <small>Workspace</small><a href="./">Dashboard</a>
-    <small>Shared infrastructure</small><a href="./?view=fleet">Fleet</a><a href="./?view=terminals">Terminals</a>
-  </nav>
-  <header class="crumb">Workspace / Configuration</header>
-  <main><div class="editor-content"><header><small class="cap">Fleet / Workstation</small><h1 id="machineName">Workstation configuration</h1>
+<div class="shell" id="app">
+  <nav aria-label="Workspaces" class="studio-rail studio-navigation" id="studioNavigation"></nav>
+  <header class="titlebar"><button type="button" id="navigationToggle" aria-controls="studioNavigation" aria-expanded="false">Navigation</button><strong id="studioCrumb">Workspace　/　Configuration</strong></header>
+  <main class="editor-scroll" tabindex="-1"><div class="editor-content"><header><small class="cap">Fleet / Workstation</small><h1 id="machineName">Workstation configuration</h1>
     <nav class="tabs" aria-label="Selected workstation"><a id="overviewLink" href="./">Overview</a><a id="terminalsLink" href="./">Terminals</a><strong aria-current="page">Configuration</strong></nav></header>
     <form class="editor-card" id="profileForm"><fieldset id="fields" disabled><legend class="cap">Workstation configuration</legend>
       <h2>Identity</h2>
@@ -20,5 +17,7 @@
       <h2>Changes to review</h2><pre class="callout" id="changes" aria-live="polite">No settings loaded.</pre>
       <button class="primary" type="submit" id="save" disabled>Save changes</button>
     </fieldset></form>
-    <footer><button type="button" id="reload">Reload saved settings</button><span role="status" id="notice"></span></footer>
-  </div></main><script type="module" src="./workstation.ts"></script></body></html>
+    <div class="editor-actions"><button type="button" id="reload">Reload saved settings</button><span role="status" id="notice"></span></div>
+  </div></main>
+  <footer class="statusbar"><span id="editorStatus">Reading host inventory</span><a href="./?view=fleet">Fleet inventory</a></footer>
+</div><script type="module" src="./editor-shell.ts"></script><script type="module" src="./workstation.ts"></script></body></html>

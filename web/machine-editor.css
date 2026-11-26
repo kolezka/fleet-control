@@ -1,48 +1,41 @@
-/* Standalone gateway editors use Studio's light canvas, rail and bordered form. */
-.machine-editor { --paper:#fff; --canvas:#f4f5f6; --line:#dde1e6; --ink:#20252b; --muted:#535e6a; margin:0; color:var(--ink); background:var(--canvas); font:14px/1.55 -apple-system,system-ui,sans-serif; display:grid; grid-template:'rail crumb' 52px 'rail main' 1fr / clamp(195px,15.3vw,220px) minmax(0,1fr); min-height:100dvh }
-.machine-editor * { box-sizing:border-box }
-.machine-editor .rail { grid-area:rail; align-self:start; position:sticky; top:0; min-height:100dvh; background:var(--paper); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:0 10px; gap:2px }
+/* The editors use the same viewport grid and color tokens as the workspace. */
+.machine-editor .editor-scroll { grid-area:content; min-height:0; overflow:auto; min-width:0; background:var(--bg); padding:32px clamp(16px,3vw,48px); font:14px/1.55 var(--sans) }
 .machine-editor a { color:inherit; text-underline-offset:3px }
-.machine-editor .rail a { text-decoration:none; padding:7px 10px; border-radius:4px }
-.machine-editor .rail a:hover,.machine-editor .tabs a:hover { background:var(--canvas) }
-.machine-editor .rail .brand { display:flex; gap:8px; align-items:center; height:52px; margin:0 -10px 10px; padding:0 14px; border-bottom:1px solid var(--line); font-size:15px; font-weight:700 }
-.machine-editor .brand b { background:var(--ink); color:var(--paper); border-radius:5px; padding:1px 5px }
-.machine-editor .rail small,.machine-editor .cap { color:var(--muted); font:600 11px/1.55 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase }
-.machine-editor .rail small { margin:14px 10px 5px }
-.machine-editor .crumb { grid-area:crumb; background:var(--paper); border-bottom:1px solid var(--line); padding:14px 24px; font-weight:600 }
-.machine-editor main { grid-area:main; min-width:0; padding:38px clamp(20px,5vw,72px) 28px }
-.machine-editor .editor-content { max-width:850px; margin:0 auto 0 0 }
-.machine-editor h1 { font-size:clamp(28px,3vw,40px); line-height:1.15; margin:8px 0 }
-.machine-editor p { margin:8px 0 14px; overflow-wrap:anywhere }
-.machine-editor .tabs,.machine-editor footer,.machine-editor .formactions { display:flex; align-items:center; flex-wrap:wrap; gap:10px }
-.machine-editor .tabs { margin:14px 0 }
-.machine-editor .tabs > * { padding:5px 10px; text-decoration:none }
-.machine-editor .tabs strong { border-bottom:2px solid currentColor }
-.machine-editor .editor-card { min-width:0; background:var(--paper); border:1px solid var(--line); padding:24px; margin:18px 0 }
-.machine-editor h2 { font-size:18px; margin:20px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px }
-.machine-editor h3 { font-size:15px; margin:16px 0 4px }
-.machine-editor .field { display:grid; gap:4px; margin:12px 0 }
-.machine-editor :is(input,select,button) { font:inherit; color:inherit; background:var(--paper); border:1px solid var(--line); border-radius:4px; padding:7px 12px }
-.machine-editor :is(input,select) { width:min(100%,440px); padding:8px }
-.machine-editor :is(small,.phase-note,#formStatus,#notice) { color:var(--muted) }
-.machine-editor :is(button,a,input,select):focus-visible { outline:2px solid #2955a4; outline-offset:2px }
-.machine-editor button:not(:disabled) { cursor:pointer }
-.machine-editor button:disabled { opacity:.55 }
-.machine-editor .primary,.machine-editor button[aria-pressed=true] { background:var(--ink); color:var(--paper); border-color:var(--ink) }
-.machine-editor fieldset { min-width:0; margin:0; padding:0; border:0 }
-.machine-editor .paths { padding:8px 16px 12px; border:1px solid var(--line) }
-.machine-editor .paths button { margin:4px 3px 0 0 }
-.machine-editor :is(.callout,.command,#changes) { padding:12px; background:var(--canvas); white-space:pre-wrap; overflow-wrap:anywhere }
-.machine-editor .alert { border-left:3px solid #9d3325; padding:12px; background:var(--paper) }
-.machine-editor .pendinglist { padding:0; list-style:none }
-.machine-editor .pending { border-top:1px solid var(--line); margin-top:16px }
-.machine-editor .pending h3 small { display:block; overflow-wrap:anywhere }
-.machine-editor footer { justify-content:space-between }
-@media (max-width:720px) {
-  .machine-editor { grid-template:'rail' auto 'crumb' auto 'main' 1fr / minmax(0,1fr) }
-  .machine-editor .rail { min-height:0; position:static; flex-flow:row wrap; align-items:center; border-bottom:1px solid var(--line) }
-  .machine-editor .rail .brand { border:0; margin:0; padding:0 8px }
-  .machine-editor .rail small { display:none }
-  .machine-editor .crumb { padding:8px 16px }
-  .machine-editor main,.machine-editor .editor-card { padding:16px }
-}
+.machine-editor .studio-navigation a { text-decoration:none }
+.machine-editor .studio-navigation a:hover { background:var(--selected) }
+.machine-editor .host-sessions[hidden] { display:none }
+.machine-editor .project-picker > a { display:block; border:1px solid var(--line); border-radius:4px; padding:7px 8px; font:600 14px/1.5 var(--sans) }
+.machine-editor .studio-rail-foot a { border-top:1px solid var(--line) }
+.machine-editor .studio-navigation [aria-current=page] { background:var(--selected); color:var(--accent) }
+.machine-editor .studio-navigation summary { cursor:pointer; padding:2px 6px; color:var(--muted) }
+.machine-editor .host-sessions a { display:block; margin:3px 0; padding:3px 5px; overflow-wrap:anywhere }
+.editor-content .cap { color:var(--muted); font:650 10px/1.55 var(--mono); letter-spacing:.12em; text-transform:uppercase }
+[data-descriptions=hide] .editor-content > header > p { display:none }
+.editor-content { max-width:850px; margin:0 auto 0 0 }
+.editor-content h1 { font-size:clamp(28px,3vw,40px); line-height:1.15; margin:8px 0 }
+.editor-content p { margin:8px 0 14px; overflow-wrap:anywhere }
+.editor-content .tabs,.editor-content .editor-actions,.editor-content .formactions { display:flex; align-items:center; flex-wrap:wrap; gap:10px }
+.editor-content .tabs { margin:14px 0 }
+.editor-content .tabs > * { padding:5px 10px; text-decoration:none }
+.editor-content .tabs strong { border-bottom:2px solid currentColor }
+.editor-content .editor-card { min-width:0; background:var(--surface); border:1px solid var(--line); padding:24px; margin:18px 0 }
+.editor-content h2 { font-size:18px; margin:20px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px }
+.editor-content h3 { font-size:15px; margin:16px 0 4px }
+.editor-content .field { display:grid; gap:4px; margin:12px 0 }
+.editor-content :is(input,select,button) { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:7px 12px }
+.editor-content :is(input,select) { width:min(100%,440px); padding:8px }
+.editor-content :is(small,.phase-note,#formStatus,#notice) { color:var(--muted) }
+.editor-content :is(button,a,input,select):focus-visible { outline:2px solid var(--accent); outline-offset:2px }
+.editor-content button:not(:disabled) { cursor:pointer }
+.editor-content button:disabled { opacity:.55 }
+.editor-content .primary,.editor-content button[aria-pressed=true] { background:var(--ink); color:var(--surface); border-color:var(--ink) }
+.editor-content fieldset { min-width:0; margin:0; padding:0; border:0 }
+.editor-content .paths { padding:8px 16px 12px; border:1px solid var(--line) }
+.editor-content .paths button { margin:4px 3px 0 0 }
+.editor-content :is(.callout,.command,#changes) { padding:12px; background:var(--bg); white-space:pre-wrap; overflow-wrap:anywhere }
+.editor-content .alert { border-left:3px solid var(--bad); padding:12px; background:var(--surface) }
+.editor-content .pendinglist { padding:0; list-style:none }
+.editor-content .pending { border-top:1px solid var(--line); margin-top:16px }
+.editor-content .pending h3 small { display:block; overflow-wrap:anywhere }
+.editor-content .editor-actions { justify-content:space-between }
+@media(max-width:700px) { .machine-editor .editor-scroll,.editor-content .editor-card { padding:16px } }

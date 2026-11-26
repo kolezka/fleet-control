@@ -1,14 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Add workstation | Fleet Control</title><link rel="stylesheet" href="./machine-editor.css"></head>
+<title>Add workstation | Fleet Control</title><link rel="stylesheet" href="./deck.css"><link rel="stylesheet" href="./live.css"><link rel="stylesheet" href="./studio.css"><link rel="stylesheet" href="./studio-shell.css"><link rel="stylesheet" href="./machine-editor.css"></head>
 <body class="machine-editor">
-  <nav class="rail" aria-label="Workspace navigation">
-    <a class="brand" href="./"><b aria-hidden="true">F/</b> Fleet Control</a>
-    <small>Workspace</small><a href="./">Dashboard</a>
-    <small>Shared infrastructure</small><a href="./?view=fleet">Fleet</a><a href="./?view=terminals">Terminals</a>
-  </nav>
-  <header class="crumb">Workspace / Add host</header>
-  <main><div class="editor-content"><header><small class="cap">Fleet / Onboarding</small><h1>Add workstation</h1>
+<div class="shell" id="app">
+  <nav aria-label="Workspaces" class="studio-rail studio-navigation" id="studioNavigation"></nav>
+  <header class="titlebar"><button type="button" id="navigationToggle" aria-controls="studioNavigation" aria-expanded="false">Navigation</button><strong id="studioCrumb">Workspace　/　Add host</strong></header>
+  <main class="editor-scroll" tabindex="-1"><div class="editor-content"><header><small class="cap">Fleet / Onboarding</small><h1>Add workstation</h1>
     <p>Register a running service or prepare a separate installation plan.</p></header>
     <div class="alert" id="alert" role="alert" hidden></div>
           <form id="hostForm" class="editor-card" novalidate>
@@ -55,5 +52,7 @@
             <section class="applynote"><h3>What happens</h3><ul><li>The token stays on this machine, in a 0600 file next to the gateway config.</li><li>The command adds only the token's hash on the host. Pasting it twice changes nothing.</li><li>Check adds the host only after it answers with this name and the operator role.</li><li>Cancel removes the token here. If the command already ran, revoke the name on the host too.</li></ul></section>
           </div>
         </aside>
-    <footer><a href="./?view=terminals">Back to terminals</a><span>Single operator over Tailscale</span></footer>
-  </div></main><script type="module" src="./add-host.ts"></script></body></html>
+    <div class="editor-actions"><a href="./?view=terminals">Back to terminals</a><span>Single operator over Tailscale</span></div>
+  </div></main>
+  <footer class="statusbar"><span id="editorStatus">Reading host inventory</span><a href="./?view=fleet">Fleet inventory</a></footer>
+</div><script type="module" src="./editor-shell.ts"></script><script type="module" src="./add-host.ts"></script></body></html>

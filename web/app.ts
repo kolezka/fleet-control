@@ -14,7 +14,12 @@ import {
 import { type AdminView, changeable, moveGate, parseMove, draftOf, emptyAdmin, fileDirty, fileGate, fileName, fillStart, hostGate, infraGate, parentIn, parseConf, parseFileOpen, parseFileRoots, parseInfra, parseRestartable, parseService, parseSettings, parseTokens, parseWatchdog, restartable, restartGate, saveGate, serviceGate, serviceWord, settingsBody, settingsGate, startCommandGate, tokenGate, watchdogGate } from "./fleet-admin.ts";
 import { type AgentForm, type AgentKind, type AgentList, KIND_LABEL, agentStateText, canStop, kindsOf, modelsFor, parseAgents, settling, startGate } from "./agents.ts";
 
+import { applyAppearance, preferenceOptions, readPreferences, savePreferences, type Preference } from "./studio-prefs.ts";
+
+import { navigationMarkup } from "./studio-navigation.ts";
+
 const $ = (id: string) => document.getElementById(id)!;
+$('studioNavigation').innerHTML = navigationMarkup;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 export function modelLabel(m: Model): string {
@@ -75,7 +80,7 @@ let installer = false;
 let enroll = false;
 // The gateway can rotate its own token for a host and remove a host.
 let manage = false;
-let inspectorOpen = true;
+let inspectorOpen = false;
 const apply = (f: Fleet) => { fleet = f; };
 
 function css(name: string) {
@@ -127,7 +132,7 @@ function renderNav() {
       const title = unknown ? "The host could not be read; this is the last known state" : modelDetail(s.model);
       return `<button type="button" class="session" data-fk="s:${esc(id)}:${esc(s.name)}" data-host="${esc(id)}" data-session="${esc(s.name)}" aria-pressed="${here && h.selectedSession === s.name}"><span class="dot ${s.running && !unknown ? "good" : ""}"></span><span><strong>${esc(s.name)}</strong><small title="${esc(title)}">${esc(status)}</small></span></button>`;
     }).join("");
-    const expanded = hostDisclosures.get(id) ?? here;
+    const expanded = hostDisclosures.get(id) ?? (here && preferences.groups !== 'collapsed');
     const count = h.sessionsRead.status === 'ready' ? String(h.sessions.length) : '?';
     return `<section class="hostgroup" aria-label="${esc(h.info.name)}"><div class="studio-host-row"><button type="button" class="host-disclosure" data-fk="expand:${esc(id)}" data-toggle-host="${esc(id)}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(h.info.name)}" aria-expanded="${expanded}">${expanded ? '▾' : '▸'}</button><button type="button" class="hostbutton" data-fk="h:${esc(id)}" data-host="${esc(id)}" title="${esc(h.info.name)} · ${esc(hostSubtitle(h))}" aria-pressed="${here && studioView === 'machine'}">${HOST_ICON}<span class="hostidentity"><strong>${esc(h.info.name)}</strong></span><small aria-label="${esc(hostSubtitle(h))}">${count}</small></button></div>${expanded ? `<div class="host-sessions">${rows}</div>` : ''}</section>`;
   };
@@ -149,14 +154,8 @@ const SIZE_HINT = /\x1b\]777;fleet-size;(\d+);(\d+)\x07/;
 // resize of the agent window. After an unexpected close the pane reconnects with backoff; a new
 // tmux attach redraws the whole screen, so the old terminal is replaced, not appended to.
 type Pane = { stop(): void; setFontSize(size: number): void };
-const preferenceOptions = {
-  theme: { light: 'Light', dark: 'Dark', system: 'System' }, byline: { show: 'Show', hide: 'Hide' },
-  font: { '12': '12', '13': '13', '15': '15', '17': '17' }, layout: { grid: 'Side by side', stacked: 'Stacked' },
-  evidence: { collapsed: 'Collapsed', expanded: 'Expanded' }, groups: { expanded: 'Expanded', collapsed: 'Collapsed' },
-};
-type Preference = keyof typeof preferenceOptions;
-const preferences: Record<Preference, string> = { theme: 'light', byline: 'show', font: '13', layout: 'grid', evidence: 'collapsed', groups: 'expanded' };
-document.documentElement.dataset.theme = preferences.theme;
+const preferences = readPreferences();
+applyAppearance(document.documentElement, preferences);
 let draftPrefs = { ...preferences };
 let preferenceStatus = 'No pending changes';
 const preferencesDirty = () => (Object.keys(preferences) as Preference[]).some(key => preferences[key] !== draftPrefs[key]);
@@ -367,7 +366,6 @@ function renderPanes(h: HostState | undefined) {
   }
 }
 
-// As in the baseline: below 901px the supervisor panel is an overlay, so it starts closed.
 function setInspector(open: boolean, focusToggle = false) {
   inspectorOpen = open;
   $("app").classList.toggle("only-terminal", !open);
@@ -418,6 +416,9 @@ function inReview(h: HostState, q: Req): boolean {
   const want = reviewing.owner, owner = requestOwner(q);
   if (!want) return owner === "none";
   return typeof owner === "object" && owner.project === want.project && owner.task === want.task;
+}
+function reportedSession(q?: Req, run?: { orchestrator: string }) {
+  return typeof q?.origin === 'string' && q.origin ? q.origin : run?.orchestrator;
 }
 function renderRequests(h: HostState | undefined) {
   if (reviewing && (!h || h.info.supervisor || h.info.id !== reviewing.host)) reviewing = null;
@@ -1329,8 +1330,12 @@ function preferenceField(key: Preference, label: string, hint: string) {
   return `<label class="pref-field"><span><strong>${label}</strong><small>${hint}</small></span><select data-pref="${key}" data-fk="pref:${key}">${options}</select></label>`;
 }
 const studioTitles = { settings: 'Settings', workspaces: "Workspaces", dashboard: "Dashboard", tasks: "Tasks", decisions: "Decisions", activity: "Activity", fleet: "Fleet", terminals: "Terminals", machine: "Workstation" };
-let studioView: keyof typeof studioTitles = "dashboard";
+const initialParams = new URL(location.href).searchParams;
+const initialView = initialParams.get('view');
+let studioView: keyof typeof studioTitles = !initialParams.has('host') && initialView && initialView !== 'machine' && Object.hasOwn(studioTitles, initialView)
+  ? initialView as keyof typeof studioTitles : 'dashboard';
 let focusedPane: string | null = null;
+let linkedSession: { host: string; name: string } | null = null;
 let studioProject: string | null = null;
 const localProjects = new Set<string>();
 let visibleProjects: string[] = [];
@@ -1436,7 +1441,8 @@ function renderStudio() {
     const cards = queue.filter(({h}) => !decisionsHost || h.info.id === decisionsHost).map(({ h, q, owner }) => {
       const run = h.coord.runs.find(r => r.id === q.runId && r.projectId === owner.project && r.taskId === owner.task);
       const status = q.status === 'open' && q.kind === 'approval' ? 'Waiting for approval' : requestLabel[q.status] ?? q.status;
-      return projectRow(rowContext(owner, q.revision), esc(q.question), `${esc(h.info.name)}${run?.orchestrator ? ' / ' + esc(run.orchestrator) : ''} · ${esc(status)}`, rowReview(h, owner, q));
+      const source = reportedSession(q, run);
+      return projectRow(rowContext(owner, q.revision), esc(q.question), `${esc(h.info.name)}${source ? ' / ' + esc(source) : ''} · ${esc(status)}`, rowReview(h, owner, q));
     });
     if (decisionsHost && active === '' && decisionQueue === 'pending') {
       const h = fleet.hosts[decisionsHost];
@@ -1477,8 +1483,9 @@ function renderStudio() {
       if (tasks.has(key)) continue;
       const run = 'run' in row ? row.run : h.coord.runs.find(r => r.id === row.q.runId && r.projectId === project && r.taskId === task);
       const revision = 'q' in row ? row.q.revision : row.run.revision;
-      const terminal = run?.orchestrator && h.sessionsRead.status === 'ready' && h.sessions.some(s => s.name === run.orchestrator && s.running) ? `<button data-host="${id}" data-session="${esc(run.orchestrator)}" data-fk="focus:${esc(key)}">Focus terminal ↗</button>` : '';
-      tasks.set(key, `<div class="machine-work-row"><div><small>${esc(project)} / ${esc(task)}${Number.isInteger(revision) ? ` · revision ${revision}` : ''}</small><h3>${esc('q' in row ? row.q.question : task)}</h3><small>${esc(run?.orchestrator || 'Session not reported')}</small></div><div class="machine-actions"><button data-fk="task:${esc(key)}" data-host="${id}" data-project="${esc(project)}" data-task="${esc(task)}" data-machine-task="1">Open project task</button>${terminal}</div></div>`);
+      const source = reportedSession('q' in row ? row.q : undefined, run);
+      const terminal = source && h.sessionsRead.status === 'ready' && h.sessions.some(s => s.name === source && s.running) ? `<button data-host="${id}" data-session="${esc(source)}" data-fk="focus:${esc(key)}">Focus terminal ↗</button>` : '';
+      tasks.set(key, `<div class="machine-work-row"><div><small>${esc(project)} / ${esc(task)}${Number.isInteger(revision) ? ` · revision ${revision}` : ''}</small><h3>${esc('q' in row ? row.q.question : task)}</h3><small>${esc(source || 'Session not reported')}</small></div><div class="machine-actions"><button data-fk="task:${esc(key)}" data-host="${id}" data-project="${esc(project)}" data-task="${esc(task)}" data-machine-task="1">Open project task</button>${terminal}</div></div>`);
     }
     const workReadable = !h.info.supervisor && h.coordRead.status === 'ready';
     const workEmpty = workReadable ? 'No assigned tasks in the current runs or requests.' : 'Project work data unavailable.';
@@ -1502,7 +1509,8 @@ function renderStudio() {
       const request = requests.length === 1 ? requests[0] : undefined;
       const run = request ? runs.find(r => r.id === request.runId) : runs.length === 1 ? runs[0] : undefined;
       const status = !requests.length ? 'No current decisions' : request ? (request.status === 'open' && request.kind === 'approval' ? 'Waiting for approval' : requestLabel[request.status] ?? request.status) : `${requests.filter(q => q.status === 'open').length} open of ${requests.length} decisions`;
-      return projectRow(rowContext(owner, request?.revision ?? run?.revision), esc(owner.task), `${esc(h.info.name)}${run?.orchestrator ? ' / ' + esc(run.orchestrator) : ''} · ${esc(status)}`, requests.length ? rowReview(h, owner, request) : '', 'studio-task-' + JSON.stringify([h.info.id, owner.project, owner.task]));
+      const source = reportedSession(request, run);
+      return projectRow(rowContext(owner, request?.revision ?? run?.revision), esc(owner.task), `${esc(h.info.name)}${source ? ' / ' + esc(source) : ''} · ${esc(status)}`, requests.length ? rowReview(h, owner, request) : '', 'studio-task-' + JSON.stringify([h.info.id, owner.project, owner.task]));
     });
     body = `<div class="project-page">${projectBox(cards.join('') || '<p>No tasks in the available run and request data.</p>')}</div>`;
   }
@@ -1517,15 +1525,17 @@ function renderStudio() {
     }).join(' ');
     const taskLinks = new Map<string, string>();
     const approvalRows: string[] = [];
-    for (const { h, owner, q } of scoped) {
+    const requestTime = (q: Req) => { const time = Date.parse(q.createdAt ?? ''); return Number.isFinite(time) ? time : Infinity; };
+    for (const { h, owner, q } of [...scoped].sort((a, b) => requestTime(a.q) - requestTime(b.q) || a.owner.task.localeCompare(b.owner.task) || a.q.id.localeCompare(b.q.id))) {
       const run = h.coord.runs.find(run => run.id === q.runId && run.projectId === owner.project && run.taskId === owner.task);
-      const session = run?.orchestrator && h.sessionsRead.status === 'ready' && h.sessions.some(s => s.name === run.orchestrator) ? run.orchestrator : null;
+      const source = reportedSession(q, run);
+      const session = source && h.sessionsRead.status === 'ready' && h.sessions.some(s => s.name === source && s.running) ? source : null;
       const context = `${esc(owner.project)} / ${esc(owner.task)}`;
       const taskTarget = `data-open-task="1" data-host="${esc(h.info.id)}" data-project="${esc(owner.project)}" data-task="${esc(owner.task)}"`;
       const target = session ? `data-host="${esc(h.info.id)}" data-session="${esc(session)}"` : taskTarget;
       const key = JSON.stringify([h.info.id, owner.project, owner.task, session]);
       taskLinks.set(key, `<button type="button" ${target} title="${session ? 'Open terminal' : 'Review task'}: ${esc(h.info.name)}${session ? ' / ' + esc(session) : ''}">${context} ↗</button>`);
-      if (q.status === 'open') approvalRows.push(`<div class="dashboard-row"><div><small>${context} / rev ${esc(String(q.revision))}</small><h3>${esc(String(q.question))}</h3><small>${esc(h.info.name)}${session ? ' / ' + esc(session) : ''} · ${q.kind === 'approval' ? 'Waiting for approval' : 'Waiting for a decision'}</small></div><button type="button" ${taskTarget} data-review-request="${esc(q.id)}" aria-label="Review ${context}: ${esc(String(q.question))}">Review →</button></div>`);
+      if (q.status === 'open') approvalRows.push(`<div class="dashboard-row"><div><small>${context} / rev ${esc(String(q.revision))}</small><h3>${esc(String(q.question))}</h3><small>${esc(h.info.name)}${source ? ' / ' + esc(source) : ''} · ${q.kind === 'approval' ? 'Waiting for approval' : 'Waiting for a decision'}</small></div><button type="button" ${taskTarget} data-review-request="${esc(q.id)}" aria-label="Review ${context}: ${esc(String(q.question))}">Review →</button></div>`);
     }
     const health = needsAttention.map(h => `<button type="button" data-host="${esc(h.info.id)}">${esc(h.info.name)} · ${esc(hostSubtitle(h))}</button>`).join(' ');
     const unassigned = hosts.filter(h => !h.info.supervisor && h.coordRead.status === 'ready').map(h => {
@@ -1618,6 +1628,13 @@ async function refresh(hostId: string, kind: ReadKind) {
     result = parseCoord(rq.outcome, cm.outcome);
   }
   apply(finishRead(fleet, hostId, kind, begun.token, result, new Date().toISOString()));
+  if (kind === 'sessions' && linkedSession?.host === hostId) {
+    const name = linkedSession.name; linkedSession = null;
+    const current = selectedHostState(fleet);
+    if (studioView === 'terminals' && current?.info.id === hostId && current.sessionsRead.status === 'ready' && current.sessions.some(s => s.name === name)) {
+      apply(selectSession(fleet, hostId, name)); focusedPane = name;
+    }
+  }
   render();
 }
 async function readCooperativePage(hostId: string, kind: "commands" | "inspection", more = false) {
@@ -1656,10 +1673,12 @@ async function loadHostList() {
     apply(setHosts(fleet, list.hosts));
     if (!initialLocationRead) {
       initialLocationRead = true;
-      const params = new URL(location.href).searchParams, host = params.get('host'), view = params.get('view');
+      const host = initialParams.get('host'), view = initialView;
       if (host && fleet.order.includes(host) && (view === 'machine' || view === 'terminals')) {
         apply(selectHost(fleet, host)); studioView = view;
-      } else if (!host && (view === 'fleet' || view === 'terminals')) studioView = view;
+        const session = initialParams.get('session');
+        if (view === 'terminals' && session) linkedSession = { host, name: session };
+      }
     }
     render();
     // Hosts are read concurrently; a failing host does not delay the others.
@@ -1714,7 +1733,7 @@ document.addEventListener("click", (e) => {
   }
   if (b.dataset.toggleHost) {
     const id = b.dataset.toggleHost;
-    hostDisclosures.set(id, !(hostDisclosures.get(id) ?? (id === fleet.selectedHost)));
+    hostDisclosures.set(id, !(hostDisclosures.get(id) ?? (id === fleet.selectedHost && preferences.groups !== 'collapsed')));
     renderNav(); return;
   }
   if (b.dataset.toggleGroup) {
@@ -1728,10 +1747,8 @@ document.addEventListener("click", (e) => {
       if (preferences.font !== draftPrefs.font) for (const pane of panes.values()) pane.setFontSize(Number(draftPrefs.font));
       if (preferences.groups !== draftPrefs.groups) for (const id of fleet.order) hostDisclosures.set(id, draftPrefs.groups === 'expanded');
       Object.assign(preferences, draftPrefs);
-      if (preferences.theme === 'system') delete document.documentElement.dataset.theme;
-      else document.documentElement.dataset.theme = preferences.theme;
-      document.documentElement.dataset.descriptions = preferences.byline;
-      preferenceStatus = 'Preferences applied'; renderNav(); renderStudio(); return;
+      applyAppearance(document.documentElement, preferences);
+      preferenceStatus = savePreferences(preferences) ? 'Preferences applied' : 'Preferences applied for this page; tab storage unavailable.'; renderNav(); renderStudio(); return;
     }
   }
   if (studioView === 'settings' && b.dataset.settingsSection && Object.hasOwn(settingsTitles, b.dataset.settingsSection)) { settingsSection = b.dataset.settingsSection as keyof typeof settingsTitles; renderStudio(); return; }
@@ -2028,8 +2045,8 @@ $("instructionForm").addEventListener("submit", async (e) => {
   else void refresh(host.id, "coord");
 });
 
+setInspector(inspectorOpen);
 await init();
-setInspector(!overlayQuery.matches);
 render();
 await loadHostList();
 // A hidden tab skips polling; showing it again refreshes at once instead of waiting for the next tick.
